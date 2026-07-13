@@ -1,0 +1,18 @@
+version: 1
+provider: bedrock
+family: messages
+profile: bedrock-anthropic
+service_classes:
+  economy:
+    requested_tier: flex
+    actual_tier: flex
+  standard:
+    requested_tier: default
+    actual_tier: default
+  priority:
+    requested_tier: priority
+    actual_tier: priority
+fixtures:
+  - request.wire.json
+  - response.completed.json
+  - error.access-denied.json

@@ -1,0 +1,9 @@
+{
+  "id": "msg-aws-fixture",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-contract",
+  "content": [{"type": "text", "text": "hello from aws"}],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 4, "output_tokens": 3, "service_tier": "standard"}
+}

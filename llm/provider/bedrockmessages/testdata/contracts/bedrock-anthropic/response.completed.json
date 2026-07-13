@@ -1,0 +1,9 @@
+{
+  "id": "msg-bedrock-fixture",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-contract",
+  "content": [{"type": "text", "text": "hello from bedrock"}],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 8, "output_tokens": 5, "service_tier": "default"}
+}

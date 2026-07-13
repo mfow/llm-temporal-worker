@@ -1,4 +1,4 @@
-package anthropicmessages
+package bedrockmessages
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 )
 
-// Adapter owns one official Anthropic Messages SDK client and one immutable
-// endpoint profile. SDK unions never cross the provider-neutral boundary.
+// Adapter owns one official Anthropic SDK client configured with Bedrock's
+// request middleware and one immutable Bedrock profile.
 type Adapter struct {
 	client     *Client
 	endpointID string
@@ -23,34 +23,30 @@ type Adapter struct {
 
 func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	if client == nil {
-		return nil, fmt.Errorf("anthropic messages: client is required")
+		return nil, fmt.Errorf("bedrock messages: client is required")
 	}
 	if endpointID == "" {
-		return nil, fmt.Errorf("anthropic messages: endpoint ID is required")
+		return nil, fmt.Errorf("bedrock messages: endpoint ID is required")
 	}
 	validated, err := NewProfile(profile)
 	if err != nil {
 		return nil, err
 	}
 	if validated.ExpectedBaseURL != "" && client.baseURL != validated.ExpectedBaseURL {
-		return nil, fmt.Errorf("anthropic messages profile %q requires base URL %q, got %q", validated.ID, validated.ExpectedBaseURL, client.baseURL)
+		return nil, fmt.Errorf("bedrock messages profile %q requires base URL %q, got %q", validated.ID, validated.ExpectedBaseURL, client.baseURL)
 	}
 	return &Adapter{client: client, endpointID: endpointID, profile: validated}, nil
 }
 
-// NewAdapter is an explicit alias used by route construction code.
 func NewAdapter(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	return New(client, endpointID, profile)
 }
 
-// NewProfileAdapter uses the profile ID as a logical endpoint ID.
 func NewProfileAdapter(client *Client, profile Profile) (*Adapter, error) {
 	return New(client, profile.ID, profile)
 }
 
-// NewAnthropicAdapter is a descriptive alias for callers that register
-// multiple Anthropic endpoint families.
-func NewAnthropicAdapter(client *Client, endpointID string, profile Profile) (*Adapter, error) {
+func NewBedrockAdapter(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	return New(client, endpointID, profile)
 }
 
@@ -71,7 +67,7 @@ func (adapter *Adapter) Profile() Profile {
 
 func (adapter *Adapter) Capabilities(ctx context.Context, query provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	if adapter == nil {
-		return provider.CapabilitySet{}, fmt.Errorf("anthropic messages: adapter is nil")
+		return provider.CapabilitySet{}, fmt.Errorf("bedrock messages: adapter is nil")
 	}
 	return adapter.profile.capabilities(ctx, query, adapter.endpointID)
 }
@@ -152,15 +148,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		}
 		metadata.EstimatedBytes = len(canonical)
 	}
-	return provider.Call{
-		EndpointID:   adapter.endpointID,
-		Family:       provider.FamilyAnthropicMessages,
-		Model:        normalized.Model,
-		OperationKey: normalized.OperationKey,
-		ServiceClass: serviceClass,
-		SDKParams:    params,
-		Metadata:     metadata,
-	}, nil
+	return provider.Call{EndpointID: adapter.endpointID, Family: provider.FamilyBedrockMessages, Model: normalized.Model, OperationKey: normalized.OperationKey, ServiceClass: serviceClass, SDKParams: params, Metadata: metadata}, nil
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
@@ -170,14 +158,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := ctx.Err(); err != nil {
 		return provider.Result{}, dispatchContextError(err)
 	}
-	if call.Family != provider.FamilyAnthropicMessages || call.EndpointID != adapter.endpointID {
+	if call.Family != provider.FamilyBedrockMessages || call.EndpointID != adapter.endpointID {
 		return provider.Result{}, dispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
 	}
 	params, ok := call.SDKParams.(anthropic.MessageNewParams)
 	if !ok {
 		if pointer, pointerOK := call.SDKParams.(*anthropic.MessageNewParams); pointerOK && pointer != nil {
-			params = *pointer
-			ok = true
+			params, ok = *pointer, true
 		}
 	}
 	if !ok {
@@ -204,9 +191,11 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.Usage.ServiceTier)}
 	if rawResponse != nil {
 		metadata.Status = rawResponse.StatusCode
-		metadata.RequestID = rawResponse.Header.Get("request-id")
-		if metadata.RequestID == "" {
-			metadata.RequestID = rawResponse.Header.Get("x-request-id")
+		for _, header := range []string{"x-amzn-requestid", "x-amzn-request-id", "request-id", "x-request-id"} {
+			metadata.RequestID = rawResponse.Header.Get(header)
+			if metadata.RequestID != "" {
+				break
+			}
 		}
 	}
 	if metadata.RequestID == "" {

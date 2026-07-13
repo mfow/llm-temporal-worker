@@ -23,16 +23,26 @@ type ClientConfig struct {
 // signing is delegated to the SDK; credentials are never copied into a
 // provider-neutral request or configuration value.
 type Client struct {
-	sdk anthropic.Client
+	sdk      anthropic.Client
+	messages messageService
+	baseURL  string
+}
+
+type messageService interface {
+	New(context.Context, anthropic.MessageNewParams, ...option.RequestOption) (*anthropic.Message, error)
 }
 
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("bedrock messages: context is required")
 	}
-	baseURL, err := clientconfig.BaseURL(config.BaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("bedrock messages: %w", err)
+	baseURL := ""
+	if config.BaseURL != "" {
+		validated, err := clientconfig.BaseURL(config.BaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("bedrock messages: %w", err)
+		}
+		baseURL = validated
 	}
 	if config.HTTPClient == nil {
 		return nil, fmt.Errorf("bedrock messages: HTTP client is required")
@@ -45,9 +55,12 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
 		bedrock.WithConfig(config.AWSConfig),
+	}
+	if baseURL != "" {
 		// Keep the SDK's Bedrock request rewriting/signing while allowing a
 		// loopback endpoint in contract tests.
-		option.WithBaseURL(baseURL),
+		opts = append(opts, option.WithBaseURL(baseURL))
 	}
-	return &Client{sdk: anthropic.NewClient(opts...)}, nil
+	sdk := anthropic.NewClient(opts...)
+	return &Client{sdk: sdk, messages: &sdk.Messages, baseURL: baseURL}, nil
 }

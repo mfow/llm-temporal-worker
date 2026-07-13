@@ -1,0 +1,17 @@
+version: 1
+provider: anthropic
+family: messages
+profile: anthropic-aws
+service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: standard_only
+    actual_tier: standard
+  priority:
+    requested_tier: auto
+    actual_tier: priority
+fixtures:
+  - request.wire.json
+  - response.completed.json
+  - error.authentication.json

@@ -1,0 +1,6 @@
+{
+  "max_tokens": 1024,
+  "messages": [{"content": [{"text": "hello", "type": "text"}], "role": "user"}],
+  "model": "claude-contract",
+  "service_tier": "standard_only"
+}
