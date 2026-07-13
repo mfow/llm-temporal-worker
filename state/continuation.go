@@ -1,0 +1,194 @@
+package state
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/llm"
+)
+
+const continuationSchemaVersion = "continuation/v1"
+
+type BlobRef struct {
+	Digest [32]byte
+	Size   int64
+	Media  string
+}
+
+func (ref BlobRef) Valid() bool { return ref.Size >= 0 && ref.Media != "" && ref.Digest != [32]byte{} }
+
+func (ref BlobRef) DigestHex() string { return hex.EncodeToString(ref.Digest[:]) }
+
+type OpaqueStateRef struct {
+	Provider      string
+	EndpointID    string
+	AccountRegion string
+	Family        string
+	ModelLineage  string
+	Media         string
+	Data          []byte
+	Required      bool
+}
+
+func (ref OpaqueStateRef) clone() OpaqueStateRef {
+	ref.Data = append([]byte(nil), ref.Data...)
+	return ref
+}
+
+type Pinning struct {
+	Provider      string
+	EndpointID    string
+	AccountRegion string
+	Family        string
+	ModelLineage  string
+}
+
+func (pin Pinning) Empty() bool {
+	return pin.Provider == "" && pin.EndpointID == "" && pin.AccountRegion == "" && pin.Family == "" && pin.ModelLineage == ""
+}
+
+type Continuation struct {
+	ID                 string
+	Tenant             string
+	ParentID           string
+	Transcript         []llm.Item
+	TranscriptDigest   [32]byte
+	TranscriptComplete bool
+	ProviderState      []OpaqueStateRef
+	Pinning            Pinning
+	LastOperationID    string
+	CapabilityVersion  string
+	PriceVersion       string
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	Depth              int
+}
+
+func (continuation Continuation) Clone() Continuation {
+	continuation.Transcript = append([]llm.Item(nil), continuation.Transcript...)
+	continuation.ProviderState = make([]OpaqueStateRef, len(continuation.ProviderState))
+	for index, state := range continuation.ProviderState {
+		continuation.ProviderState[index] = state.clone()
+	}
+	return continuation
+}
+
+func CanonicalTranscript(items []llm.Item) ([]byte, [32]byte, error) {
+	if items == nil {
+		items = []llm.Item{}
+	}
+	encoded := make([]json.RawMessage, 0, len(items))
+	for index, item := range items {
+		if item == nil {
+			return nil, [32]byte{}, fmt.Errorf("transcript item %d is nil", index)
+		}
+		data, err := json.Marshal(item)
+		if err != nil {
+			return nil, [32]byte{}, fmt.Errorf("transcript item %d: %w", index, err)
+		}
+		canonical, err := llm.CanonicalJSON(data)
+		if err != nil {
+			return nil, [32]byte{}, fmt.Errorf("transcript item %d canonicalization: %w", index, err)
+		}
+		encoded = append(encoded, canonical)
+	}
+	container, err := llm.CanonicalJSON(mustMarshal(map[string]any{
+		"schema": continuationSchemaVersion,
+		"items":  encoded,
+	}))
+	if err != nil {
+		return nil, [32]byte{}, err
+	}
+	digest := sha256.Sum256(container)
+	return container, digest, nil
+}
+
+func mustMarshal(value any) []byte {
+	data, _ := json.Marshal(value)
+	return data
+}
+
+func (continuation Continuation) Validate(now time.Time) error {
+	if continuation.ID == "" || continuation.Tenant == "" {
+		return fmt.Errorf("continuation ID and tenant are required")
+	}
+	if continuation.Depth < 0 {
+		return fmt.Errorf("continuation depth must not be negative")
+	}
+	if continuation.ExpiresAt.IsZero() || !now.Before(continuation.ExpiresAt) {
+		return ErrExpired
+	}
+	_, digest, err := CanonicalTranscript(continuation.Transcript)
+	if err != nil {
+		return err
+	}
+	if digest != continuation.TranscriptDigest {
+		return fmt.Errorf("continuation transcript digest mismatch")
+	}
+	for index, state := range continuation.ProviderState {
+		if state.Provider == "" || state.EndpointID == "" || state.Family == "" || state.Media == "" {
+			return fmt.Errorf("provider state %d is incomplete", index)
+		}
+		if len(state.Data) == 0 {
+			return fmt.Errorf("provider state %d is empty", index)
+		}
+	}
+	return nil
+}
+
+// Constraints are the subset of continuation lineage that route planning
+// needs. It intentionally contains no prompt or provider secret.
+type Constraints struct {
+	Present             bool
+	Tenant              string
+	Provider            string
+	EndpointID          string
+	AccountRegion       string
+	Family              string
+	ModelLineage        string
+	RequiresOpaqueState bool
+	TranscriptComplete  bool
+	Portability         llm.PortabilityMode
+}
+
+func (continuation Continuation) Constraints(mode llm.PortabilityMode) Constraints {
+	requires := len(continuation.ProviderState) > 0
+	for _, state := range continuation.ProviderState {
+		requires = requires || state.Required
+	}
+	return Constraints{
+		Present:             continuation.ID != "",
+		Tenant:              continuation.Tenant,
+		Provider:            continuation.Pinning.Provider,
+		EndpointID:          continuation.Pinning.EndpointID,
+		AccountRegion:       continuation.Pinning.AccountRegion,
+		Family:              continuation.Pinning.Family,
+		ModelLineage:        continuation.Pinning.ModelLineage,
+		RequiresOpaqueState: requires,
+		TranscriptComplete:  continuation.TranscriptComplete,
+		Portability:         mode,
+	}
+}
+
+type Store interface {
+	Get(context.Context, Handle) (Continuation, error)
+	PutChild(context.Context, PutChildRequest) (Handle, error)
+}
+
+// ContinuationStore is the stable name used by the engine and Activity
+// layers. Store remains as a short alias for small reusable callers.
+type ContinuationStore = Store
+
+type Handle string
+
+func (handle Handle) String() string { return string(handle) }
+
+type PutChildRequest struct {
+	Parent       Handle
+	Child        Continuation
+	OperationKey string
+}
