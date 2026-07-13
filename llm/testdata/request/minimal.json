@@ -1,0 +1,11 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "minimal-1",
+  "model": "invoice-summarizer",
+  "instructions": [],
+  "input": [],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": null,
+  "extensions": {}
+}

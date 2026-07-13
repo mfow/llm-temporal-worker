@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/v1/generate-request.json",
+  "title": "llm.temporal/v1 GenerateRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "operation_key",
+    "model",
+    "service_class_fallbacks",
+    "portability",
+    "instructions",
+    "input",
+    "tools",
+    "tool_policy",
+    "continuation",
+    "extensions"
+  ],
+  "properties": {
+    "api_version": {"const": "llm.temporal/v1"},
+    "operation_key": {"type": "string", "minLength": 1, "maxLength": 256},
+    "context": {"$ref": "#/$defs/context"},
+    "model": {"type": "string", "minLength": 1, "maxLength": 256},
+    "service_class": {"enum": ["economy", "standard", "priority"], "default": "standard"},
+    "service_class_fallbacks": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["economy", "standard", "priority"]}
+    },
+    "portability": {"enum": ["strict", "best_effort"], "default": "strict"},
+    "instructions": {"type": "array", "items": {"$ref": "#/$defs/instruction"}},
+    "input": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "tools": {"type": "array", "items": {"$ref": "#/$defs/tool"}},
+    "tool_policy": {"$ref": "#/$defs/tool_policy"},
+    "output": {"$ref": "#/$defs/output"},
+    "sampling": {"$ref": "#/$defs/sampling"},
+    "reasoning": {"$ref": "#/$defs/reasoning"},
+    "continuation": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/continuation"}]},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "$defs": {
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tenant": {"type": "string"},
+        "project": {"type": "string"},
+        "actor": {"type": "string"},
+        "tags": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "instruction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": {"const": "text"},
+            "level": {"enum": ["application", "policy"]},
+            "text": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "content"],
+          "properties": {
+            "kind": {"const": "parts"},
+            "level": {"enum": ["application", "policy"]},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}
+          }
+        }
+      ]
+    },
+    "item": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "actor", "content"],
+          "properties": {
+            "kind": {"const": "message"},
+            "actor": {"enum": ["human", "model"]},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "name", "arguments"],
+          "properties": {
+            "kind": {"const": "tool_call"},
+            "id": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+            "arguments": {"type": ["object", "array", "string", "number", "boolean", "null"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "call_id", "content", "is_error"],
+          "properties": {
+            "kind": {"const": "tool_result"},
+            "call_id": {"type": "string", "minLength": 1},
+            "name": {"type": "string"},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}},
+            "is_error": {"type": "boolean"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
+          "properties": {
+            "kind": {"const": "provider_state"},
+            "provider": {"type": "string", "minLength": 1},
+            "endpoint_family": {"type": "string", "minLength": 1},
+            "media_type": {"type": "string", "minLength": 1},
+            "opaque": {"type": "string", "contentEncoding": "base64"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "uri"],
+          "properties": {
+            "kind": {"const": "reference"},
+            "uri": {"type": "string", "format": "uri"},
+            "metadata": {"type": "object", "additionalProperties": true}
+          }
+        }
+      ]
+    },
+    "part": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {"kind": {"const": "text"}, "text": {"type": "string"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "media_type"],
+          "properties": {
+            "kind": {"const": "image"},
+            "url": {"type": "string", "format": "uri"},
+            "bytes": {"type": "string", "contentEncoding": "base64"},
+            "blob": {"$ref": "#/$defs/blob"},
+            "media_type": {"type": "string", "minLength": 1},
+            "detail": {"type": "string"}
+          },
+          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "media_type"],
+          "properties": {
+            "kind": {"const": "document"},
+            "url": {"type": "string", "format": "uri"},
+            "bytes": {"type": "string", "contentEncoding": "base64"},
+            "blob": {"$ref": "#/$defs/blob"},
+            "media_type": {"type": "string", "minLength": 1},
+            "title": {"type": "string"}
+          },
+          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "json"}, "value": {}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": {"const": "refusal"},
+            "text": {"type": "string"},
+            "provider_code": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
+          "properties": {
+            "kind": {"const": "provider_state"},
+            "provider": {"type": "string"},
+            "endpoint_family": {"type": "string"},
+            "media_type": {"type": "string"},
+            "opaque": {"type": "string", "contentEncoding": "base64"}
+          }
+        }
+      ]
+    },
+    "blob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "byte_length", "media_type", "locator"],
+      "properties": {
+        "digest": {"type": "string", "minLength": 1},
+        "byte_length": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1},
+        "locator": {"type": "string", "minLength": 1}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "input_schema"],
+      "properties": {
+        "kind": {"enum": ["function", "provider", "remote_mcp"]},
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+        "description": {"type": "string"},
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"}
+      }
+    },
+    "tool_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "parallel"],
+      "properties": {
+        "mode": {"enum": ["none", "auto", "required", "named"]},
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+        "parallel": {"type": "boolean"}
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format"],
+      "properties": {
+        "max_tokens": {"type": "integer", "minimum": 0},
+        "format": {
+          "oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "text"}}},
+            {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "json"}}},
+            {"type": "object", "additionalProperties": false, "required": ["kind", "schema", "strict"], "properties": {"kind": {"const": "json_schema"}, "name": {"type": "string"}, "description": {"type": "string"}, "schema": {"type": "object"}, "strict": {"type": "boolean"}}}
+          ]
+        }
+      }
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": {"type": "number"},
+        "top_p": {"type": "number"},
+        "top_k": {"type": "integer"},
+        "seed": {"type": "integer"},
+        "presence_penalty": {"type": "number"},
+        "frequency_penalty": {"type": "number"},
+        "stop_sequences": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "reasoning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"enum": ["provider_default", "disabled", "adaptive", "enabled"]},
+        "effort": {"enum": ["provider_default", "minimal", "low", "medium", "high", "maximum"]},
+        "token_budget": {"type": "integer", "minimum": 0},
+        "summary": {"enum": ["provider_default", "none", "auto", "concise", "detailed"]}
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handle", "pinned"],
+      "properties": {
+        "handle": {"type": "string", "minLength": 1},
+        "endpoint_id": {"type": "string"},
+        "model": {"type": "string"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "pinned": {"type": "boolean"},
+        "provider_state": {"type": "array", "items": {"$ref": "#/$defs/item"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "full-1",
+  "context": {
+    "tenant": "acme",
+    "project": "accounts-payable",
+    "actor": "workflow:invoice-4831",
+    "tags": {"environment": "test"}
+  },
+  "model": "invoice-summarizer",
+  "service_class": "priority",
+  "service_class_fallbacks": ["standard"],
+  "portability": "best_effort",
+  "instructions": [
+    {"kind": "text", "level": "policy", "text": "Return a safe summary."},
+    {"kind": "parts", "content": [{"kind": "text", "text": "Use the supplied invoice."}]}
+  ],
+  "input": [
+    {"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "Summarize invoice 4831."}, {"kind": "image", "bytes": "AQI=", "media_type": "image/png"}]},
+    {"kind": "tool_call", "id": "call-1", "name": "lookup_invoice", "arguments": {"invoice_id": 4831}},
+    {"kind": "tool_result", "call_id": "call-1", "name": "lookup_invoice", "content": [{"kind": "json", "value": {"total": 1200}}], "is_error": false},
+    {"kind": "provider_state", "provider": "openai", "endpoint_family": "responses", "media_type": "application/octet-stream", "opaque": "AQID"},
+    {"kind": "reference", "uri": "https://example.test/invoices/4831", "metadata": {"source": "erp"}}
+  ],
+  "tools": [
+    {
+      "kind": "function",
+      "name": "lookup_invoice",
+      "description": "Fetch an invoice.",
+      "input_schema": {"type": "object", "properties": {"invoice_id": {"type": "integer"}}, "required": ["invoice_id"], "additionalProperties": false},
+      "output_schema": {"type": "object"}
+    }
+  ],
+  "tool_policy": {"mode": "named", "name": "lookup_invoice", "parallel": false},
+  "output": {"max_tokens": 800, "format": {"kind": "json_schema", "name": "invoice_summary", "strict": true, "schema": {"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"], "additionalProperties": false}}},
+  "sampling": {"temperature": 0.2, "top_p": 0.9, "stop_sequences": ["END"]},
+  "reasoning": {"mode": "adaptive", "effort": "medium", "summary": "auto"},
+  "continuation": null,
+  "extensions": {"openrouter": {"provider_order": ["ProviderA"]}}
+}
