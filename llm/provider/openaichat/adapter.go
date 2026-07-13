@@ -32,6 +32,9 @@ func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
+	if validated.ExpectedBaseURL != "" && client.baseURL != validated.ExpectedBaseURL {
+		return nil, fmt.Errorf("openai chat profile %q requires base URL %q, got %q", validated.ID, validated.ExpectedBaseURL, client.baseURL)
+	}
 	return &Adapter{client: client, endpointID: endpointID, profile: validated}, nil
 }
 
@@ -92,6 +95,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	if input.Query.Model != "" && input.Query.Model != normalized.Model {
 		return provider.Call{}, compileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
+	}
+	if adapter.profile.ExpectedModel != "" && adapter.profile.ExpectedModel != normalized.Model {
+		return provider.Call{}, compileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
 	}
 	providerTier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
@@ -180,7 +186,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
-	response, err := adapter.client.sdk.Chat.Completions.New(ctx, params, option.WithResponseInto(&rawResponse))
+	requestOptions := adapter.client.options()
+	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
+	response, err := adapter.client.sdk.Chat.Completions.New(ctx, params, requestOptions...)
 	if err != nil {
 		return provider.Result{}, mapError(err, adapter.Name())
 	}

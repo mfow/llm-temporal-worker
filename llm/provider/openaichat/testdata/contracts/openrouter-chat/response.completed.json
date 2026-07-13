@@ -1,0 +1,7 @@
+{
+  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "ok", "role": "assistant"}}],
+  "id": "generation-1",
+  "model": "router-model",
+  "service_tier": "default",
+  "usage": {"completion_tokens": 2, "cost": 0.00000123, "prompt_tokens": 4, "total_tokens": 6}
+}

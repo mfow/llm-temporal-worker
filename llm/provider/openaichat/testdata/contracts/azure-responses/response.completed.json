@@ -1,0 +1,7 @@
+{
+  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "ok", "role": "assistant"}}],
+  "id": "azure-chat-1",
+  "model": "deployment-a",
+  "service_tier": "default",
+  "usage": {"completion_tokens": 1, "prompt_tokens": 2, "total_tokens": 3}
+}

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
+	openai "github.com/openai/openai-go/v3"
+
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
+	"github.com/mfow/llm-temporal-worker/llm/provider/internal/clientconfig"
 )
 
 const (
@@ -40,6 +43,22 @@ type Profile struct {
 	ActualServiceClasses      map[string]llm.ServiceClass
 	MissingActualServiceClass llm.ServiceClass
 	AllowedExtensions         map[string]ExtensionSpec
+	// ExpectedBaseURL pins a profile to one exact normalized client endpoint.
+	// Compatible behavior is never inferred from the URL; this is an identity
+	// check that prevents accidentally attaching a profile to another service.
+	ExpectedBaseURL string
+	// ExpectedModel optionally pins a profile to one exact model/deployment.
+	ExpectedModel string
+	// WireDefaults are trusted, profile-owned root fields for compatible APIs.
+	// Unknown fields are preserved on the official SDK parameter object instead
+	// of being silently discarded during JSON union conversion.
+	WireDefaults map[string]json.RawMessage
+	// ReservedWireFields cannot be overridden by caller extensions. Profile
+	// defaults are automatically reserved as well.
+	ReservedWireFields map[string]struct{}
+	// ResponseAugment may add profile-specific facts (for example citations or
+	// provider-reported cost) after the common Chat response has been lifted.
+	ResponseAugment           func(provider.Call, *openai.ChatCompletion, *llm.Response) error
 	StructuredOutputTransform string
 }
 
@@ -55,12 +74,28 @@ func NewProfile(profile Profile) (Profile, error) {
 	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
 	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
 	copy.AllowedExtensions = cloneExtensions(profile.AllowedExtensions)
+	copy.WireDefaults = cloneRawMessages(profile.WireDefaults)
+	copy.ReservedWireFields = cloneStringSet(profile.ReservedWireFields)
+	if copy.ExpectedBaseURL != "" {
+		copy.ExpectedBaseURL, _ = clientconfig.BaseURL(copy.ExpectedBaseURL)
+	}
+	for wire := range copy.WireDefaults {
+		copy.ReservedWireFields[wire] = struct{}{}
+	}
 	return copy, nil
 }
 
 func (profile Profile) validate() error {
 	if profile.ID == "" {
 		return fmt.Errorf("openai chat profile ID is required")
+	}
+	if profile.ExpectedBaseURL != "" {
+		if _, err := clientconfig.BaseURL(profile.ExpectedBaseURL); err != nil {
+			return fmt.Errorf("openai chat profile %q expected base URL: %w", profile.ID, err)
+		}
+	}
+	if profile.ExpectedModel != "" && len(profile.ExpectedModel) > 256 {
+		return fmt.Errorf("openai chat profile %q expected model is too long", profile.ID)
 	}
 	version := profile.CapabilityVersion
 	if version == "" {
@@ -119,6 +154,25 @@ func (profile Profile) validate() error {
 			if wire == "model" || wire == "messages" || wire == "service_tier" {
 				return fmt.Errorf("openai chat profile %q extension %q cannot override %q", profile.ID, namespace, wire)
 			}
+		}
+	}
+	for wire, raw := range profile.WireDefaults {
+		if wire == "" {
+			return fmt.Errorf("openai chat profile %q contains an empty wire default", profile.ID)
+		}
+		if wire == "model" || wire == "messages" || wire == "service_tier" {
+			return fmt.Errorf("openai chat profile %q cannot default %q", profile.ID, wire)
+		}
+		if !json.Valid(raw) {
+			return fmt.Errorf("openai chat profile %q wire default %q is invalid JSON", profile.ID, wire)
+		}
+	}
+	for wire := range profile.ReservedWireFields {
+		if wire == "" {
+			return fmt.Errorf("openai chat profile %q contains an empty reserved wire field", profile.ID)
+		}
+		if wire == "model" || wire == "messages" || wire == "service_tier" {
+			return fmt.Errorf("openai chat profile %q cannot reserve %q", profile.ID, wire)
 		}
 	}
 	return nil
@@ -227,6 +281,22 @@ func cloneExtensions(values map[string]ExtensionSpec) map[string]ExtensionSpec {
 			fields[field] = wire
 		}
 		copy[namespace] = ExtensionSpec{Fields: fields}
+	}
+	return copy
+}
+
+func cloneRawMessages(values map[string]json.RawMessage) map[string]json.RawMessage {
+	copy := make(map[string]json.RawMessage, len(values))
+	for key, value := range values {
+		copy[key] = append(json.RawMessage(nil), value...)
+	}
+	return copy
+}
+
+func cloneStringSet(values map[string]struct{}) map[string]struct{} {
+	copy := make(map[string]struct{}, len(values))
+	for key := range values {
+		copy[key] = struct{}{}
 	}
 	return copy
 }

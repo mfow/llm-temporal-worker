@@ -1,0 +1,21 @@
+version: 1
+provider: azure_openai
+family: chat
+profile: deployment-specific
+service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: default
+    actual_tier: default
+  priority:
+    requested_tier: priority
+    actual_tier: priority
+  priority_downgrade:
+    requested_tier: priority
+    actual_tier: default
+  unknown_tier:
+    actual_tier: scale
+fixtures:
+  - request.wire.json
+  - response.completed.json

@@ -1,0 +1,18 @@
+version: 1
+provider: openrouter
+family: chat
+profile: pinned-provider-order
+service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: standard
+    actual_tier: default
+  priority:
+    supported: false
+  provider_fallback_disabled:
+    allow_fallbacks: false
+    require_parameters: true
+fixtures:
+  - request.wire.json
+  - response.completed.json

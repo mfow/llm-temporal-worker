@@ -131,7 +131,7 @@ substitute.
   structured-output tool emulation must have a named capability transform and
   a diagnostic.
 - [x] Run `go test -race ./llm/provider/openaichat`. Expected: PASS.
-- [ ] Commit: `feat(provider): add profiled Chat Completions compiler`.
+- [x] Commit: `feat(provider): add profiled Chat Completions compiler`.
 
 ### Task 4: Add Azure, OpenRouter, and Exa Chat profiles
 
@@ -147,24 +147,25 @@ substitute.
 - Create: `testdata/contracts/openrouter-chat/*`
 - Create: `testdata/contracts/exa-chat/*`
 
-- [ ] Write Azure fixtures for deployment base URL/auth headers, exact declared
+- [x] Write Azure fixtures for deployment base URL/auth headers, exact declared
   tier values, actual tier downgrade, usage, request IDs, and unsupported
   deployment fields. If the verified target uses Responses rather than Chat,
   reuse semantic contract helpers but place the adapter/profile under the exact
   family and keep separate fixtures.
-- [ ] Write OpenRouter fixtures asserting provider order,
+- [x] Write OpenRouter fixtures asserting provider order,
   `allow_fallbacks=false`, `require_parameters=true`, no caller override of
   these controls, generation IDs, usage, and pricing metadata.
-- [ ] Write Exa fixtures for its accepted compatible request, citations/search
+- [x] Write Exa fixtures for its accepted compatible request, citations/search
   content as typed or namespaced data, request ID, usage, and authoritative
   `costDollars` converted exactly to microUSD.
-- [ ] Run the three profile tests. Expected: FAIL with missing constructors.
-- [ ] Implement typed profile constructors that require exact base URL,
+- [x] Run the three profile tests. Focused profile tests pass after constructors
+  and fixtures were implemented.
+- [x] Implement typed profile constructors that require exact base URL,
   capability version, tier mapping, and allowed extension config. Reject
   arbitrary compatible URLs at runtime.
-- [ ] Ensure Exa provider cost takes reconciliation precedence but retains raw
+- [x] Ensure Exa provider cost takes reconciliation precedence but retains raw
   decimal provenance; unknown/malformed/negative costs return safe errors.
-- [ ] Run `go test -race ./llm/provider/openaichat/...`. Expected: PASS.
+- [x] Run `go test -race ./llm/provider/openaichat/...`. Expected: PASS.
 - [ ] Commit: `feat(provider): add Azure OpenRouter and Exa profiles`.
 
 ### Task 5: Implement direct Anthropic Messages

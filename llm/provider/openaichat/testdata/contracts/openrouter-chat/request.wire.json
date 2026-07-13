@@ -1,0 +1,6 @@
+{
+  "messages": [{"content": [{"text": "hello", "type": "text"}], "role": "user"}],
+  "model": "router-model",
+  "provider": {"allow_fallbacks": false, "order": ["ProviderA", "ProviderB"], "require_parameters": true},
+  "service_tier": "standard"
+}

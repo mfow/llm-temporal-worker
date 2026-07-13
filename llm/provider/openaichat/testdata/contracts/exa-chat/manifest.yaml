@@ -1,0 +1,18 @@
+version: 1
+provider: exa
+family: chat
+profile: exa-chat-v1
+service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: standard
+    actual_tier: standard
+  priority:
+    supported: false
+  reported_cost:
+    cost_field: costDollars.total
+    currency: USD
+fixtures:
+  - request.wire.json
+  - response.completed.json

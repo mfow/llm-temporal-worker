@@ -1,0 +1,6 @@
+{
+  "extra_body": {"text": true},
+  "messages": [{"content": [{"text": "hello", "type": "text"}], "role": "user"}],
+  "model": "exa",
+  "service_tier": "standard"
+}

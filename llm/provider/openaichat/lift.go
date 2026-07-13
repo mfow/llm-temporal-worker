@@ -68,7 +68,7 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 		ProviderValue: string(response.ServiceTier),
 		FallbackIndex: 0,
 	}
-	return llm.Response{
+	result := llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
@@ -82,7 +82,15 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 		Service:  service,
 		Usage:    usage,
 		Provider: providerFacts,
-	}, nil
+	}
+	if profile.ResponseAugment != nil {
+		if err := profile.ResponseAugment(call, response, &result); err != nil {
+			mapped := invalidResponseError(call, requestID, err.Error())
+			mapped.Provider.ResponseID = response.ID
+			return llm.Response{}, mapped
+		}
+	}
+	return result, nil
 }
 
 // validateFinalJSON enforces the requested JSON response contract locally.

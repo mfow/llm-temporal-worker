@@ -30,6 +30,13 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		"model":    request.Model,
 		"messages": messages,
 	}
+	for wire, raw := range profile.WireDefaults {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("wire default %q: %w", wire, err)
+		}
+		requestMap[wire] = value
+	}
 	if serviceTier != "" {
 		requestMap["service_tier"] = serviceTier
 	}
@@ -78,6 +85,36 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	var params openai.ChatCompletionNewParams
 	if err := json.Unmarshal(encoded, &params); err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("openai chat parameter union: %w", err)
+	}
+	// The official parameter union intentionally ignores unknown compatible
+	// fields. Preserve profile-owned fields (such as OpenRouter's provider
+	// routing object or Exa's extra_body) through its audited extension escape
+	// hatch instead of silently dropping them.
+	knownBytes, err := json.Marshal(params)
+	if err != nil {
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("openai chat known fields: %w", err)
+	}
+	var known map[string]json.RawMessage
+	if err := json.Unmarshal(knownBytes, &known); err != nil {
+		return openai.ChatCompletionNewParams{}, fmt.Errorf("openai chat known fields: %w", err)
+	}
+	extras := make(map[string]any)
+	for key, value := range requestMap {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		var decoded any
+		rawValue, err := json.Marshal(value)
+		if err != nil {
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("wire field %q: %w", key, err)
+		}
+		if err := json.Unmarshal(rawValue, &decoded); err != nil {
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("wire field %q: %w", key, err)
+		}
+		extras[key] = decoded
+	}
+	if len(extras) > 0 {
+		params.SetExtraFields(extras)
 	}
 	return params, nil
 }
@@ -438,6 +475,9 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			}
 			if wire == "model" || wire == "messages" || wire == "service_tier" {
 				return fmt.Errorf("extension %q field %q cannot override %q", namespace, field, wire)
+			}
+			if _, reserved := profile.ReservedWireFields[wire]; reserved {
+				return fmt.Errorf("extension %q field %q cannot override reserved wire field %q", namespace, field, wire)
 			}
 			var decoded any
 			if err := json.Unmarshal(value, &decoded); err != nil {
