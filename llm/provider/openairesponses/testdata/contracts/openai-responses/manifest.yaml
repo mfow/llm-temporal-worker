@@ -1,0 +1,20 @@
+version: 1
+provider: openai
+family: responses
+service_classes:
+  economy:
+    requested_tier: flex
+    actual_tier: flex
+  standard:
+    requested_tier: default
+    actual_tier: default
+  priority:
+    requested_tier: priority
+    actual_tier: priority
+  priority_downgrade:
+    requested_tier: priority
+    actual_tier: default
+  unknown_tier:
+    actual_tier: scale
+fixtures:
+  - response.completed.json

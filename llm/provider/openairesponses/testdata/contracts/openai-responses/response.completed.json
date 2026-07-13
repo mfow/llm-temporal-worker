@@ -1,0 +1,51 @@
+{
+  "id": "resp-1",
+  "created_at": 1710000000,
+  "error": {},
+  "incomplete_details": {},
+  "instructions": "developer",
+  "metadata": {},
+  "model": "gpt-contract",
+  "object": "response",
+  "output": [
+    {
+      "id": "msg-1",
+      "type": "message",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{"type": "output_text", "text": "hello", "annotations": [], "logprobs": []}]
+    },
+    {
+      "id": "fc-1",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "call-1",
+      "name": "lookup",
+      "arguments": "{\"q\":\"x\"}"
+    },
+    {
+      "id": "reason-1",
+      "type": "reasoning",
+      "status": "completed",
+      "summary": [{"type": "summary_text", "text": "brief"}],
+      "content": [],
+      "encrypted_content": null
+    }
+  ],
+  "parallel_tool_calls": false,
+  "temperature": 0.2,
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1,
+  "previous_response_id": null,
+  "service_tier": "flex",
+  "status": "completed",
+  "text": {"format": {"type": "text"}},
+  "usage": {
+    "input_tokens": 10,
+    "input_tokens_details": {"cached_tokens": 3, "cache_write_tokens": 1},
+    "output_tokens": 7,
+    "output_tokens_details": {"reasoning_tokens": 2},
+    "total_tokens": 17
+  }
+}

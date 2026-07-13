@@ -43,10 +43,10 @@ paths), `net/http/httptest`, Go fuzzing, redacted JSON/SSE fixture files.
 - Test: `llm/provider/openairesponses/client_test.go`
 - Test: `llm/provider/anthropicmessages/client_test.go`
 
-- [ ] Inspect current official SDK release notes/source for minimum Go version,
+- [x] Inspect current official SDK release notes/source for minimum Go version,
   Responses/Messages types, AWS clients, retry option, raw response metadata,
   streaming, and base URL/auth options. Record exact selected versions.
-- [ ] Run:
+- [x] Run:
 
 ```sh
 go get github.com/openai/openai-go/v3@latest
@@ -56,18 +56,18 @@ go mod tidy
 
 Expected: `go.mod`/`go.sum` pin exact versions; no indirect SDK is selected as a
 substitute.
-- [ ] Write a reusable test server that returns a retryable 500 twice and counts
+- [x] Write a reusable test server that returns a retryable 500 twice and counts
   requests. Write failing constructor tests expecting exactly one request.
-- [ ] Run `go test ./llm/provider/... -run TestSDKRetriesDisabled`. Expected:
+- [x] Run `go test ./llm/provider/... -run TestSDKRetriesDisabled`. Expected:
   FAIL because constructors are absent.
-- [ ] Implement adapter-local constructors with official retry option set to
+- [x] Implement adapter-local constructors with official retry option set to
   zero, injected `*http.Client`, validated base URL/auth, and an Activity-derived
   context. Do not expose retry as user configuration.
-- [ ] Add compile-time tests showing SDK client/parameter types cannot appear in
+- [x] Add compile-time tests showing SDK client/parameter types cannot appear in
   exported provider-neutral structs.
-- [ ] Run `go test -race ./llm/provider/... -run 'TestSDKRetriesDisabled|TestClient'`.
+- [x] Run `go test -race ./llm/provider/... -run 'TestSDKRetriesDisabled|TestClient'`.
   Expected: PASS and each counter equals one.
-- [ ] Commit: `build(provider): pin official SDKs with retries disabled`.
+- [x] Commit: `build(provider): pin official SDKs with retries disabled`.
 
 ### Task 2: Implement OpenAI Responses lowering and lifting
 
@@ -84,24 +84,24 @@ substitute.
 - Create: `testdata/contracts/openai-responses/manifest.yaml`
 - Create: `testdata/contracts/openai-responses/*`
 
-- [ ] Create semantic fixtures for instructions, text/image, tools/tool results,
+- [x] Create semantic fixtures for instructions, text/image, tools/tool results,
   strict schema, reasoning, continuation ID, refusal, usage/cache/reasoning,
   extension include, IDs, finish statuses, and size/unsupported failures.
-- [ ] Add class fixtures: economy lowers to `flex`, standard to `default`,
+- [x] Add class fixtures: economy lowers to `flex`, standard to `default`,
   priority to `priority`; responses cover each actual tier, priority downgrade
   to default, and unknown tier.
-- [ ] Write tests that compare normalized SDK parameter JSON to
+- [x] Write tests that compare normalized SDK parameter JSON to
   `request.wire.json` and lifted output to `response.semantic.json`.
-- [ ] Run `go test ./llm/provider/openairesponses`. Expected: FAIL because the
+- [x] Run `go test ./llm/provider/openairesponses`. Expected: FAIL because the
   adapter is absent.
-- [ ] Implement `Compile` using separate typed Responses input items. Preserve
+- [x] Implement `Compile` using separate typed Responses input items. Preserve
   tool call/result IDs, instruction order, schema digest, reasoning controls,
   maximum output, provider state, and namespaced extension allow-list.
-- [ ] Implement `Invoke` once and `lift` with request/response IDs, status,
+- [x] Implement `Invoke` once and `lift` with request/response IDs, status,
   typed output, actual service tier, full usage categories, and safe raw facts.
-- [ ] Decode OpenAI errors into common facts without returning raw bodies.
-- [ ] Run `go test -race ./llm/provider/openairesponses`. Expected: PASS.
-- [ ] Commit: `feat(provider): add OpenAI Responses adapter`.
+- [x] Decode OpenAI errors into common facts without returning raw bodies.
+- [x] Run `go test -race ./llm/provider/openairesponses`. Expected: PASS.
+- [x] Commit: `feat(provider): add OpenAI Responses adapter`.
 
 ### Task 3: Implement the profiled Chat Completions compiler
 

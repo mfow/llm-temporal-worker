@@ -14,6 +14,7 @@ type Call struct {
 	EndpointID   string
 	Family       Family
 	Model        string
+	OperationKey string
 	ServiceClass llm.ServiceClass
 	SDKParams    any
 	Metadata     CallMetadata
