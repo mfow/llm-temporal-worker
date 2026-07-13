@@ -24,7 +24,7 @@ allowed to leak into the `llm` package.
 | `github.com/openai/openai-go/v3` | `v3.37.0` | Official OpenAI Responses and Chat Completions clients | Apache-2.0; [official repository](https://github.com/openai/openai-go) |
 | `github.com/anthropics/anthropic-sdk-go` | `v1.57.0` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | Local Draft 2020-12 schema compilation and validation | MIT; [official repository](https://github.com/santhosh-tekuri/jsonschema-go) |
-| `go.yaml.in/yaml/v4` | `v4.0.0` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/goccy/go-yaml) |
+| `go.yaml.in/yaml/v4` | `v4.0.0-rc.6` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/yaml/go-yaml) |
 
 The SDK versions above are checked against their official release/source pages
 on the recorded date. The schema and YAML modules are introduced only in

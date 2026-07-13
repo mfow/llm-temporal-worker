@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:llmtw/config/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version", "environment", "server", "temporal", "state", "blob_store",
+    "limits", "endpoints", "models", "capabilities", "pricing", "budgets",
+    "continuation", "telemetry"
+  ],
+  "properties": {
+    "version": { "const": "llm-temporal-worker/v1" },
+    "environment": { "type": "string", "minLength": 1 },
+    "server": { "$ref": "#/$defs/server" },
+    "temporal": { "$ref": "#/$defs/temporal" },
+    "state": { "$ref": "#/$defs/state" },
+    "blob_store": { "$ref": "#/$defs/blob_store" },
+    "limits": { "$ref": "#/$defs/limits" },
+    "endpoints": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/endpoint" }
+    },
+    "models": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/model" }
+    },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "pricing": { "$ref": "#/$defs/pricing" },
+    "budgets": { "$ref": "#/$defs/budgets" },
+    "continuation": { "$ref": "#/$defs/continuation" },
+    "telemetry": { "$ref": "#/$defs/telemetry" }
+  },
+  "$defs": {
+    "duration": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)([0-9]+(ns|us|µs|ms|s|m|h|d))*$" },
+    "secret": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "path", "audience"],
+      "properties": {
+        "kind": { "enum": ["env", "file", "workload_identity"] },
+        "name": { "type": "string" }, "path": { "type": "string" },
+        "audience": { "type": "string" }
+      }
+    },
+    "auth": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "path", "audience"],
+      "properties": {
+        "kind": { "enum": ["bearer_env", "header_env", "azure_default_credential", "aws_default_chain", "workload_identity"] },
+        "name": { "type": "string" }, "path": { "type": "string" },
+        "audience": { "type": "string" }
+      }
+    },
+    "tls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "server_name", "ca_file"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "server_name": { "type": "string" },
+        "ca_file": { "type": "string" }
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "required": ["health_address", "metrics_address", "shutdown_timeout", "finalization_timeout", "inline_payload_bytes"],
+      "properties": {
+        "health_address": { "type": "string" }, "metrics_address": { "type": "string" },
+        "shutdown_timeout": { "$ref": "#/$defs/duration" },
+        "finalization_timeout": { "$ref": "#/$defs/duration" },
+        "inline_payload_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "temporal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target", "namespace", "task_queue", "identity_prefix", "tls", "worker"],
+      "properties": {
+        "target": { "type": "string" }, "namespace": { "type": "string" },
+        "task_queue": { "type": "string" }, "identity_prefix": { "type": "string" },
+        "tls": { "$ref": "#/$defs/tls" }, "worker": { "$ref": "#/$defs/worker" }
+      }
+    },
+    "worker": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_concurrent_activities", "max_concurrent_activity_task_polls", "graceful_stop_timeout"],
+      "properties": {
+        "max_concurrent_activities": { "type": "integer", "minimum": 1 },
+        "max_concurrent_activity_task_polls": { "type": "integer", "minimum": 1 },
+        "graceful_stop_timeout": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "operation_terminal_retention", "ambiguous_retention", "continuation_retention", "reservation_lease", "redis"],
+      "properties": {
+        "kind": { "const": "redis" },
+        "operation_terminal_retention": { "$ref": "#/$defs/duration" },
+        "ambiguous_retention": { "$ref": "#/$defs/duration" },
+        "continuation_retention": { "$ref": "#/$defs/duration" },
+        "reservation_lease": { "$ref": "#/$defs/duration" },
+        "redis": { "$ref": "#/$defs/redis" }
+      }
+    },
+    "redis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["addresses", "username", "password", "tls", "admission_hash_tag", "function_library", "max_connections", "dial_timeout", "operation_timeout", "required_persistence"],
+      "properties": {
+        "addresses": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" },
+        "tls": { "$ref": "#/$defs/tls" }, "admission_hash_tag": { "type": "string" },
+        "function_library": { "type": "string" }, "max_connections": { "type": "integer", "minimum": 1 },
+        "dial_timeout": { "$ref": "#/$defs/duration" }, "operation_timeout": { "$ref": "#/$defs/duration" },
+        "required_persistence": { "enum": ["aof_and_rdb", "aof", "rdb"] }
+      }
+    },
+    "blob_store": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "inline_bytes", "s3"],
+      "properties": {
+        "kind": { "const": "s3" }, "inline_bytes": { "type": "integer", "minimum": 1 },
+        "s3": { "$ref": "#/$defs/s3" }
+      }
+    },
+    "s3": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bucket", "region", "prefix", "auth"],
+      "properties": {
+        "bucket": { "type": "string", "minLength": 1 }, "region": { "type": "string", "minLength": 1 },
+        "prefix": { "type": "string", "minLength": 1 }, "auth": { "$ref": "#/$defs/auth" }
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request_bytes", "items", "parts_per_item", "tools", "schema_bytes", "json_depth", "continuation_depth", "route_attempts", "provider_timeout", "max_output_tokens", "max_budget_buckets_per_window", "token_estimate_safety_ratio"],
+      "properties": {
+        "request_bytes": { "type": "integer", "minimum": 1 }, "items": { "type": "integer", "minimum": 1 },
+        "parts_per_item": { "type": "integer", "minimum": 1 }, "tools": { "type": "integer", "minimum": 1 },
+        "schema_bytes": { "type": "integer", "minimum": 1 }, "json_depth": { "type": "integer", "minimum": 1 },
+        "continuation_depth": { "type": "integer", "minimum": 1 }, "route_attempts": { "type": "integer", "minimum": 1 },
+        "provider_timeout": { "$ref": "#/$defs/duration" }, "max_output_tokens": { "type": "integer", "minimum": 1 },
+        "max_budget_buckets_per_window": { "type": "integer", "minimum": 1 }, "token_estimate_safety_ratio": { "type": "string" }
+      }
+    },
+    "tier": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider_value", "requires_capability"],
+      "properties": { "provider_value": { "type": "string", "minLength": 1 }, "requires_capability": { "type": "string" } }
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["family", "base_url", "region", "auth", "account_region", "timeout", "service_classes", "capability_profile", "price_catalog", "provider_storage", "extensions"],
+      "properties": {
+        "family": { "enum": ["openai_responses", "azure_openai_responses", "openai_chat", "anthropic_messages", "bedrock_anthropic_messages"] },
+        "base_url": { "type": "string" }, "region": { "type": "string" }, "auth": { "$ref": "#/$defs/auth" },
+        "account_region": { "type": "string" }, "timeout": { "$ref": "#/$defs/duration" },
+        "service_classes": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": { "enum": ["economy", "standard", "priority"] },
+          "additionalProperties": { "$ref": "#/$defs/tier" }
+        },
+        "capability_profile": { "type": "string", "minLength": 1 }, "price_catalog": { "type": "string", "minLength": 1 },
+        "provider_storage": { "type": "object", "additionalProperties": false, "required": ["permitted"], "properties": { "permitted": { "type": "boolean" } } },
+        "extensions": { "type": ["object", "null"], "additionalProperties": { "type": "object" } }
+      }
+    },
+    "route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "endpoint", "model", "classes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 }, "endpoint": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "classes": { "type": "array", "minItems": 1, "items": { "enum": ["economy", "standard", "priority"] } }
+      }
+    },
+    "model": {
+      "type": "object", "additionalProperties": false,
+      "required": ["allowed_tenants", "data_regions", "routes"],
+      "properties": {
+        "allowed_tenants": { "type": "array", "items": { "type": "string" } },
+        "data_regions": { "type": "array", "items": { "type": "string" } },
+        "routes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/route" } }
+      }
+    },
+    "catalog": {
+      "type": "object", "additionalProperties": false, "required": ["file", "sha256"],
+      "properties": { "file": { "type": "string", "minLength": 1 }, "sha256": { "type": "string", "minLength": 64, "maxLength": 64 } }
+    },
+    "capabilities": {
+      "type": "object", "additionalProperties": false, "required": ["catalogs", "unknown_in_strict_mode"],
+      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "unknown_in_strict_mode": { "enum": ["reject", "allow"] } }
+    },
+    "pricing": {
+      "type": "object", "additionalProperties": false, "required": ["catalogs", "require_price_when_budgeted", "currency"],
+      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "require_price_when_budgeted": { "type": "boolean" }, "currency": { "const": "USD" } }
+    },
+    "budget_window": {
+      "type": "object", "additionalProperties": false, "required": ["duration", "bucket", "limit_micro_usd"],
+      "properties": { "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_micro_usd": { "type": "integer", "minimum": 1 } }
+    },
+    "budget_policy": {
+      "type": "object", "additionalProperties": false, "required": ["id", "match", "windows"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "match": { "type": "object", "additionalProperties": false, "required": ["tenant", "environment"], "properties": { "tenant": { "type": "string" }, "environment": { "type": "string" } } },
+        "windows": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/budget_window" } }
+      }
+    },
+    "budgets": {
+      "type": "object", "additionalProperties": false, "required": ["require_match", "policies"],
+      "properties": { "require_match": { "type": "boolean" }, "policies": { "type": "array", "items": { "$ref": "#/$defs/budget_policy" } } }
+    },
+    "continuation": {
+      "type": "object", "additionalProperties": false, "required": ["handle_keys", "retain_canonical_transcript", "allow_provider_hosted_state"],
+      "properties": {
+        "handle_keys": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "primary", "secret"], "properties": { "id": { "type": "string" }, "primary": { "type": "boolean" }, "secret": { "$ref": "#/$defs/secret" } } } },
+        "retain_canonical_transcript": { "type": "boolean" }, "allow_provider_hosted_state": { "type": "boolean" }
+      }
+    },
+    "telemetry": {
+      "type": "object", "additionalProperties": false, "required": ["logs", "metrics", "tracing", "content_logging"],
+      "properties": {
+        "logs": { "type": "object", "additionalProperties": false, "required": ["format", "level"], "properties": { "format": { "enum": ["json", "text"] }, "level": { "enum": ["debug", "info", "warn", "error"] } } },
+        "metrics": { "type": "object", "additionalProperties": false, "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } },
+        "tracing": { "type": "object", "additionalProperties": false, "required": ["enabled", "otlp_endpoint", "sample_ratio"], "properties": { "enabled": { "type": "boolean" }, "otlp_endpoint": { "type": "string" }, "sample_ratio": { "type": "string" } } },
+        "content_logging": { "enum": ["disabled", "redacted"] }
+      }
+    }
+  }
+}
