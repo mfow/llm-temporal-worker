@@ -6,9 +6,10 @@ worker presents one versioned request contract, selects a configured endpoint,
 enforces cost budgets, invokes the provider through an official SDK, and
 returns a normalized response plus a durable continuation handle.
 
-There is intentionally no production implementation yet. The documents and
-implementation plans in this repository are the reviewed contract that the
-implementation must follow.
+The repository contains a verified implementation foundation alongside the
+documents and implementation plans. The plans remain the reviewed contract for
+the staged Temporal runtime, shared-state backends, deployment, and release
+work that follows the foundation.
 
 ## Non-negotiable v1 decisions
 
