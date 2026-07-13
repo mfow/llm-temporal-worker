@@ -24,6 +24,9 @@ profile.cov
 go.work
 go.work.sum
 
+# Local implementation worktrees
+.worktrees/
+
 # env file
 .env
 
