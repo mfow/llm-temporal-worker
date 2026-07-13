@@ -117,20 +117,20 @@ substitute.
 - Test: `llm/provider/openaichat/lift_test.go`
 - Create: `testdata/contracts/common/chat/*`
 
-- [ ] Write a fake strict profile and tests for system/developer instruction
+- [x] Write a fake strict profile and tests for system/developer instruction
   lowering, message roles, multimodal parts, assistant tool calls, tool-result
   messages, response format/tool schema alternatives, finish reason, usage, and
   unknown fields.
-- [ ] Add tests proving a profile must explicitly declare every feature and
+- [x] Add tests proving a profile must explicitly declare every feature and
   provider tier; `unknown` is rejected in strict mode.
-- [ ] Run `go test ./llm/provider/openaichat`. Expected: FAIL.
-- [ ] Implement a shared compiler driven by immutable typed `Profile` hooks for
+- [x] Run `go test ./llm/provider/openaichat`. Expected: PASS after implementation.
+- [x] Implement a shared compiler driven by immutable typed `Profile` hooks for
   capability, extension schema, error/usage/cost lift, and service mapping.
   Keep all differences explicit; do not branch on hostname strings.
-- [ ] Implement tool/result ordering and local final JSON validation. A
+- [x] Implement tool/result ordering and local final JSON validation. A
   structured-output tool emulation must have a named capability transform and
   a diagnostic.
-- [ ] Run `go test -race ./llm/provider/openaichat`. Expected: PASS.
+- [x] Run `go test -race ./llm/provider/openaichat`. Expected: PASS.
 - [ ] Commit: `feat(provider): add profiled Chat Completions compiler`.
 
 ### Task 4: Add Azure, OpenRouter, and Exa Chat profiles

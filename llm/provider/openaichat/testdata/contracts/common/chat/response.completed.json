@@ -1,0 +1,21 @@
+{
+  "id": "chat-1",
+  "object": "chat.completion",
+  "created": 1710000000,
+  "model": "chat-contract",
+  "service_tier": "default",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {"role": "assistant", "content": "hello", "refusal": ""}
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 7,
+    "total_tokens": 17,
+    "prompt_tokens_details": {"cached_tokens": 3, "cache_write_tokens": 1},
+    "completion_tokens_details": {"reasoning_tokens": 2}
+  }
+}

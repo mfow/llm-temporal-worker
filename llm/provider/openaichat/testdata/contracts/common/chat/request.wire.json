@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "content": [{"text": "hello", "type": "text"}],
+      "role": "user"
+    }
+  ],
+  "model": "chat-contract",
+  "service_tier": "default"
+}
