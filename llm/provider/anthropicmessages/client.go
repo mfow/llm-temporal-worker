@@ -20,7 +20,8 @@ type ClientConfig struct {
 // credential discovery is disabled so configuration snapshots remain the
 // source of truth.
 type Client struct {
-	sdk anthropic.Client
+	sdk     anthropic.Client
+	baseURL string
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -40,5 +41,5 @@ func NewClient(config ClientConfig) (*Client, error) {
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
-	)}, nil
+	), baseURL: baseURL}, nil
 }

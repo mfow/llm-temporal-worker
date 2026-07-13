@@ -1,0 +1,23 @@
+{
+  "id": "msg-thinking-tool",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-resolved",
+  "content": [
+    {"type": "thinking", "thinking": "private", "signature": "sig-1"},
+    {"type": "redacted_thinking", "data": "redacted-1"},
+    {"type": "text", "text": "hello"},
+    {"type": "text", "text": " world"},
+    {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"q": "sydney"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 7,
+    "cache_creation_input_tokens": 2,
+    "cache_read_input_tokens": 3,
+    "output_tokens_details": {"thinking_tokens": 4},
+    "service_tier": "priority"
+  }
+}

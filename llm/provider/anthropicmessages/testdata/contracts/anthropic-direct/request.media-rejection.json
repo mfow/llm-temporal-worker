@@ -1,0 +1,8 @@
+{
+  "cases": [
+    {"kind": "image", "media_type": "image/tiff", "expected_error_contains": "media type"},
+    {"kind": "image", "media_type": "image/png", "detail": "high", "expected_error_contains": "detail"},
+    {"kind": "image_blob", "media_type": "image/png", "expected_error_contains": "blob-backed"},
+    {"kind": "document_url", "media_type": "text/plain", "expected_error_contains": "document URL media type"}
+  ]
+}
