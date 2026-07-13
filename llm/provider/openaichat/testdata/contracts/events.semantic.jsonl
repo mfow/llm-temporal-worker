@@ -1,0 +1,5 @@
+{"event":"output_started","index":0}
+{"event":"text_delta","index":0,"text":"hello"}
+{"event":"text_delta","index":0,"text":" world"}
+{"event":"output_finished","index":0}
+{"event":"stream_completed"}

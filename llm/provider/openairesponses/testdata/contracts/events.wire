@@ -1,0 +1,12 @@
+event: response.output_item.added
+data: {"output_index":0,"item":{"type":"message"}}
+
+event: response.output_text.delta
+data: {"output_index":0,"delta":"hello"}
+
+event: response.output_item.done
+data: {"output_index":0}
+
+event: response.completed
+data: {"type":"response.completed"}
+
