@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "number",
+  "enum": [1.5, 2.5],
+  "minimum": 0,
+  "maximum": 3
+}

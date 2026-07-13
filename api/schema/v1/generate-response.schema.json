@@ -10,7 +10,7 @@
     "operation_key": {"type": "string", "minLength": 1},
     "operation_id": {"type": "string"},
     "status": {"enum": ["completed", "tool_calls", "refused", "length", "content_filtered"]},
-    "output": {"type": "array", "items": {"$ref": "generate-request.schema.json#/$defs/item"}},
+    "output": {"type": "array", "items": {"$ref": "#/$defs/item"}},
     "route": {"$ref": "#/$defs/route"},
     "service": {"$ref": "#/$defs/service"},
     "usage": {"$ref": "#/$defs/usage"},
@@ -20,6 +20,142 @@
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
   },
   "$defs": {
+    "item": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "actor", "content"],
+          "properties": {
+            "kind": {"const": "message"},
+            "actor": {"enum": ["human", "model"]},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "name", "arguments"],
+          "properties": {
+            "kind": {"const": "tool_call"},
+            "id": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+            "arguments": {"type": ["object", "array", "string", "number", "boolean", "null"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "call_id", "content", "is_error"],
+          "properties": {
+            "kind": {"const": "tool_result"},
+            "call_id": {"type": "string", "minLength": 1},
+            "name": {"type": "string"},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}},
+            "is_error": {"type": "boolean"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
+          "properties": {
+            "kind": {"const": "provider_state"},
+            "provider": {"type": "string", "minLength": 1},
+            "endpoint_family": {"type": "string", "minLength": 1},
+            "media_type": {"type": "string", "minLength": 1},
+            "opaque": {"type": "string", "contentEncoding": "base64"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "uri"],
+          "properties": {
+            "kind": {"const": "reference"},
+            "uri": {"type": "string", "format": "uri"},
+            "metadata": {"type": "object", "additionalProperties": true}
+          }
+        }
+      ]
+    },
+    "part": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {"kind": {"const": "text"}, "text": {"type": "string"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "media_type"],
+          "properties": {
+            "kind": {"const": "image"},
+            "url": {"type": "string", "format": "uri"},
+            "bytes": {"type": "string", "contentEncoding": "base64"},
+            "blob": {"$ref": "#/$defs/blob"},
+            "media_type": {"type": "string", "minLength": 1},
+            "detail": {"type": "string"}
+          },
+          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "media_type"],
+          "properties": {
+            "kind": {"const": "document"},
+            "url": {"type": "string", "format": "uri"},
+            "bytes": {"type": "string", "contentEncoding": "base64"},
+            "blob": {"$ref": "#/$defs/blob"},
+            "media_type": {"type": "string", "minLength": 1},
+            "title": {"type": "string"}
+          },
+          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "json"}, "value": {}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": {"const": "refusal"},
+            "text": {"type": "string"},
+            "provider_code": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
+          "properties": {
+            "kind": {"const": "provider_state"},
+            "provider": {"type": "string"},
+            "endpoint_family": {"type": "string"},
+            "media_type": {"type": "string"},
+            "opaque": {"type": "string", "contentEncoding": "base64"}
+          }
+        }
+      ]
+    },
+    "blob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "byte_length", "media_type", "locator"],
+      "properties": {
+        "digest": {"type": "string", "minLength": 1},
+        "byte_length": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1},
+        "locator": {"type": "string", "minLength": 1}
+      }
+    },
     "route": {
       "type": "object",
       "additionalProperties": false,
