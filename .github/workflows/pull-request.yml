@@ -95,6 +95,12 @@ jobs:
             exit 1
           fi
 
+      - name: Verify schemas and documentation
+        if: steps.go.outputs.present == 'true'
+        run: |
+          make schema-verify
+          make docs-verify
+
       - name: Vet
         if: steps.go.outputs.present == 'true'
         run: go vet ./...
@@ -105,7 +111,7 @@ jobs:
 
       - name: Build worker
         if: steps.go.outputs.present == 'true'
-        run: go build ./cmd/llm-temporal-worker
+        run: go build ./...
 
       - name: Detect container
         id: container
