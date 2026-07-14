@@ -1,0 +1,6 @@
+{
+  "status": 429,
+  "request_id": "req-anthropic-direct-redacted",
+  "retry_after": "3",
+  "message": "synthetic upstream diagnostic"
+}
