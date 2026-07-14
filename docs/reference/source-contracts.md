@@ -75,7 +75,10 @@ request class.
 
 ## OpenAI-compatible endpoints
 
-- [OpenRouter provider routing](https://openrouter.ai/docs/features/provider-routing)
+- [OpenAI Chat Completions](https://platform.openai.com/docs/api-reference/chat)
+  documents service-tier request values and returns the tier actually used in
+  the response.
+- [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection)
   documents provider ordering, fallback controls, and required-parameter
   routing.
 - [OpenRouter models API](https://openrouter.ai/docs/api/reference/list-available-models)
@@ -83,9 +86,13 @@ request class.
 - [Exa API reference](https://docs.exa.ai/reference/exa-answer)
   documents answer responses including provider-reported dollar cost.
 
-Design consequence: OpenRouter hidden provider fallback is disabled by default,
-and Exa's authoritative cost is preferred when available. Both retain separate
-profiles and fixtures despite using an OpenAI-compatible SDK transport.
+Design consequence: direct Chat, OpenRouter, and Exa retain separately
+enforced fixtures for lowering, response lifting, service class, error,
+strict-loss, redaction, and decoder behavior despite using an
+OpenAI-compatible SDK transport. Decoder fixtures do not advertise streaming
+dispatch: that remains unsupported until the Chat adapter implements an
+`OpenStream` boundary. OpenRouter hidden provider fallback is disabled by
+default, and Exa's authoritative cost is preferred when available.
 
 ## Temporal
 

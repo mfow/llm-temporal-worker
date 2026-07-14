@@ -42,12 +42,14 @@ The shared validator reports the two coverage states separately:
 | `bootstrap` | validates schema, declared artifacts, source metadata, and raw fixture-byte redaction | a structurally governed profile; it does not claim full-matrix coverage |
 | `enforced` | also requires every code-owned case applicable to its capability facts | a profile whose dedicated coverage task has supplied its complete fixture matrix |
 
-All currently checked-in production profiles are `bootstrap`. A profile must
-remain there until its dedicated coverage task adds the required semantic
-request, captured wire request, response, usage/cost, error, stream,
-loss/diagnostic, service-class, continuation, and security fixtures. The
-registry is intentionally code-owned so a future semantic field or capability
-cannot silently escape an enforced profile's fixture matrix.
+The direct Chat, OpenRouter Chat, and Exa Chat profiles are currently
+`enforced` for their declared capability facts. All other checked-in
+production profiles remain `bootstrap` until their dedicated coverage task
+adds the required semantic request, captured wire request, response,
+usage/cost, error, stream, loss/diagnostic, service-class, continuation, and
+security fixtures. The registry is intentionally code-owned so a future
+semantic field or capability cannot silently escape an enforced profile's
+fixture matrix.
 
 ### Responses profile boundary
 

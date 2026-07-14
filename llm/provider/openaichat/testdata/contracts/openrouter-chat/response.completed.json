@@ -1,7 +1,16 @@
 {
-  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "ok", "role": "assistant"}}],
-  "id": "generation-1",
+  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "fixture openrouter response", "role": "assistant"}}],
+  "generation_id": "gen-openrouter-fixture",
+  "id": "chat-openrouter-fixture",
   "model": "router-model",
   "service_tier": "default",
-  "usage": {"completion_tokens": 2, "cost": 0.00000123, "prompt_tokens": 4, "total_tokens": 6}
+  "usage": {
+    "completion_tokens": 7,
+    "completion_tokens_details": {"reasoning_tokens": 2},
+    "cost": 0.00000123,
+    "cost_details": {"upstream_inference_cost": 0.00000123},
+    "prompt_tokens": 10,
+    "prompt_tokens_details": {"cache_write_tokens": 1, "cached_tokens": 3},
+    "total_tokens": 17
+  }
 }

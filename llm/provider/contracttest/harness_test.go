@@ -533,8 +533,9 @@ func TestRepositoryManifests(t *testing.T) {
 	if len(report.Bootstrap) == 0 {
 		t.Fatal("repository has no bootstrap adapter contract profiles")
 	}
-	if len(report.Enforced) != 0 {
-		t.Fatalf("repository enforced profiles = %#v; fixture completion tasks have not run", report.Enforced)
+	const wantEnforced = "exa-chat, openai-chat, openrouter-chat"
+	if got := profileIDs(report.Enforced); got != wantEnforced {
+		t.Fatalf("repository enforced profiles = %q, want %q", got, wantEnforced)
 	}
 	t.Logf("adapter contract bootstrap profiles: %s", profileIDs(report.Bootstrap))
 	t.Logf("adapter contract enforced profiles: %s", profileIDs(report.Enforced))

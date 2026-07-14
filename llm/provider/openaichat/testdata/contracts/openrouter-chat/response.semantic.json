@@ -1,0 +1,65 @@
+{
+  "api_version": "llm.temporal/v1",
+  "cost": {"actual_microusd": 2, "catalog_version": "", "currency": "USD", "method": "openrouter_reported", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-openrouter-chat",
+  "output": [
+    {"actor": "model", "content": [{"kind": "text", "text": "fixture openrouter response"}], "kind": "message"}
+  ],
+  "provider": {
+    "finish_reason": "stop",
+    "generation_id": "gen-openrouter-fixture",
+    "raw": {
+      "choice_index": 0,
+      "generation_id": "gen-openrouter-fixture",
+      "openrouter_cost": 0.00000123,
+      "openrouter_cost_details": {"upstream_inference_cost": 0.00000123},
+      "openrouter_usage": {
+        "completion_tokens": 7,
+        "completion_tokens_details": {"reasoning_tokens": 2},
+        "cost": 0.00000123,
+        "cost_details": {"upstream_inference_cost": 0.00000123},
+        "prompt_tokens": 10,
+        "prompt_tokens_details": {"cache_write_tokens": 1, "cached_tokens": 3},
+        "total_tokens": 17
+      }
+    },
+    "request_id": "req-openrouter-chat-fixture",
+    "response_id": "chat-openrouter-fixture"
+  },
+  "route": {
+    "api_family": "openai_chat",
+    "endpoint_id": "openrouter-chat-fixture",
+    "requested_model": "router-model",
+    "resolved_model": "router-model"
+  },
+  "service": {
+    "actual": "standard",
+    "attempted": "standard",
+    "fallback_index": 0,
+    "provider_value": "default",
+    "requested": "standard"
+  },
+  "status": "completed",
+  "usage": {
+    "cache_read_tokens": 3,
+    "cache_write_tokens": 1,
+    "input_tokens": 10,
+    "output_tokens": 7,
+    "provider_raw": {
+      "openrouter_cost": 0.00000123,
+      "openrouter_cost_details": {"upstream_inference_cost": 0.00000123},
+      "openrouter_usage": {
+        "completion_tokens": 7,
+        "completion_tokens_details": {"reasoning_tokens": 2},
+        "cost": 0.00000123,
+        "cost_details": {"upstream_inference_cost": 0.00000123},
+        "prompt_tokens": 10,
+        "prompt_tokens_details": {"cache_write_tokens": 1, "cached_tokens": 3},
+        "total_tokens": 17
+      },
+      "total_tokens": 17
+    },
+    "reasoning_tokens": 2
+  }
+}
