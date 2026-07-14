@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -170,6 +171,117 @@ func TestAzureResponsesAdapterAliases(t *testing.T) {
 	}
 	if adapter.Name() != adapterName {
 		t.Fatalf("adapter name = %q, want %q", adapter.Name(), adapterName)
+	}
+}
+
+func TestAzureResponsesPreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
+	deadline := newPreDialDeadlineContext()
+	transport := &preDialDeadlineTransport{started: make(chan struct{})}
+	client, err := NewAzureClient(AzureClientConfig{
+		Endpoint:   "https://resource.openai.azure.com",
+		APIVersion: "v1",
+		APIKey:     "azure-key",
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "azure-pre-dial-deadline", Model: "gpt-contract"},
+		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingObserver{}
+	result := make(chan error, 1)
+	go func() {
+		_, invokeErr := adapter.Invoke(deadline, call, observer)
+		result <- invokeErr
+	}()
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("Azure provider transport was not reached")
+	}
+	deadline.expire()
+	var invokeErr error
+	select {
+	case invokeErr = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Azure Invoke() did not return after the pre-dial deadline")
+	}
+	var mapped *provider.Error
+	if !errors.As(invokeErr, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
+	}
+	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped error = %#v, want non-retryable pre-dispatch caller deadline", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
+		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
+	}
+	if transport.calls != 1 || transport.bodyReads != 0 || observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("transport/observer = calls=%d bodyReads=%d observer=%#v", transport.calls, transport.bodyReads, observer)
+	}
+}
+
+func TestAzureResponsesRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
+	var calls int
+	client, err := NewAzureClient(AzureClientConfig{
+		Endpoint:   "https://resource.openai.azure.com",
+		APIVersion: "v1",
+		APIKey:     "azure-key",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusTemporaryRedirect,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+						"Location":     []string{"https://redirect.example/continuation-secret"},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"redirect"}}`)),
+					Request: request,
+				}, nil
+			}),
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "azure-redirect", Model: "gpt-contract"},
+		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingObserver{}
+	_, err = adapter.Invoke(context.Background(), call, observer)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+	if calls != 1 || observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("transport/observer = calls=%d observer=%#v, want one request, one pre-write mark, and no headers", calls, observer)
+	}
+	if mapped.SafeDetails["status"] != "307" || mapped.SafeDetails["endpoint"] != "azure-responses" {
+		t.Fatalf("safe details = %#v, want redirect status and endpoint only", mapped.SafeDetails)
 	}
 }
 

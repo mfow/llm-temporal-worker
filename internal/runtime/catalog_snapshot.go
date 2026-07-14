@@ -74,6 +74,7 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 		Health:                routing.HealthView{},
 		Prices:                pricing.NewResolver(price),
 		BudgetPolicies:        policies,
+		RequireBudgetMatch:    value.Budgets.RequireMatch,
 		Environment:           value.Environment,
 		ReservationLease:      time.Duration(value.State.ReservationLease),
 		OperationRetention:    time.Duration(value.State.OperationTerminalRetention),

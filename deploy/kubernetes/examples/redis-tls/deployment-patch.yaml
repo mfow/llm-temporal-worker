@@ -8,7 +8,7 @@ spec:
       volumes:
         - name: runtime-secrets
           projected:
-            defaultMode: 0400
+            defaultMode: 0440
             sources:
               - secret:
                   name: llmtw-worker-secrets

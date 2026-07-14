@@ -60,3 +60,48 @@ func TestErrorMappingPreservesCancellation(t *testing.T) {
 		t.Fatalf("provider cancellation = %v", got)
 	}
 }
+
+func TestErrorMappingHonorsCertifiedPreDispatchDeadlineRetryNever(t *testing.T) {
+	deadline := provider.NewPreDispatchContextError(context.DeadlineExceeded)
+	deadline.OperationID = "operation-pre-dispatch-deadline"
+
+	mapped := ToTemporalError(deadline)
+	var application *temporal.ApplicationError
+	if !errors.As(mapped, &application) {
+		t.Fatalf("mapped error = %T %v, want *temporal.ApplicationError", mapped, mapped)
+	}
+	if application.Type() != ErrorTypeProviderTransient || !application.NonRetryable() {
+		t.Fatalf("application error type=%q non_retryable=%v, want transient non-retryable", application.Type(), application.NonRetryable())
+	}
+	var details SafeErrorDetails
+	if err := application.Details(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details.OperationID != deadline.OperationID || details.Code != string(provider.CodeDeadlineExceeded) || details.Dispatch != string(provider.DispatchNotDispatched) {
+		t.Fatalf("safe details = %#v", details)
+	}
+}
+
+func TestErrorMappingHonorsCertifiedPreDispatchCancellationRetryNever(t *testing.T) {
+	canceled := provider.NewPreDispatchContextError(context.Canceled)
+	canceled.OperationID = "operation-pre-dispatch-canceled"
+
+	mapped := ToTemporalError(canceled)
+	var application *temporal.ApplicationError
+	if !errors.As(mapped, &application) {
+		t.Fatalf("mapped error = %T %v, want *temporal.ApplicationError", mapped, mapped)
+	}
+	if application.Type() != ErrorTypeInvalidArgument || !application.NonRetryable() {
+		t.Fatalf("application error type=%q non_retryable=%v, want invalid argument non-retryable", application.Type(), application.NonRetryable())
+	}
+	if errors.Is(mapped, context.Canceled) {
+		t.Fatal("certified pre-dispatch caller cancellation must be a non-retryable failure, not Temporal task cancellation")
+	}
+	var details SafeErrorDetails
+	if err := application.Details(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details.OperationID != canceled.OperationID || details.Code != string(provider.CodeCanceled) || details.Dispatch != string(provider.DispatchNotDispatched) {
+		t.Fatalf("safe details = %#v", details)
+	}
+}

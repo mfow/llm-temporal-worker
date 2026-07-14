@@ -100,7 +100,7 @@ func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
 	if !ok || len(model.Routes) != 1 || model.Routes[0].Provider != "provider-mock" || model.Routes[0].PriceVersion != "local-v1" {
 		t.Fatalf("loaded route snapshot = %#v", loaded.Routes)
 	}
-	if loaded.Prices == nil || len(loaded.BudgetPolicies) != 1 || loaded.Environment != "development" {
+	if loaded.Prices == nil || len(loaded.BudgetPolicies) != 1 || !loaded.RequireBudgetMatch || loaded.Environment != "development" {
 		t.Fatalf("loaded runtime snapshot = %#v", loaded)
 	}
 	if _, err := loaded.Prices.Resolve(pricing.Query{Provider: "provider-mock", Family: "openai_chat", EndpointID: "provider-mock", Region: "local", Model: "demo-model", ProviderTier: "standard", At: now}); err != nil {

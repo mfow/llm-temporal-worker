@@ -80,6 +80,7 @@ endpoints:
   openai-production:
     family: openai_responses
     base_url: https://api.openai.com/v1
+    outbound_hosts: [api.openai.com]
     auth:
       kind: bearer_env
       name: OPENAI_API_KEY

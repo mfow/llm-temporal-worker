@@ -104,6 +104,7 @@ endpoints:
   openai-prod:
     family: openai_responses
     base_url: https://api.openai.com/v1
+    outbound_hosts: [api.openai.com]
     auth:
       kind: bearer_env
       name: OPENAI_API_KEY
@@ -124,6 +125,7 @@ endpoints:
   azure-openai-au:
     family: azure_openai_responses
     base_url: https://example.openai.azure.com/openai/v1
+    outbound_hosts: [example.openai.azure.com]
     auth:
       kind: azure_default_credential
     account_region: australiaeast
@@ -143,6 +145,7 @@ endpoints:
   openrouter-pinned:
     family: openai_chat
     base_url: https://openrouter.ai/api/v1
+    outbound_hosts: [openrouter.ai]
     auth:
       kind: bearer_env
       name: OPENROUTER_API_KEY
@@ -162,6 +165,7 @@ endpoints:
   exa-answer:
     family: openai_chat
     base_url: https://api.exa.ai
+    outbound_hosts: [api.exa.ai]
     auth:
       kind: bearer_env
       name: EXA_API_KEY
@@ -179,6 +183,7 @@ endpoints:
   anthropic-direct:
     family: anthropic_messages
     base_url: https://api.anthropic.com
+    outbound_hosts: [api.anthropic.com]
     auth:
       kind: header_env
       name: ANTHROPIC_API_KEY
@@ -195,6 +200,7 @@ endpoints:
 
   bedrock-us-east-1:
     family: bedrock_anthropic_messages
+    outbound_hosts: [bedrock-runtime.us-east-1.amazonaws.com]
     region: us-east-1
     auth:
       kind: aws_default_chain
@@ -285,6 +291,34 @@ telemetry:
   content_logging: disabled
 ```
 
+## Provider egress policy
+
+Every endpoint requires a non-empty `outbound_hosts` list. Entries are DNS
+hostnames, not URLs or IP literals: they are normalized to lowercase ASCII
+without a trailing dot, and duplicates are rejected. The hostname in a
+non-Bedrock `base_url` must be present in that list. Bedrock endpoints with no
+`base_url` must instead name the exact regional runtime hostname that the SDK
+will use, such as `bedrock-runtime.us-east-1.amazonaws.com`.
+
+At runtime the provider client permits HTTPS requests only to those configured
+hostnames and the configured HTTPS port for the endpoint. A base URL hostname
+is permitted only on its explicit base URL port (or 443 when no port is given);
+additional outbound hostnames, if used by an SDK, are limited to 443. It
+resolves the host for every new connection, rejects a DNS answer containing
+loopback, private, link-local, multicast, unspecified, carrier-grade NAT,
+benchmarking, or cloud metadata addresses, then dials the validated address
+directly and checks the connected peer address again. A request-time URL cannot
+broaden the endpoint policy merely by naming a different host.
+
+Provider clients do not use environment proxy settings and never follow
+redirects automatically. No v1 endpoint is documented as redirecting. Adding
+one requires an explicit reviewed policy that validates every redirect hop.
+The endpoint timeout bounds the full response read; connection and TLS
+handshake phases are independently bounded to at most 10 seconds. Transport
+failures are emitted as a safe endpoint-scoped classification, never as a URL,
+credential, authorization header, request body, continuation value, or raw
+provider response.
+
 ## Readiness and Redis admission policy
 
 `server.readiness_probe_interval` and
@@ -359,6 +393,16 @@ Every `emulated` capability names a transform ID that has unit/golden tests.
 Catalog compilation rejects duplicate or overlapping matchers with different
 claims.
 
+## Budget policy matching
+
+`budgets.require_match: true` is an admission-policy switch, not a provider
+default. Before pricing, admission, or a provider request, the worker evaluates
+every authorized route candidate, including explicit service-class fallbacks.
+Candidates that match no budget policy are excluded. If none remains, the
+request terminates as `no_route`; it creates no admission operation and sends
+no provider request. Set `require_match: false` only when an unmatched route is
+intentionally allowed to proceed without a monetary budget reservation.
+
 ## Price catalog shape
 
 ```yaml
@@ -385,7 +429,7 @@ review; they never refresh silently from an untrusted endpoint.
 worker:
 
 - schema version, unknown/duplicate fields, documented defaults, duration and
-  URL syntax;
+  URL syntax, normalized provider host policy, and base URL membership;
 - secret references are structurally valid, without reading their values;
 - Temporal, state, blob, endpoint, and provider timeout bounds are valid;
 - routes reference declared endpoints and only use the three public service

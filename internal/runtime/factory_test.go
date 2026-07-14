@@ -49,7 +49,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 		t.Fatalf("NewProductionEngineFactory() error = %v", err)
 	}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
-		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}},
+		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", OutboundHosts: []string{"api.openai.com"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}},
 	}}
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "openai", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
@@ -66,7 +66,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{HTTPClient: &http.Client{}}}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
-		"unknown": {Family: "provider_future", BaseURL: "https://example.test", Auth: config.AuthConfig{Kind: "bearer_env", Name: "KEY"}},
+		"unknown": {Family: "provider_future", BaseURL: "https://example.test", OutboundHosts: []string{"example.test"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "KEY"}},
 	}}
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "unknown", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -120,10 +122,184 @@ func TestBedrockCallSerializationDoesNotContainResolvedCredentials(t *testing.T)
 	}
 }
 
+func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
+	const baseURL = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	var calls int
+	client, err := NewClient(context.Background(), ClientConfig{
+		BaseURL: baseURL,
+		HTTPClient: &http.Client{
+			Transport: bedrockRoundTrip(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusTemporaryRedirect,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+						"Location":     []string{"https://redirect.example/continuation-secret"},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"error":{"type":"api_error","message":"redirect"}}`)),
+					Request: request,
+				}, nil
+			}),
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		AWSConfig: aws.Config{
+			Region:      "us-east-1",
+			Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", ""),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, baseURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "bedrock-redirect", Model: "claude-contract"},
+		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want one without redirect follow", calls)
+	}
+	if mapped.SafeDetails["status"] != "307" || mapped.SafeDetails["endpoint"] != "bedrock-prod" {
+		t.Fatalf("safe details = %#v, want redirect status and endpoint only", mapped.SafeDetails)
+	}
+}
+
+func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
+	deadline := newPreDialDeadlineContext()
+	transport := &preDialDeadlineTransport{started: make(chan struct{})}
+	const baseURL = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	client, err := NewClient(context.Background(), ClientConfig{
+		BaseURL:    baseURL,
+		HTTPClient: &http.Client{Transport: transport},
+		AWSConfig: aws.Config{
+			Region:      "us-east-1",
+			Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", ""),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, baseURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "bedrock-pre-dial-deadline", Model: "claude-contract"},
+		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := provider.NopObserver{}
+	result := make(chan error, 1)
+	go func() {
+		_, invokeErr := adapter.Invoke(deadline, call, observer)
+		result <- invokeErr
+	}()
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider transport was not reached")
+	}
+	deadline.expire()
+	var invokeErr error
+	select {
+	case invokeErr = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Invoke() did not return after the pre-dial deadline")
+	}
+	var mapped *provider.Error
+	if !errors.As(invokeErr, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
+	}
+	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped error = %#v, want non-retryable pre-dispatch caller deadline", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
+		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
+	}
+	if transport.calls != 1 || transport.bodyReads != 0 {
+		t.Fatalf("pre-dial transport calls/body reads = %d/%d, want 1/0", transport.calls, transport.bodyReads)
+	}
+}
+
 type bedrockRoundTrip func(*http.Request) (*http.Response, error)
 
 func (function bedrockRoundTrip) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type preDialDeadlineContext struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newPreDialDeadlineContext() *preDialDeadlineContext {
+	return &preDialDeadlineContext{done: make(chan struct{})}
+}
+
+func (ctx *preDialDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Now().Add(time.Hour), true
+}
+
+func (ctx *preDialDeadlineContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *preDialDeadlineContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (*preDialDeadlineContext) Value(any) any { return nil }
+
+func (ctx *preDialDeadlineContext) expire() {
+	ctx.once.Do(func() { close(ctx.done) })
+}
+
+type preDialDeadlineTransport struct {
+	started   chan struct{}
+	once      sync.Once
+	calls     int
+	bodyReads int
+}
+
+func (transport *preDialDeadlineTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.calls++
+	if request.Body != nil {
+		request.Body = &countingReadCloser{ReadCloser: request.Body, reads: &transport.bodyReads}
+	}
+	transport.once.Do(func() { close(transport.started) })
+	<-request.Context().Done()
+	provider.RecordPreDispatchContext(request.Context(), request.Context().Err())
+	return nil, request.Context().Err()
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	reads *int
+}
+
+func (reader *countingReadCloser) Read(data []byte) (int, error) {
+	(*reader.reads)++
+	return reader.ReadCloser.Read(data)
 }
 
 func mustBedrockProfile(t *testing.T, baseURL string) Profile {

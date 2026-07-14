@@ -9,14 +9,17 @@ run without credentials or internet access.
 The standard implementation gate is:
 
 ```sh
-gofmt -l .
+make fmt-check
 go vet ./...
 go test -race ./...
 go build ./...
 docker build --tag llm-temporal-worker:local .
 ```
 
-`gofmt -l` reports files that need formatting without changing the checkout.
+`make fmt-check` delegates to `scripts/check-go-format.sh`. The helper passes
+NUL-delimited Go source paths to `gofmt -l`, excludes `vendor` and
+`.worktrees`, and returns formatter failures instead of treating them as a
+clean result. It never modifies the checkout.
 The fuzz target is selected explicitly rather than through a placeholder name;
 for example, a 30-second provider stream smoke is:
 
@@ -38,6 +41,7 @@ server, or a Kubernetes cluster:
 ```sh
 make integration
 make compose-smoke
+make deployment-policy-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
@@ -52,9 +56,17 @@ tests and `deploy/verify.sh`, which renders each overlay locally through
 `kubectl kustomize` and never applies anything to a cluster. Set `KUBECTL` to a
 reviewed, pinned executable when `kubectl` is not on `PATH`.
 
+`make deployment-policy-verify` checks the checked-in Kubernetes policy without
+requiring a cluster, credentials, or `kubectl`. It keeps the worker's
+non-root UID/GID and `fsGroup` aligned, requires group-readable runtime Secret
+files (`0440`), and requires the Redis TLS patch to preserve one projected
+Secret volume rather than combine mutually exclusive volume source types. With
+`KUBECTL` set, `make kustomize-verify` also checks those invariants against
+every rendered overlay.
+
 The release plan may list additional future gates; the commands above are the
-currently implemented targets. CI checks formatting with `gofmt -l` rather than
-modifying files.
+currently implemented targets. Both CI workflows call the same formatting
+helper as `make fmt-check`, and it checks rather than modifies files.
 
 ## Test layers
 
@@ -97,6 +109,21 @@ claiming exhaustive fragmentation coverage. For every case that is exercised,
 the decoder must produce the same typed events and final response. Tests also cover
 duplicate/out-of-order IDs, invalid UTF-8, partial JSON/tool arguments, missing
 terminal event, terminal error after deltas, cancellation, and oversized event.
+
+The engine stream contract suite additionally proves that a non-streaming
+adapter is rejected before admission or provider dispatch with a direct typed
+error (rather than an EventStream or a fabricated `Generate` result), event
+order is preserved, and every returned stream has exactly one typed terminal
+followed by EOF. It covers bounded-buffer backpressure, cancellation closing
+the provider source, duplicate-terminal rejection, byte-exact opaque provider
+state, completed-operation replay, pre-write fallback retry, ambiguous
+post-write replay refusal, filtered stream-only budget reservations, and
+equivalent finalized stream/non-stream responses. Activity and integration
+tests prove that a real stream is consumed when available, while the exact
+pre-admission unsupported error uses native `Generate` for a non-streaming
+production-style adapter. Live raw stream deltas never appear in heartbeat
+details or as separate return records; only bounded progress and the final
+semantic response cross the Temporal boundary.
 
 ### Property and fuzz tests
 
@@ -232,6 +259,11 @@ For each enforced profile, its adapter fixture test uses the shared
 conversion and `contracttest.VerifyStreamAssemblyEquivalent` for
 stream/non-stream response assembly. Both helpers compare JSON after removing
 only that profile's explicit generated-field exemptions.
+
+That adapter-contract helper verifies decoder and semantic-assembly behavior;
+it does not implement the live `StreamingAdapter` port or exercise
+`llm.Engine.Stream` provider dispatch. The typed engine-stream lifecycle stays
+separate until a production adapter supplies that port.
 
 Golden updates require an intentional `-update` test flag locally, a human
 reviewable diff, and source-contract update. Normal tests never rewrite files.

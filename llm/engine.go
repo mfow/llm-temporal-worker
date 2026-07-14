@@ -7,4 +7,5 @@ import "context"
 // Temporal-specific concerns do not leak into this interface.
 type Engine interface {
 	Generate(context.Context, Request) (Response, error)
+	Stream(context.Context, Request) (EventStream, error)
 }

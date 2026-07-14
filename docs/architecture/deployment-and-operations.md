@@ -107,6 +107,20 @@ The process accepts a YAML file path through `--config`. Provider credentials
 use environment/file/workload-identity references and are resolved after
 parsing.
 
+Every deployed provider endpoint must declare its explicit `outbound_hosts`
+policy alongside its base URL. The worker resolves those names at connection
+time and refuses private, loopback, link-local, multicast, unspecified,
+carrier-grade NAT, and cloud-metadata addresses; it also refuses automatic
+redirects and environment proxies. Operators must use a reviewed provider
+hostname and reachable public egress path rather than relying on a broad proxy
+or a request-supplied URL. Changes to this policy require a worker restart and
+the same configuration review as a credential or route change.
+
+The checked-in local Compose provider mock intentionally has a Docker-private
+address and is therefore a boot/readiness and adapter-test fixture, not a live
+provider-inference route. Local real-provider testing uses a private
+configuration with a reviewed public HTTPS hostname and matching policy entry.
+
 The internal application package supports an atomic reload API:
 
 1. read a complete new file;
@@ -183,14 +197,20 @@ Release dashboards and runbooks cover:
 persistence, and a deterministic provider mock. The `worker` profile is
 opt-in because it requires a locally generated continuation HMAC key. Profiles
 add the worker without introducing a live provider credential. Local smoke
-tests:
+checks are parser/configuration/readiness-only because the provider mock
+resolves to a Docker-private address and the worker deliberately denies it:
 
-1. wait for Temporal and Redis health;
-2. register the worker;
-3. execute a fixture Activity against a mock provider;
-4. kill the worker after dispatch;
-5. restart and prove completed replay or ambiguity handling;
-6. start two replicas and prove shared budget admission.
+1. validate the Compose model, generated configuration, and fixture invariants
+   without creating containers;
+2. allow an operator to boot the worker and verify Temporal/Redis startup and
+   readiness behavior only;
+3. exercise deterministic provider requests through injected adapter/runtime
+   tests rather than a Compose-network request.
+
+The current stack does not execute a fixture Activity against `provider-mock`
+and cannot perform provider egress. Task 17's planned self-contained mock
+Activity/recovery workflow therefore requires a separately reviewed future
+design; Task 2 must not create a Docker-private-address bypass to satisfy it.
 
 Live provider tests are opt-in, require explicit environment flags and tiny cost
 ceilings, and never run on pull requests from untrusted forks.

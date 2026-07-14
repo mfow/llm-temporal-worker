@@ -173,7 +173,8 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
-	if err := observer.BeforePossibleWrite(ctx); err != nil {
+	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
+	if err := observer.BeforePossibleWrite(callContext); err != nil {
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
@@ -181,9 +182,15 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if messages == nil {
 		messages = &adapter.client.sdk.Messages
 	}
-	response, err := messages.New(ctx, params, option.WithResponseInto(&rawResponse))
+	response, err := messages.New(callContext, params, option.WithResponseInto(&rawResponse))
+	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
+		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
+	}
 	if err != nil {
-		return provider.Result{}, mapError(err, adapter.Name())
+		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
+			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
+		}
+		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
 		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
@@ -201,13 +208,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if metadata.RequestID == "" {
 		metadata.RequestID = responseRequestID(response)
 	}
-	if err := observer.AfterResponseHeaders(ctx, metadata); err != nil {
+	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
 		mapped := dispatchObserverError(err, provider.DispatchAccepted)
 		mapped.Provider.ResponseID = response.ID
 		mapped.Provider.RequestID = metadata.RequestID
 		return provider.Result{}, mapped
 	}
-	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Content)})
+	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Content)})
 	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err

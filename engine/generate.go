@@ -63,9 +63,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (llm.Re
 	if err := engine.beat(ctx, Progress{Phase: string(provider.PhasePlan), At: now}); err != nil {
 		return llm.Response{}, err
 	}
-	plan, err := engine.dependencies.Planner.Plan(ctx, routing.Input{
-		Request: normalized, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health,
-	})
+	plan, err := engine.dependencies.Planner.Plan(ctx, routingInput(normalized, snapshot, constraints))
 	if err != nil {
 		return llm.Response{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
 	}
@@ -152,6 +150,10 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		if err := ctx.Err(); err != nil {
 			return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing canceled", err)
 		}
+		matches := budget.MatchPolicies(snapshot.BudgetPolicies, budget.ContextFor(request, candidate, snapshot.Environment))
+		if snapshot.RequireBudgetMatch && len(matches) == 0 {
+			continue
+		}
 		quote, err := snapshot.Prices.Resolve(pricing.Query{
 			Provider: candidate.Provider, Family: candidate.Family, EndpointID: candidate.EndpointID,
 			Region: candidate.Region, Model: candidate.Model, ProviderTier: candidate.ProviderTier, At: now,
@@ -167,19 +169,21 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		if err != nil {
 			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate cost estimate failed", err)
 		}
-		reservations := engine.reservations(request, candidate, estimate.MicroUSD, snapshot.BudgetPolicies, snapshot.Environment, now)
+		reservations := reservations(matches, estimate.MicroUSD, now)
 		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: entry, estimate: estimate, reservations: reservations})
 		if estimate.MicroUSD > quoted.maximum {
 			quoted.maximum = estimate.MicroUSD
 		}
 	}
+	if len(quoted.candidates) == 0 && snapshot.RequireBudgetMatch {
+		return quotedPlan{}, engineError(provider.CodeNoRoute, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "no candidate matches the required budget policy", nil)
+	}
 	return quoted, nil
 }
 
-func (engine *Engine) reservations(request llm.Request, candidate routing.Candidate, amount pricing.MicroUSD, policies []budget.Policy, environment string, now time.Time) []admission.WindowReservation {
-	matched := budget.MatchPolicies(policies, budget.ContextFor(request, candidate, environment))
-	result := make([]admission.WindowReservation, 0, len(matched))
-	for _, value := range matched {
+func reservations(matches []budget.MatchedWindow, amount pricing.MicroUSD, now time.Time) []admission.WindowReservation {
+	result := make([]admission.WindowReservation, 0, len(matches))
+	for _, value := range matches {
 		_, bucket := value.Window.Range(now)
 		result = append(result, admission.WindowReservation{
 			PolicyID: value.PolicyID, WindowID: value.Window.ID, Bucket: bucket, Amount: amount,

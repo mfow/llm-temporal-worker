@@ -103,6 +103,32 @@ func TestComposeFixtureIsOfflineSafe(t *testing.T) {
 	}
 }
 
+func TestLocalFixtureDocumentationPreservesFailClosedProviderEgress(t *testing.T) {
+	root := repositoryRoot(t)
+	for path, required := range map[string][]string{
+		"deploy/local/README.md": {
+			"parser/configuration/readiness fixture",
+			"provider egress is not available",
+			"weaken the policy",
+		},
+		"docs/architecture/deployment-and-operations.md": {
+			"parser/configuration/readiness-only",
+			"does not execute a fixture Activity",
+			"must not create a Docker-private-address bypass",
+		},
+	} {
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, phrase := range required {
+			if !strings.Contains(string(data), phrase) {
+				t.Errorf("%s must state %q", path, phrase)
+			}
+		}
+	}
+}
+
 func TestWorkerComposeProvisionsAdmissionFunctionBeforeStart(t *testing.T) {
 	document, raw := readCompose(t)
 	provisioner, ok := document.Services["redis-function-provisioner"]

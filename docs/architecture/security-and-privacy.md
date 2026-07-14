@@ -58,11 +58,29 @@ Arbitrary command execution as a secret resolver is not supported.
 
 Endpoints are operator-configured and validated:
 
-- HTTPS is required outside explicit local development;
-- base URLs cannot contain user info, query, or fragment;
-- redirects are disabled or restricted to the same validated origin;
-- DNS/IP policy can reject loopback, link-local, private, or metadata ranges;
-- proxy use is explicit;
+- every endpoint has a non-empty `outbound_hosts` list of normalized DNS
+  hostnames; IP literals, user info, URLs, and duplicate spellings are
+  rejected, and a configured base URL's hostname must appear in that list;
+- HTTPS is required, and base URLs cannot contain user info, query, or
+  fragment;
+- the provider transport checks each request host and HTTPS port against that
+  endpoint's policy rather than trusting a request-time URL: the base URL host
+  is limited to its effective port, and any additional configured host is
+  limited to 443;
+- automatic redirects and environment proxies are disabled; no v1 endpoint is
+  documented as redirecting, so a future exception must revalidate every hop;
+- DNS is resolved at dial time, every returned address is rejected if it is
+  loopback, private, link-local, multicast, unspecified, carrier-grade NAT,
+  benchmarking, deprecated IPv6 site-local (`fec0::/10`), or a known cloud
+  metadata address, and the connected address is checked again before use;
+- only an explicit policy/configuration rejection is an egress denial. Before
+  a writable connection is acquired, guarded DNS/TCP/TLS and client-local
+  timeout failures are certified `not_dispatched` availability failures, while
+  caller cancellation/deadline remains non-retryable and `not_dispatched`;
+  after that boundary the result is ambiguous rather than re-routed;
+- provider transport errors are classified with a configured endpoint ID and
+  never include URLs, credentials, authorization headers, request content,
+  continuation handles, or raw provider bodies;
 - custom CA roots are file references;
 - compatible endpoints require an allow-listed hostname and profile ID.
 

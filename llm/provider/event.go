@@ -38,6 +38,17 @@ type ReasoningDelta struct {
 
 func (ReasoningDelta) event() {}
 
+// ProviderStateDelta carries opaque provider state without attempting to
+// interpret it as generated text. Adapters should prefer this event over the
+// legacy ReasoningDelta whenever the provider supplies state with a known
+// media type.
+type ProviderStateDelta struct {
+	Index int
+	State llm.ProviderState
+}
+
+func (ProviderStateDelta) event() {}
+
 type UsageUpdated struct{ Usage llm.Usage }
 
 func (UsageUpdated) event() {}
@@ -61,6 +72,7 @@ type StreamFailed = StreamErrored
 
 type outputState struct {
 	text      strings.Builder
+	parts     []llm.Part
 	arguments strings.Builder
 	callID    string
 	name      string
@@ -73,13 +85,14 @@ type Assembler struct {
 	active       map[int]*outputState
 	outputs      []llm.Item
 	usage        llm.Usage
+	finished     map[int]llm.Item
 	terminal     bool
 	result       llm.Response
 	terminalErr  error
 }
 
 func NewAssembler(operationKey string) *Assembler {
-	return &Assembler{operationKey: operationKey, active: make(map[int]*outputState)}
+	return &Assembler{operationKey: operationKey, active: make(map[int]*outputState), finished: make(map[int]llm.Item)}
 }
 
 func (assembler *Assembler) Add(event Event) error {
@@ -132,6 +145,21 @@ func (assembler *Assembler) Add(event Event) error {
 			return err
 		}
 		state.text.Write(event.Opaque)
+	case ProviderStateDelta:
+		state, err := assembler.state(event.Index)
+		if err != nil {
+			return err
+		}
+		if event.State.Provider == "" || event.State.EndpointFamily == "" || event.State.MediaType == "" {
+			return fmt.Errorf("provider state at index %d is incomplete", event.Index)
+		}
+		state.flushText()
+		state.parts = append(state.parts, llm.ProviderStatePart{
+			Provider:       event.State.Provider,
+			EndpointFamily: event.State.EndpointFamily,
+			MediaType:      event.State.MediaType,
+			Opaque:         append([]byte(nil), event.State.Opaque...),
+		})
 	case OutputFinished:
 		state, err := assembler.state(event.Index)
 		if err != nil {
@@ -149,6 +177,7 @@ func (assembler *Assembler) Add(event Event) error {
 		}
 		state.finished = true
 		assembler.outputs = append(assembler.outputs, item)
+		assembler.finished[event.Index] = item
 		delete(assembler.active, event.Index)
 	case UsageUpdated:
 		assembler.usage = mergeUsage(assembler.usage, event.Usage)
@@ -190,6 +219,20 @@ func (assembler *Assembler) Add(event Event) error {
 		return fmt.Errorf("unsupported provider event %T", event)
 	}
 	return nil
+}
+
+// FinishedItem returns the exact normalized item produced for a completed
+// output. It lets the engine publish ContentCompleted with the same semantic
+// value that will appear in the final response.
+func (assembler *Assembler) FinishedItem(index int) (llm.Item, error) {
+	if assembler == nil {
+		return nil, fmt.Errorf("event assembler is nil")
+	}
+	item, ok := assembler.finished[index]
+	if !ok {
+		return nil, fmt.Errorf("output index %d is not finished", index)
+	}
+	return item, nil
 }
 
 func usageEmpty(usage llm.Usage) bool {
@@ -245,7 +288,16 @@ func (state *outputState) item() (llm.Item, error) {
 		}
 		return llm.ToolCall{ID: state.callID, Name: state.name, Arguments: append(json.RawMessage(nil), arguments...)}, nil
 	}
-	return llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: state.text.String()}}}, nil
+	state.flushText()
+	return llm.Message{Actor: llm.ActorModel, Content: append([]llm.Part(nil), state.parts...)}, nil
+}
+
+func (state *outputState) flushText() {
+	if state.text.Len() == 0 {
+		return
+	}
+	state.parts = append(state.parts, llm.TextPart{Text: state.text.String()})
+	state.text.Reset()
 }
 
 func (assembler *Assembler) Result() (llm.Response, error) {

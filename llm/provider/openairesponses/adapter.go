@@ -144,26 +144,33 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
-	if err := observer.BeforePossibleWrite(ctx); err != nil {
+	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
+	if err := observer.BeforePossibleWrite(callContext); err != nil {
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
-	response, err := adapter.client.sdk.Responses.New(ctx, params, option.WithResponseInto(&rawResponse))
+	response, err := adapter.client.sdk.Responses.New(callContext, params, option.WithResponseInto(&rawResponse))
+	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
+		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
+	}
 	if err != nil {
-		return provider.Result{}, mapError(err)
+		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
+			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
+		}
+		return provider.Result{}, provider.WithEndpointID(mapError(err), adapter.endpointID)
 	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
 	if rawResponse != nil {
 		metadata.Status = rawResponse.StatusCode
 		metadata.RequestID = rawResponse.Header.Get("x-request-id")
 	}
-	if err := observer.AfterResponseHeaders(ctx, metadata); err != nil {
+	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
 		mapped := dispatchObserverError(err, provider.DispatchAccepted)
 		mapped.Provider.ResponseID = response.ID
 		mapped.Provider.RequestID = metadata.RequestID
 		return provider.Result{}, mapped
 	}
-	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Output)})
+	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Output)})
 	lifted, err := liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err
