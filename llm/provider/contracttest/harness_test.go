@@ -10,7 +10,7 @@ import (
 func TestValidateRepositoryReportsBootstrapProfiles(t *testing.T) {
 	root := t.TempDir()
 	profileDir := filepath.Join(root, "llm", "provider", "example", "testdata", "contracts", "example")
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -55,10 +55,123 @@ generated_field_exemptions: []
 	}
 }
 
+func TestValidateRepositoryRejectsInvalidServiceClassesWithoutLeakingValues(t *testing.T) {
+	secret := "AKIA1234567890ABCDEF"
+	tests := []struct {
+		name           string
+		serviceClasses string
+		want           string
+	}{
+		{
+			name: "missing public class",
+			serviceClasses: `service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: default
+`,
+			want: "manifest service_classes must declare non-empty priority facts",
+		},
+		{
+			name: "empty public class",
+			serviceClasses: `service_classes:
+  economy:
+    supported: false
+  standard: {}
+  priority:
+    supported: false
+`,
+			want: "manifest service_classes must declare non-empty standard facts",
+		},
+		{
+			name: "provider default public class",
+			serviceClasses: `service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: default
+  priority:
+    supported: false
+  provider_default:
+    captured_value: ` + secret + `
+`,
+			want: "manifest service_classes must not declare provider_default",
+		},
+		{
+			name: "malformed public class value",
+			serviceClasses: `service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: default
+  priority: ` + secret + `
+`,
+			want: "manifest is not valid YAML",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			profileDir := testProfileDir(root)
+			mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+id: example
+provider: example
+family: chat
+coverage: bootstrap
+metadata: metadata.yaml
+`+test.serviceClasses+`cases:
+  - id: semantic-request
+    artifacts:
+      semantic: request.semantic.json
+`)
+			mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
+			mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
+
+			_, err := ValidateRepository(root)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("service class error = %v, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("service class value leaked through error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRepositoryAcceptsSupplementalServiceClassScenarios(t *testing.T) {
+	root := t.TempDir()
+	profileDir := testProfileDir(root)
+	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+id: example
+provider: example
+family: chat
+coverage: bootstrap
+metadata: metadata.yaml
+`+validServiceClasses+`  priority_downgrade:
+    requested_tier: priority
+    actual_tier: standard
+  unknown_tier:
+    actual_tier: scale
+  reported_cost:
+    currency: USD
+cases:
+  - id: semantic-request
+    artifacts:
+      semantic: request.semantic.json
+`)
+	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
+	mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
+
+	if _, err := ValidateRepository(root); err != nil {
+		t.Fatalf("supplemental service class scenarios rejected: %v", err)
+	}
+}
+
 func TestValidateRepositoryRejectsUnsafeFixtureBytesWithoutLeakingThem(t *testing.T) {
 	root := t.TempDir()
 	profileDir := filepath.Join(root, "llm", "provider", "example", "testdata", "contracts", "example")
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -98,7 +211,7 @@ generated_field_exemptions: []
 func TestValidateRepositoryRejectsIncompleteEnforcedProfile(t *testing.T) {
 	root := t.TempDir()
 	profileDir := filepath.Join(root, "llm", "provider", "example", "testdata", "contracts", "example")
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -138,7 +251,7 @@ func TestReportRequireAllEnforcedRejectsBootstrapProfiles(t *testing.T) {
 func TestValidateRepositoryRejectsEnforcedProfileWithUndeclaredCapability(t *testing.T) {
 	root := t.TempDir()
 	profileDir := testProfileDir(root)
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -220,7 +333,7 @@ cases:
 func TestValidateRepositoryRejectsMissingDeclaredFixture(t *testing.T) {
 	root := t.TempDir()
 	profileDir := testProfileDir(root)
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -242,7 +355,7 @@ cases:
 func TestValidateRepositoryRejectsCaseWithoutItsDocumentedArtifact(t *testing.T) {
 	root := t.TempDir()
 	profileDir := testProfileDir(root)
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -265,7 +378,7 @@ cases:
 func TestValidateRepositoryRejectsMissingSourceDate(t *testing.T) {
 	root := t.TempDir()
 	profileDir := testProfileDir(root)
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -298,7 +411,7 @@ func TestValidateRepositoryRejectsTraversalPathWithoutLeakingIt(t *testing.T) {
 	root := t.TempDir()
 	profileDir := testProfileDir(root)
 	traversal := "../../secret-fixture-name"
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -323,7 +436,7 @@ cases:
 func TestValidateRepositoryScansSharedContractFixturesWithoutLeakingBytes(t *testing.T) {
 	root := t.TempDir()
 	profileDir := testProfileDir(root)
-	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -409,6 +522,15 @@ func mustWriteFile(t *testing.T, path, contents string) {
 	}
 }
 
+func mustWriteManifestWithValidServiceClasses(t *testing.T, path, contents string) {
+	t.Helper()
+	const metadataMarker = "metadata: metadata.yaml\n"
+	if !strings.Contains(contents, metadataMarker) {
+		t.Fatal("test manifest is missing its metadata marker")
+	}
+	mustWriteFile(t, path, strings.Replace(contents, metadataMarker, metadataMarker+validServiceClasses, 1))
+}
+
 const validTestMetadata = `profile: example
 upstream_url: https://example.test/contracts
 upstream_date: "2026-07-14"
@@ -419,6 +541,15 @@ redactions:
 capability_facts:
   streaming: unsupported
 generated_field_exemptions: []
+`
+
+const validServiceClasses = `service_classes:
+  economy:
+    supported: false
+  standard:
+    requested_tier: default
+  priority:
+    supported: false
 `
 
 func testProfileDir(root string) string {

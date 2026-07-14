@@ -29,6 +29,12 @@ HTTPS source URL, ISO-8601 source review date, SDK version, provenance,
 redactions, capability facts, and the narrow list of generated fields that may
 be ignored in equivalence checks.
 
+Every `service_classes` mapping contains non-empty `economy`, `standard`, and
+`priority` facts; `provider_default` is not a public class. Profiles may retain
+supplemental documented scenarios such as `priority_downgrade`, `unknown_tier`,
+`reported_cost`, and provider-routing facts alongside those three public
+classes.
+
 The shared validator reports the two coverage states separately:
 
 | State | Gate behavior | Meaning |

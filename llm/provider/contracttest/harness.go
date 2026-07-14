@@ -27,6 +27,7 @@ var (
 	slackTokenPattern      = regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`)
 	credentialFieldPattern = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|access[_-]?token|secret[_-]?key)\s*[":=]\s*(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
 	profileIDPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	publicServiceClasses   = []string{"economy", "standard", "priority"}
 )
 
 // Coverage identifies whether a profile is only structurally governed or has
@@ -252,6 +253,9 @@ func validateManifestShape(manifest Manifest, profileDir string) error {
 	if manifest.Metadata == "" {
 		return fmt.Errorf("manifest metadata is required")
 	}
+	if err := validateServiceClasses(manifest.ServiceClasses); err != nil {
+		return err
+	}
 	if len(manifest.Cases) == 0 {
 		return fmt.Errorf("manifest must declare at least one case")
 	}
@@ -275,6 +279,19 @@ func validateManifestShape(manifest Manifest, profileDir string) error {
 			if !fixtureCase.Artifacts.has(artifact) {
 				return fmt.Errorf("manifest case lacks its documented %s artifact", artifact)
 			}
+		}
+	}
+	return nil
+}
+
+func validateServiceClasses(serviceClasses map[string]map[string]any) error {
+	if _, exists := serviceClasses["provider_default"]; exists {
+		return fmt.Errorf("manifest service_classes must not declare provider_default")
+	}
+	for _, serviceClass := range publicServiceClasses {
+		facts, exists := serviceClasses[serviceClass]
+		if !exists || len(facts) == 0 {
+			return fmt.Errorf("manifest service_classes must declare non-empty %s facts", serviceClass)
 		}
 	}
 	return nil
