@@ -307,16 +307,31 @@ func parseMicro(value string) (pricing.MicroUSD, error) {
 	return pricing.MicroUSD(parsed), nil
 }
 
+const (
+	// redisZeroTime is the legacy marker for an unset timestamp.
+	redisZeroTime = "0:0"
+	// redisUnixEpochTime keeps the Unix epoch distinct from redisZeroTime.
+	redisUnixEpochTime = "+0:0"
+)
+
 func formatRedisTime(value time.Time) string {
 	if value.IsZero() {
-		return "0:0"
+		return redisZeroTime
 	}
-	return strconv.FormatInt(value.Unix(), 10) + ":" + strconv.FormatInt(int64(value.Nanosecond()/1000), 10)
+	seconds := value.Unix()
+	micros := int64(value.Nanosecond() / 1000)
+	if seconds == 0 && micros == 0 {
+		return redisUnixEpochTime
+	}
+	return strconv.FormatInt(seconds, 10) + ":" + strconv.FormatInt(micros, 10)
 }
 
 func parseRedisTime(value string) (time.Time, error) {
-	if value == "0:0" {
+	if value == redisZeroTime {
 		return time.Time{}, nil
+	}
+	if value == redisUnixEpochTime {
+		return time.Unix(0, 0).UTC(), nil
 	}
 	var seconds, micros int64
 	if _, err := fmt.Sscanf(value, "%d:%d", &seconds, &micros); err != nil || micros < 0 || micros >= 1_000_000 {
