@@ -1,0 +1,99 @@
+package runtime
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/mfow/llm-temporal-worker/config"
+	"github.com/mfow/llm-temporal-worker/engine"
+	"github.com/mfow/llm-temporal-worker/internal/secrets"
+	"github.com/mfow/llm-temporal-worker/llm"
+	"github.com/mfow/llm-temporal-worker/llm/provider"
+	"github.com/mfow/llm-temporal-worker/routing"
+)
+
+func TestProductionFactoryProviderSecretFailsClosed(t *testing.T) {
+	called := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			called = true
+			return []byte("should-not-be-called"), nil
+		}),
+	}}
+	_, err := factory.providerSecret(context.Background(), config.AuthConfig{Kind: "workload_identity", Audience: "provider"}, "endpoint")
+	if !errors.Is(err, ErrUnsupportedProviderAuth) {
+		t.Fatalf("error = %v, want ErrUnsupportedProviderAuth", err)
+	}
+	if called {
+		t.Fatal("unsupported auth attempted secret resolution")
+	}
+}
+
+func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+			if ref.Kind != config.SecretEnv || ref.Name != "OPENAI_KEY" {
+				t.Fatalf("resolved unexpected secret reference: %#v", ref)
+			}
+			return []byte("test-key"), nil
+		}),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+			return engine.Snapshot{}, nil
+		}),
+		HTTPClient: &http.Client{},
+	})
+	if err != nil {
+		t.Fatalf("NewProductionEngineFactory() error = %v", err)
+	}
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{
+		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}},
+	}}
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: "openai", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
+	}}}
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai")
+	if err != nil {
+		t.Fatalf("buildAdapter() error = %v", err)
+	}
+	if adapter == nil || adapter.Name() != "openai.responses" {
+		t.Fatalf("adapter = %#v, want openai.responses adapter", adapter)
+	}
+}
+
+func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{HTTPClient: &http.Client{}}}
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{
+		"unknown": {Family: "provider_future", BaseURL: "https://example.test", Auth: config.AuthConfig{Kind: "bearer_env", Name: "KEY"}},
+	}}
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: "unknown", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
+	}}}
+	_, err := factory.buildAdapter(context.Background(), value, snapshot, "unknown")
+	if err == nil || !strings.Contains(err.Error(), "unsupported provider family") {
+		t.Fatalf("error = %v, want unsupported provider family", err)
+	}
+}
+
+func TestChatProfileRequiresSpecializedDialect(t *testing.T) {
+	factory := &ProductionEngineFactory{}
+	endpoint := config.EndpointConfig{Family: "openai_chat", BaseURL: "https://openrouter.ai/api/v1"}
+	_, err := factory.chatProfile("openrouter", endpoint, provider.CapabilitySet{Version: "cap-v1"}, EndpointProfile{})
+	if err == nil || !strings.Contains(err.Error(), "specialized chat dialect must be explicit") {
+		t.Fatalf("error = %v, want explicit dialect failure", err)
+	}
+}
+
+func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
+	if got := endpointFamily("azure_openai_responses"); got != provider.FamilyOpenAIResponses {
+		t.Fatalf("Azure family = %q, want %q", got, provider.FamilyOpenAIResponses)
+	}
+	if got := endpointFamily("bedrock_anthropic_messages"); got != provider.FamilyBedrockMessages {
+		t.Fatalf("Bedrock family = %q, want %q", got, provider.FamilyBedrockMessages)
+	}
+	if !llm.ServiceClassPriority.Valid() {
+		t.Fatal("priority service class is unexpectedly invalid")
+	}
+}

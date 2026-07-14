@@ -36,9 +36,11 @@ The process-level composition lives in `internal/runtime`. It validates and
 publishes one non-secret configuration snapshot, creates the Temporal client
 with TLS roots loaded from bounded regular files, starts separate health and
 metrics listeners, and injects the Activity's engine through a snapshot lease.
-Provider/state construction is an explicit `EngineFactory` seam: the CLI fails
-closed until a deployment supplies a provider-backed implementation rather
-than starting a worker that can only accept work and fail every Activity.
+Provider/state construction is an explicit `EngineFactory` seam. The CLI uses
+`ProductionEngineFactory` to compose verified catalogs, provider adapters,
+Redis state, and blob-backed results; tests and custom deployments can inject a
+different factory, and unsupported configured dependencies still fail closed
+before a worker starts.
 
 ## Payload contract
 

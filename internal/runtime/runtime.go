@@ -47,9 +47,9 @@ func (function EngineFactoryFunc) Build(ctx context.Context, snapshot *config.Sn
 	return function(ctx, snapshot)
 }
 
-// UnavailableEngineFactory makes the missing production provider wiring
-// explicit. It is the default used by the CLI until a deployment supplies a
-// provider-backed factory through the process composition layer.
+// UnavailableEngineFactory deliberately models missing provider/state wiring
+// for tests and custom embeddings. The CLI uses ProductionEngineFactory;
+// retaining this implementation keeps the injectable fail-closed seam small.
 type UnavailableEngineFactory struct{}
 
 func (UnavailableEngineFactory) Build(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
@@ -376,12 +376,29 @@ func closeResources(ctx context.Context, application *app.App, temporalClient cl
 	return errors.Join(errs...)
 }
 
-// RunWorker is the CLI-facing entry point. It intentionally uses the default
-// unavailable EngineFactory until provider/state composition is supplied by a
-// deployment-specific process layer.
+// RunWorker is the CLI-facing entry point. It builds the production provider
+// and state composition from the validated configuration and then runs the
+// Temporal worker until cancellation. Secret values remain in the resolver and
+// provider clients; they are never copied into a published config snapshot.
 func RunWorker(ctx context.Context, data []byte, _ io.Writer) error {
-	_, err := New(ctx, data, Options{EngineFactory: UnavailableEngineFactory{}})
-	return err
+	secretResolver := secrets.New(secrets.Options{})
+	references := secrets.ConfigResolver{Resolver: secretResolver}
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver:       secretResolver,
+		SnapshotLoader: CatalogSnapshotLoader{},
+	})
+	if err != nil {
+		return err
+	}
+	runtime, err := New(ctx, data, Options{
+		Resolver:       references,
+		SecretResolver: secretResolver,
+		EngineFactory:  factory,
+	})
+	if err != nil {
+		return err
+	}
+	return runtime.Run(ctx)
 }
 
 type snapshotClients struct {
