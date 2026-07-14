@@ -1,0 +1,15 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": [{"type": "thinking", "thinking": "private", "signature": "sig-continue"}],
+      "role": "assistant"
+    },
+    {
+      "content": [{"type": "text", "text": "continue direct"}],
+      "role": "user"
+    }
+  ],
+  "model": "claude-contract",
+  "service_tier": "standard_only"
+}
