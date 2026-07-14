@@ -3,3 +3,5 @@ data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"fixture "}}]
 data: {"choices":[{"index":0,"delta":{"content":"exa"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}
 
 data: [DONE]
+
+: terminal
