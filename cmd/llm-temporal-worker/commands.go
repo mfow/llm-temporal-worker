@@ -2,17 +2,24 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/config"
+	"github.com/mfow/llm-temporal-worker/internal/buildinfo"
+	"github.com/mfow/llm-temporal-worker/internal/httpserver"
 )
 
-const defaultConfigPath = "/etc/llmtw/config.yaml"
+const (
+	defaultConfigPath    = "/etc/llmtw/config.yaml"
+	defaultHealthAddress = "0.0.0.0:8080"
+)
 
 var errWorkerRuntimeUnavailable = errors.New("worker runtime dependencies are unavailable")
 
@@ -39,6 +46,10 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return 2
 	}
 	switch args[0] {
+	case "version":
+		return executeVersionCommand(options)
+	case "health-server":
+		return executeHealthServerCommand(ctx, args[1:], options)
 	case "validate-config":
 		return executeConfigCommand(ctx, args[1:], options, false)
 	case "print-effective-config":
@@ -54,6 +65,52 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		writeCommandError(options.ErrOut, fmt.Errorf("unknown command %q", args[0]))
 		return 2
 	}
+}
+
+func executeVersionCommand(options CommandOptions) int {
+	if err := json.NewEncoder(options.Out).Encode(buildinfo.Current()); err != nil {
+		writeCommandError(options.ErrOut, errors.New("write build metadata"))
+		return 1
+	}
+	return 0
+}
+
+// executeHealthServerCommand serves only the process health surface for
+// hardened-image verification. It is live while its listener is responsive and
+// intentionally never reports ready because it does not construct the worker
+// or validate its dependencies.
+func executeHealthServerCommand(ctx context.Context, args []string, options CommandOptions) int {
+	flags := flag.NewFlagSet("health-server", flag.ContinueOnError)
+	flags.SetOutput(options.ErrOut)
+	address := flags.String("address", defaultHealthAddress, "health listener address")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return 2
+	}
+	state := httpserver.NewHealthState()
+	server, err := httpserver.New(httpserver.Options{Address: *address, Health: state})
+	if err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	if err := server.Start(); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	if _, err := fmt.Fprintln(options.Out, server.Addr()); err != nil {
+		state.SetLive(false)
+		_ = server.Shutdown(context.Background())
+		writeCommandError(options.ErrOut, errors.New("write health listener address"))
+		return 1
+	}
+	<-ctx.Done()
+	state.SetLive(false)
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownContext); err != nil {
+		writeCommandError(options.ErrOut, errors.New("shutdown health listener"))
+		return 1
+	}
+	return 0
 }
 
 func executeConfigCommand(ctx context.Context, args []string, options CommandOptions, printEffective bool) int {
@@ -177,5 +234,5 @@ func writeCommandError(output io.Writer, err error) {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <worker|validate-config|print-effective-config|reconcile>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|validate-config|print-effective-config|reconcile>\n")
 }

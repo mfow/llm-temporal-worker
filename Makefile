@@ -7,8 +7,12 @@ KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 READINESS_REDIS_PORT ?= 16379
+IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
+IMAGE_VERIFY_VERSION ?= image-verify
+IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
+IMAGE_VERIFY_GO_VERSION ?= go1.26.0
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -58,6 +62,37 @@ readiness-integration:
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi
+
+# Builds a fresh local image from the checked-out revision, then delegates all
+# runtime assertions to the Docker-backed integration test. The test runs the
+# image directly as its numeric non-root user with an explicitly read-only
+# root filesystem and the sole writable /tmp tmpfs.
+image-verify:
+	@command -v docker >/dev/null 2>&1 || { \
+		echo "image-verify requires Docker" >&2; \
+		exit 2; \
+	}
+	@docker info >/dev/null 2>&1 || { \
+		echo "image-verify requires a running Docker daemon" >&2; \
+		exit 2; \
+	}
+	@set -eu; \
+		revision="$$(git rev-parse HEAD)"; \
+		build_time="$$(git show -s --format=%cI HEAD)"; \
+		docker build --tag "$(IMAGE_VERIFY_TAG)" \
+			--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
+			--build-arg REVISION="$$revision" \
+			--build-arg BUILD_TIME="$$build_time" \
+			--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
+			--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
+			.; \
+		LLMTW_IMAGE="$(IMAGE_VERIFY_TAG)" \
+		LLMTW_IMAGE_VERSION="$(IMAGE_VERIFY_VERSION)" \
+		LLMTW_IMAGE_REVISION="$$revision" \
+		LLMTW_IMAGE_BUILD_TIME="$$build_time" \
+		LLMTW_IMAGE_SOURCE="$(IMAGE_VERIFY_SOURCE)" \
+		LLMTW_IMAGE_GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
+		$(GO) test -count=1 -tags=imageintegration ./integration -run '^TestHardenedImageRuntimeAndMetadata$$'
 
 compose-smoke:
 	@command -v "$(firstword $(COMPOSE))" >/dev/null 2>&1 || { \
