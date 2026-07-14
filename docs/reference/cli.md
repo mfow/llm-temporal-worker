@@ -10,6 +10,18 @@ llm-temporal-worker <command> [flags]
 Every command that reads configuration accepts `--config PATH`. If it is not
 provided, the binary reads `/etc/llmtw/config.yaml`.
 
+## `help`
+
+Print the command summary without reading configuration or starting runtime
+dependencies. `help`, `-h`, and `--help` are equivalent when used as the first
+argument:
+
+```sh
+llm-temporal-worker --help
+```
+
+The command exits with status `0`.
+
 ## `worker`
 
 Start the production composition, including the configured provider and state
