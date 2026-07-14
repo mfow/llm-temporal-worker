@@ -53,13 +53,15 @@ services:
       - -ec
       - |
         umask 077
-        printf '%s\n' 'user default off' > /tmp/llmtw-users.acl
-        printf 'user %s on >%s ~* +@all\n' "$${REDIS_USERNAME}" "$${REDIS_PASSWORD}" >> /tmp/llmtw-users.acl
-        chown redis /tmp/llmtw-users.acl
+        acl_file="$$(mktemp /tmp/llmtw-users.XXXXXX)"
+        chmod 0600 "$${acl_file}"
+        printf '%s\n' 'user default off' > "$${acl_file}"
+        printf 'user %s on >%s ~* +@all\n' "$${REDIS_USERNAME}" "$${REDIS_PASSWORD}" >> "$${acl_file}"
+        chown redis "$${acl_file}"
         exec /usr/local/bin/docker-entrypoint.sh redis-server \
           --appendonly yes \
           --save 60 1 \
-          --aclfile /tmp/llmtw-users.acl
+          --aclfile "$${acl_file}"
     command: []
     ports:
       - "127.0.0.1:${LLMTW_COMPOSE_REDIS_PORT:-0}:6379"

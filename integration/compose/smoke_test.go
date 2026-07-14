@@ -281,20 +281,34 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 	}
 	aclScript := redis.Entrypoint.Content[2].Value
 	for _, required := range []string{
-		"chown redis /tmp/llmtw-users.acl",
+		"acl_file=\"$$(mktemp /tmp/llmtw-users.XXXXXX)\"",
+		"chmod 0600 \"$${acl_file}\"",
+		"chown redis \"$${acl_file}\"",
 		"exec /usr/local/bin/docker-entrypoint.sh redis-server",
 	} {
 		if !strings.Contains(aclScript, required) {
 			t.Errorf("Redis ACL wrapper is missing %q", required)
 		}
 	}
-	aclOwnership := strings.Index(aclScript, "chown redis /tmp/llmtw-users.acl")
+	aclFileCreation := strings.Index(aclScript, "acl_file=\"$$(mktemp /tmp/llmtw-users.XXXXXX)\"")
+	aclMode := strings.Index(aclScript, "chmod 0600 \"$${acl_file}\"")
+	aclOwnership := strings.Index(aclScript, "chown redis \"$${acl_file}\"")
 	entrypointHandoff := strings.Index(aclScript, "exec /usr/local/bin/docker-entrypoint.sh redis-server")
-	if aclOwnership < 0 || entrypointHandoff < aclOwnership {
-		t.Error("Redis ACL wrapper must prepare the ACL, then hand off as root to the image entrypoint so it can initialize /data and drop to redis")
+	if aclFileCreation < 0 || aclMode < aclFileCreation || aclOwnership < aclMode || entrypointHandoff < aclOwnership {
+		t.Error("Redis ACL wrapper must create a private fresh ACL, prepare ownership, then hand off as root to the image entrypoint")
 	}
 	if strings.Contains(aclScript, "exec /docker-entrypoint.sh") {
 		t.Error("Redis ACL wrapper must use the image's resolved /usr/local/bin/docker-entrypoint.sh path")
+	}
+	for _, forbidden := range []string{
+		"/tmp/llmtw-users.acl",
+		"echo \"$${acl_file}\"",
+		"printf '%s\\n' \"$${acl_file}\"",
+		"set -x",
+	} {
+		if strings.Contains(aclScript, forbidden) {
+			t.Errorf("Redis ACL wrapper must not retain or expose %q", forbidden)
+		}
 	}
 	for _, required := range []string{
 		"REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}",
@@ -302,7 +316,9 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 		"umask 077",
 		"user default off",
 		"user %s on >%s ~* +@all",
-		"--aclfile /tmp/llmtw-users.acl",
+		"acl_file=\"$$(mktemp /tmp/llmtw-users.XXXXXX)\"",
+		"chmod 0600 \"$${acl_file}\"",
+		"--aclfile \"$${acl_file}\"",
 		"--save 60 1",
 		"redis-cli --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\" ping",
 		"redis-cli -h redis --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\"",
