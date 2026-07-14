@@ -22,6 +22,32 @@ llm-temporal-worker --help
 
 The command exits with status `0`.
 
+## `version`
+
+Print the image and binary build metadata as JSON without reading configuration
+or starting runtime dependencies:
+
+```sh
+llm-temporal-worker version
+```
+
+The result contains the version, revision, build time, Go version, and source
+URL stamped into the binary. It contains no configuration or credentials. The
+`make image-verify` gate compares this output with the final image labels.
+
+## `health-server`
+
+Start only the probe listener used by hardened-image verification:
+
+```sh
+llm-temporal-worker health-server --address 0.0.0.0:8080
+```
+
+It reports `/health/live` while its listener is running and keeps
+`/health/ready` unavailable because it does not construct the worker or check
+dependencies. It is not a production worker mode; deployment manifests must
+continue to use `worker --config /etc/llmtw/config.yaml`.
+
 ## `worker`
 
 Start the production composition, including the configured provider and state

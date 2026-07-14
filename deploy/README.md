@@ -28,3 +28,24 @@ Render and check every manifest offline with:
 The script uses the local `kubectl kustomize` implementation and never contacts
 a cluster. Replace the example image/config/catalog/identity values in a
 reviewed overlay before production use; no credentials belong in this tree.
+
+## Hardened image verification
+
+Run the Docker-backed image gate from a clean checkout:
+
+```sh
+make image-verify
+```
+
+The target builds a local image stamped with the checked-out revision and its
+commit time, then verifies the OCI labels and the binary's `version` JSON for
+the version, revision, build time, Go version, and source URL. It starts the
+image directly—without a shell or root override—as UID/GID `65532:65532` with
+a read-only root filesystem and exactly one writable mount: `/tmp` as a
+`rw,nosuid,nodev,noexec,size=64m` tmpfs. The verification-only
+`health-server` command reports liveness but deliberately remains unready
+because it does not construct worker dependencies.
+
+`make image-verify` requires a running Docker daemon. The image build context
+continues to exclude local credentials and runtime state through
+[`.dockerignore`](../.dockerignore).

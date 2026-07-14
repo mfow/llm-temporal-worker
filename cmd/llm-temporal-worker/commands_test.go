@@ -1,15 +1,82 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/internal/buildinfo"
 )
+
+func TestVersionCommandEmitsBuildMetadata(t *testing.T) {
+	var output, errorsOut bytes.Buffer
+	if code := Execute(context.Background(), []string{"version"}, CommandOptions{Out: &output, ErrOut: &errorsOut}); code != 0 {
+		t.Fatalf("version code=%d error=%s", code, errorsOut.String())
+	}
+	if errorsOut.Len() != 0 {
+		t.Fatalf("version wrote stderr: %q", errorsOut.String())
+	}
+	var got buildinfo.Metadata
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("version output is not JSON: %v (%q)", err, output.String())
+	}
+	if want := buildinfo.Current(); got != want {
+		t.Fatalf("version metadata = %#v, want %#v", got, want)
+	}
+}
+
+func TestHealthServerCommandServesLiveOnlyUntilCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	var errorsOut bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		code := Execute(ctx, []string{"health-server", "--address", "127.0.0.1:0"}, CommandOptions{Out: writer, ErrOut: &errorsOut})
+		_ = writer.Close()
+		done <- code
+	}()
+
+	address, err := bufio.NewReader(reader).ReadString('\n')
+	if err != nil {
+		code := <-done
+		if strings.Contains(errorsOut.String(), "operation not permitted") {
+			t.Skip("sandbox does not permit binding a TCP listener")
+		}
+		t.Fatalf("health-server exited before reporting an address: code=%d error=%q read=%v", code, errorsOut.String(), err)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, probe := range []struct {
+		path string
+		want int
+	}{
+		{path: "/health/live", want: http.StatusOK},
+		{path: "/health/ready", want: http.StatusServiceUnavailable},
+	} {
+		response, err := client.Get("http://" + strings.TrimSpace(address) + probe.path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", probe.path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != probe.want {
+			t.Fatalf("%s status=%d, want %d", probe.path, response.StatusCode, probe.want)
+		}
+	}
+
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("health-server code=%d error=%q", code, errorsOut.String())
+	}
+}
 
 func exampleConfigPath(t *testing.T) string {
 	t.Helper()

@@ -162,9 +162,9 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build container
+      - name: Verify hardened container
         if: steps.container.outputs.present == 'true'
-        run: docker build --tag llm-temporal-worker:master .
+        run: make image-verify
 
       - name: Scheduled test repetition
         if: github.event_name == 'schedule' && steps.go.outputs.present == 'true'
