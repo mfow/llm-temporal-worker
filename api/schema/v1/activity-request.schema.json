@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/v1/activity-request.json",
+  "title": "llm.temporal/v1 ActivityRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "request"],
+  "properties": {
+    "api_version": {"const": "llm.temporal/v1"},
+    "request": {"$ref": "generate-request.schema.json"}
+  }
+}
