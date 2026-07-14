@@ -161,8 +161,8 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 		t.Fatalf("shared budget reservation = %#v, want one bounded reservation", operation)
 	}
 
-	// A new Temporal workflow with the same request is a completed-replay
-	// attempt against the replacement replica. It must receive the same safe
+	// A new Temporal workflow with the same request is an existing-operation
+	// replay against the replacement replica. It must receive the same safe
 	// ambiguity rather than invoke the adapter or create another reservation.
 	secondRun, err := workflowClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                       fmt.Sprintf("llmtw-live-replay-%d", time.Now().UnixNano()),
@@ -175,8 +175,26 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 		t.Fatalf("start replay workflow: %v", err)
 	}
 	secondDetails := waitForAmbiguousWorkflow(t, ctx, secondRun)
-	if secondDetails.OperationID != firstDetails.OperationID {
-		t.Fatalf("replay operation ID = %q, want %q", secondDetails.OperationID, firstDetails.OperationID)
+	if secondDetails.Code != string(provider.CodeAmbiguousDispatch) || secondDetails.Phase != string(provider.PhaseAdmission) || secondDetails.Dispatch != string(provider.DispatchAmbiguous) {
+		t.Fatalf("replayed ambiguous Activity details = %#v, want ambiguous admission refusal", secondDetails)
+	}
+	replayedOperation, err := admissionStore.Get(ctx, firstDetails.OperationID)
+	if err != nil {
+		t.Fatalf("reload shared admission operation after replay: %v", err)
+	}
+	if replayedOperation.State != admission.StateAmbiguous || replayedOperation.Attempt.Dispatch != admission.Ambiguous || replayedOperation.ResultRef != nil {
+		t.Fatalf("operation after ambiguous replay = %#v, want unchanged ambiguous operation without result", replayedOperation)
+	}
+	if replayedOperation.ReservedMicroUSD != operation.ReservedMicroUSD || replayedOperation.IncurredMicroUSD != operation.IncurredMicroUSD || replayedOperation.FinalMicroUSD != operation.FinalMicroUSD {
+		t.Fatalf("operation financial facts after ambiguous replay = %#v, want %#v", replayedOperation, operation)
+	}
+	if len(replayedOperation.Reservations) != len(operation.Reservations) {
+		t.Fatalf("reservation count after ambiguous replay = %d, want %d", len(replayedOperation.Reservations), len(operation.Reservations))
+	}
+	for index := range operation.Reservations {
+		if replayedOperation.Reservations[index] != operation.Reservations[index] {
+			t.Fatalf("reservation %d after ambiguous replay = %#v, want %#v", index, replayedOperation.Reservations[index], operation.Reservations[index])
+		}
 	}
 	if calls := adapter.Calls(); calls != 1 {
 		t.Fatalf("accepted provider dispatches across two replicas = %d, want one", calls)
