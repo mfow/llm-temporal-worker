@@ -7,7 +7,7 @@ V1 persists three kinds of state behind separate domain ports:
 | State | Mutable | Contains model content | Atomicity requirement |
 | --- | --- | --- | --- |
 | Operation ledger and budget buckets | state-machine updates | no; completed result is a reference | one transaction across operation and all matching windows |
-| Continuation records | immutable after creation | canonical transcript/provider state or BlobRefs | create-if-absent by child ID |
+| Continuation records | immutable after creation | canonical transcript and opaque provider state, size-bounded in the record | create-if-absent by child ID |
 | Result/blob objects | immutable | possibly | digest-verified put/get |
 
 Redis implements operation, budget, and continuation state. A blob-store port
@@ -72,27 +72,47 @@ is not logged or stored unless an operator explicitly chooses a safe identifier.
 ```go
 type Continuation struct {
 	ID                 string
-	TenantHash         [32]byte
+	Tenant             string
 	ParentID           string
-	TranscriptRef      BlobRef
+	Transcript         []llm.Item
 	TranscriptDigest   [32]byte
+	TranscriptComplete bool
 	ProviderState      []OpaqueStateRef
 	Pinning            Pinning
 	LastOperationID    string
 	CapabilityVersion  string
+	PriceVersion       string
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
+	Depth              int
 }
 ```
 
-The transcript serialization is canonical, versioned, and content-addressed.
-Provider-state entries preserve provider, endpoint family/account, media type,
-digest, and exact bytes. A store read verifies schema version, tenant binding,
-MAC, digest, size, and expiry before decoding any semantic item.
+This is the current in-process domain record. `ID` is the signed, opaque handle
+issued for `Tenant`; it is not a prompt, provider token, or tenant hash. The
+Redis and memory stores copy records on write and read so callers cannot mutate
+an existing continuation by retaining a slice or provider-state byte buffer.
 
-Deletion is retention-driven. Deleting a parent does not mutate children; a
-reference counter or mark/sweep job retains blobs until no live continuation or
-operation references them.
+`CanonicalTranscript` canonicalizes each item and hashes a versioned container
+with schema `continuation/v1`. Nil items, malformed semantic items, missing
+identity, negative depth, non-future expiry, digest mismatches, and incomplete
+provider-state entries are rejected. Each provider-state entry must identify
+its provider, endpoint, family, media type, and non-empty opaque bytes; its
+`Required` flag controls whether routing may drop it in best-effort mode.
+
+`CreateRoot` issues a handle at depth zero. `PutChild` requires the child to
+use the same tenant, the parent handle as `ParentID`, and exactly the parent
+depth plus one. A non-empty operation key makes the child write idempotent;
+the same operation returns the existing child handle, while a conflicting
+child is rejected. Reads verify the handle signature, tenant binding, digest,
+and expiry before returning the cloned record. Redis additionally bounds the
+encoded record by its configured continuation byte limit and expires it using
+the record's `ExpiresAt` value.
+
+Deletion is retention-driven. Deleting a parent does not mutate children.
+Redis expires continuation and handle-index records from `ExpiresAt`; the
+memory store exposes an explicit sweep for the same policy. Immutable result
+blobs are retained until no live operation or other record references them.
 
 ## Redis key layout
 
