@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -111,7 +112,8 @@ func (*recordingAdapter) Capabilities(context.Context, provider.CapabilityQuery)
 	return provider.CapabilitySet{
 		Version: "capabilities-1",
 		Features: map[provider.Feature]provider.Capability{
-			provider.FeatureText: {State: provider.CapabilityNative},
+			provider.FeatureText:      {State: provider.CapabilityNative},
+			provider.FeatureStreaming: {State: provider.CapabilityNative},
 		},
 	}, nil
 }
@@ -138,6 +140,41 @@ func (adapter *recordingAdapter) Invoke(ctx context.Context, _ provider.Call, ob
 	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
 	return provider.Result{Response: response}, nil
 }
+
+func (adapter *recordingAdapter) OpenStream(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.StreamResult, error) {
+	if err := observer.BeforePossibleWrite(ctx); err != nil {
+		return provider.StreamResult{}, err
+	}
+	adapter.mu.Lock()
+	adapter.calls++
+	response := adapter.response
+	adapter.mu.Unlock()
+	events := make([]provider.Event, 0, len(response.Output)*2+2)
+	for index, item := range response.Output {
+		events = append(events, provider.OutputStarted{Index: index}, provider.OutputFinished{Index: index, Item: item})
+	}
+	events = append(events, provider.UsageUpdated{Usage: response.Usage}, provider.StreamCompleted{Response: response})
+	return provider.StreamResult{Source: &recordingEventSource{events: events}, Metadata: provider.ResponseMetadata{RequestID: response.Provider.RequestID}, Dispatch: provider.DispatchAccepted}, nil
+}
+
+type recordingEventSource struct {
+	events []provider.Event
+	next   int
+}
+
+func (source *recordingEventSource) Next(ctx context.Context) (provider.Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if source.next == len(source.events) {
+		return nil, io.EOF
+	}
+	event := source.events[source.next]
+	source.next++
+	return event, nil
+}
+
+func (*recordingEventSource) Close() error { return nil }
 
 func (adapter *recordingAdapter) Calls() int {
 	adapter.mu.Lock()

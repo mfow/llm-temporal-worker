@@ -110,6 +110,15 @@ exactly-once semantics.
 
 ## Heartbeats
 
+`Generate` consumes `llm.Engine.Stream` rather than a fabricated completed
+response stream. It observes `response_started` and `content_completed` only
+to report bounded streaming progress, then returns the sole
+`response_completed` value. Text/JSON deltas, tool arguments, and opaque
+provider-state events are deliberately drained without being copied as live
+event payloads into a Temporal heartbeat; only the final normalized response
+crosses the Activity return boundary. A stream error is converted by the normal
+common-error classifier.
+
 Heartbeats contain small, redacted progress only:
 
 ```go
@@ -130,10 +139,9 @@ or SDK object is allowed.
 
 The Activity heartbeats:
 
-- immediately after admission;
-- immediately before possible network write;
-- periodically while waiting or streaming, with jitter;
-- before a potentially slow final store operation.
+- while planning and after stream admission;
+- when an output item completes, with only its bounded count;
+- before returning a finalized semantic response.
 
 Heartbeat failure does not cancel the provider call by itself; context
 cancellation does. The implementation watches `ctx.Done()` through all

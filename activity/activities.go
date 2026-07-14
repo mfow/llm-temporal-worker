@@ -2,6 +2,8 @@ package activity
 
 import (
 	"context"
+	"errors"
+	"io"
 
 	"github.com/mfow/llm-temporal-worker/engine"
 	"github.com/mfow/llm-temporal-worker/llm"
@@ -29,10 +31,40 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 			return GenerateResponse{}, ToTemporalError(err)
 		}
 	}
-	response, err := activities.Engine.Generate(ctx, request)
+	stream, err := activities.Engine.Stream(ctx, request)
 	if err != nil {
 		return GenerateResponse{}, ToTemporalError(err)
 	}
+	defer stream.Close()
+	outputItems := 0
+	for {
+		event, nextErr := stream.Next(ctx)
+		if nextErr != nil {
+			if errors.Is(nextErr, io.EOF) {
+				return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseStream, provider.DispatchAccepted, provider.RetryNever, "stream ended before a terminal outcome"))
+			}
+			return GenerateResponse{}, ToTemporalError(nextErr)
+		}
+		if _, ok := event.(llm.ContentCompleted); ok {
+			outputItems++
+		}
+		if activities.Heartbeater != nil {
+			if progress, ok := StreamProgress(event, outputItems); ok {
+				if err := activities.Heartbeater.Beat(ctx, progress); err != nil {
+					return GenerateResponse{}, ToTemporalError(err)
+				}
+			}
+		}
+		switch terminal := event.(type) {
+		case llm.ResponseCompleted:
+			return activities.completeGenerate(ctx, terminal.Response)
+		case llm.StreamErrored:
+			return GenerateResponse{}, ToTemporalError(terminal.Err)
+		}
+	}
+}
+
+func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response) (GenerateResponse, error) {
 	result := GenerateResponse{APIVersion: APIVersion, Response: response, Metadata: ResultMetadata{OperationID: response.OperationID}}
 	if err := result.Validate(activities.PayloadLimits.inlineBytes()); err != nil {
 		return GenerateResponse{}, ToTemporalError(err)

@@ -98,6 +98,17 @@ the decoder must produce the same typed events and final response. Tests also co
 duplicate/out-of-order IDs, invalid UTF-8, partial JSON/tool arguments, missing
 terminal event, terminal error after deltas, cancellation, and oversized event.
 
+The engine stream contract suite additionally proves that a non-streaming
+adapter is rejected before any provider dispatch (rather than falling back to
+`Generate`), event order is preserved, and every consumer sees exactly one
+typed terminal followed by EOF. It covers bounded-buffer backpressure,
+cancellation closing the provider source, duplicate-terminal rejection,
+byte-exact opaque provider state, completed-operation replay, pre-write
+fallback retry, ambiguous post-write replay refusal, and equivalent finalized
+stream/non-stream responses. Activity tests prove that live raw stream deltas
+never appear in heartbeat details or as separate return records; only bounded
+progress and the final semantic response cross the Temporal boundary.
+
 ### Property and fuzz tests
 
 Fuzz targets include:
@@ -232,6 +243,11 @@ For each enforced profile, its adapter fixture test uses the shared
 conversion and `contracttest.VerifyStreamAssemblyEquivalent` for
 stream/non-stream response assembly. Both helpers compare JSON after removing
 only that profile's explicit generated-field exemptions.
+
+That adapter-contract helper verifies decoder and semantic-assembly behavior;
+it does not implement the live `StreamingAdapter` port or exercise
+`llm.Engine.Stream` provider dispatch. The typed engine-stream lifecycle stays
+separate until a production adapter supplies that port.
 
 Golden updates require an intentional `-update` test flag locally, a human
 reviewable diff, and source-contract update. Normal tests never rewrite files.
