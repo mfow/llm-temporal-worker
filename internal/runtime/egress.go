@@ -180,7 +180,7 @@ func cloneProviderTransport(base *http.Client) (*http.Transport, error) {
 		}
 		transport = defaultTransport.Clone()
 	}
-	if transport.TLSClientConfig != nil && transport.TLSClientConfig.InsecureSkipVerify {
+	if tlsConfig := transport.TLSClientConfig; tlsConfig != nil && (tlsConfig.InsecureSkipVerify || tlsConfig.ServerName != "") {
 		return nil, deniedProviderEgress("invalid_transport")
 	}
 	return transport, nil

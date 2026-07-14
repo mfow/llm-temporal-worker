@@ -226,9 +226,6 @@ func TestProviderEgressTransportDisablesRedirectsAndKeepsTLS(t *testing.T) {
 	if trustedTransport.TLSClientConfig == nil {
 		t.Fatal("TLS mock transport is missing trusted test roots")
 	}
-	trustedTLS := trustedTransport.TLSClientConfig.Clone()
-	trustedTLS.ServerName = "example.com"
-	trustedTransport.TLSClientConfig = trustedTLS
 	base = &http.Client{Transport: trustedTransport}
 	endpoint := providerEgressEndpoint()
 	endpoint.BaseURL = "https://example.com/v1"
@@ -262,6 +259,20 @@ func TestProviderEgressTransportRejectsInsecureTLSVerification(t *testing.T) {
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // regression test for rejecting unsafe caller transport.
+	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), nil, nil)
+	if !errors.Is(err, ErrProviderEgressDenied) {
+		t.Fatalf("newProviderEgressHTTPClient() error = %v, want ErrProviderEgressDenied", err)
+	}
+	if got, want := err.Error(), "provider egress blocked: invalid_transport"; got != want {
+		t.Fatalf("newProviderEgressHTTPClient() error = %q, want %q", got, want)
+	}
+}
+
+func TestProviderEgressTransportRejectsTLSHostnameOverride(t *testing.T) {
+	t.Parallel()
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{ServerName: "cohosted.example"}
 	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), nil, nil)
 	if !errors.Is(err, ErrProviderEgressDenied) {
 		t.Fatalf("newProviderEgressHTTPClient() error = %v, want ErrProviderEgressDenied", err)
