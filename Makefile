@@ -227,6 +227,11 @@ compose-live-integration:
 			sh ./scripts/redact-compose-logs.sh >&2 || true; \
 		exit 1; \
 	fi; \
+	redis_address="$$( $(COMPOSE) port redis 6379 )"; \
+	if [ -z "$$redis_address" ]; then \
+		echo "compose-live-integration could not rediscover the Redis host port after lifecycle recovery" >&2; \
+		exit 1; \
+	fi; \
 	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'; then \
 		echo "compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):" >&2; \
 		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \

@@ -571,6 +571,53 @@ func TestComposeTemporalRecoveryFailureDiagnosticsUseRedactedServiceLogs(t *test
 	}
 }
 
+func TestComposeTemporalRecoveryRefreshesRedisAddressAfterLifecycle(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const lifecycleTest = `GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'`
+	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'`
+	const redisAddressRefresh = `redis_address="$$( $(COMPOSE) port redis 6379 )";`
+	makefile := string(data)
+	lifecycleStart := strings.Index(makefile, "if ! "+lifecycleTest)
+	if lifecycleStart < 0 {
+		t.Fatal("compose live integration target is missing the Redis lifecycle wrapper")
+	}
+	lifecycleEndOffset := strings.Index(makefile[lifecycleStart:], "\tfi; \\\n\t")
+	if lifecycleEndOffset < 0 {
+		t.Fatal("compose live integration target is missing the end of the Redis lifecycle wrapper")
+	}
+	lifecycleEnd := lifecycleStart + lifecycleEndOffset + len("\tfi; \\\n")
+	temporalStart := strings.Index(makefile, "if ! "+temporalRecoveryTest)
+	if temporalStart < 0 {
+		t.Fatal("compose live integration target is missing the Temporal recovery wrapper")
+	}
+	if temporalStart <= lifecycleEnd {
+		t.Fatal("Temporal recovery wrapper must follow the Redis lifecycle wrapper")
+	}
+	refreshOffset := strings.Index(makefile[lifecycleEnd:temporalStart], redisAddressRefresh)
+	if refreshOffset < 0 {
+		t.Fatalf("compose live integration target must refresh Redis with %q after lifecycle recovery", redisAddressRefresh)
+	}
+	refreshPath := makefile[lifecycleEnd+refreshOffset : temporalStart]
+	for _, required := range []string{
+		redisAddressRefresh,
+		`if [ -z "$$redis_address" ]; then \`,
+		`echo "compose-live-integration could not rediscover the Redis host port after lifecycle recovery" >&2; \`,
+		`exit 1; \`,
+		`fi; \`,
+	} {
+		if !strings.Contains(refreshPath, required) {
+			t.Errorf("post-lifecycle Redis address refresh is missing %q", required)
+		}
+	}
+	if !strings.Contains(makefile[temporalStart:], `LLMTW_REDIS_ADDR="$$redis_address"`) {
+		t.Error("Temporal recovery command must receive the post-lifecycle Redis address")
+	}
+}
+
 func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
 	t.Parallel()
 	secrets := map[string]string{
