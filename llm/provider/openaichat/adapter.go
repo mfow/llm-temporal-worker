@@ -190,7 +190,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
 	response, err := adapter.client.sdk.Chat.Completions.New(ctx, params, requestOptions...)
 	if err != nil {
-		return provider.Result{}, mapError(err, adapter.Name())
+		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
 		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")

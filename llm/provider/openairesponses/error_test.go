@@ -51,3 +51,30 @@ func TestMapErrorClassifiesContextAndTransportFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestMapErrorClassifiesEgressDenialBeforeDispatch(t *testing.T) {
+	mapped := mapError(provider.ErrProviderEgressDenied)
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped = %#v", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderEgressDenied) {
+		t.Fatal("mapped error did not preserve the egress marker")
+	}
+}
+
+func TestMapErrorRedactsTransportCause(t *testing.T) {
+	transportCause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
+	mapped := mapError(transportCause)
+	encoded, err := json.Marshal(mapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"provider-secret", "private-content", "opaque-handle", "provider-raw"} {
+		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
+			t.Fatalf("safe provider error leaked %q: %s", raw, encoded)
+		}
+	}
+	if !errors.Is(mapped, transportCause) {
+		t.Fatal("mapped error did not preserve the local diagnostic cause")
+	}
+}

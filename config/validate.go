@@ -249,14 +249,20 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 	if _, ok := supportedFamilies[endpoint.Family]; !ok {
 		return fmt.Errorf("%s.family %q is unsupported", path, endpoint.Family)
 	}
+	baseHost := ""
+	var err error
 	if endpoint.Family == "bedrock_anthropic_messages" {
 		if endpoint.Region == "" {
 			return fmt.Errorf("%s.region is required for Bedrock", path)
 		}
-		if err := validateURL(endpoint.BaseURL, path+".base_url", true); err != nil {
+		baseHost, err = normalizedHTTPSURLHost(endpoint.BaseURL, path+".base_url", true)
+		if err != nil {
 			return err
 		}
-	} else if err := validateURL(endpoint.BaseURL, path+".base_url", false); err != nil {
+	} else if baseHost, err = normalizedHTTPSURLHost(endpoint.BaseURL, path+".base_url", false); err != nil {
+		return err
+	}
+	if err := endpoint.validateOutboundHosts(path, baseHost); err != nil {
 		return err
 	}
 	if err := endpoint.Auth.Validate(path + ".auth"); err != nil {
@@ -284,6 +290,31 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 		if tier.ProviderValue == "" {
 			return fmt.Errorf("%s.service_classes.%s.provider_value is required", path, class)
 		}
+	}
+	return nil
+}
+
+func (endpoint EndpointConfig) validateOutboundHosts(path, baseHost string) error {
+	if len(endpoint.OutboundHosts) == 0 {
+		return fmt.Errorf("%s.outbound_hosts must not be empty", path)
+	}
+	seen := make(map[string]struct{}, len(endpoint.OutboundHosts))
+	baseAllowed := baseHost == ""
+	for index, rawHost := range endpoint.OutboundHosts {
+		host, err := NormalizeOutboundHost(rawHost)
+		if err != nil {
+			return fmt.Errorf("%s.outbound_hosts[%d] must be a normalized DNS hostname", path, index)
+		}
+		if _, duplicate := seen[host]; duplicate {
+			return fmt.Errorf("%s.outbound_hosts contains duplicate hostname", path)
+		}
+		seen[host] = struct{}{}
+		if host == baseHost {
+			baseAllowed = true
+		}
+	}
+	if !baseAllowed {
+		return fmt.Errorf("%s.outbound_hosts must include the base_url hostname", path)
 	}
 	return nil
 }

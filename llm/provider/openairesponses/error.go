@@ -15,6 +15,11 @@ func mapError(err error) *provider.Error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, provider.ErrProviderEgressDenied) {
+		mapped := provider.NewEgressDeniedError(err)
+		mapped.SafeDetails = map[string]string{"provider": adapterName}
+		return mapped
+	}
 	if errors.Is(err, context.Canceled) {
 		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "provider request canceled")
 		mapped.Cause = err

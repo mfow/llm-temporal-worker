@@ -150,7 +150,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	var rawResponse *http.Response
 	response, err := adapter.client.sdk.Responses.New(ctx, params, option.WithResponseInto(&rawResponse))
 	if err != nil {
-		return provider.Result{}, mapError(err)
+		return provider.Result{}, provider.WithEndpointID(mapError(err), adapter.endpointID)
 	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
 	if rawResponse != nil {

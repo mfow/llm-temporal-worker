@@ -73,7 +73,9 @@ services:
   # The worker is opt-in because it requires a locally generated continuation
   # key. Start the dependencies with `docker compose up -d`, then run
   # `mkdir -p .local && openssl rand -hex 32 > .local/continuation-hmac` and
-  # `docker compose --profile worker up worker`.
+  # `docker compose --profile worker up worker`. The checked-in provider mock
+  # is intentionally Docker-private and is denied by the provider egress
+  # policy, so this profile proves boot/readiness rather than live inference.
   worker:
     profiles: [worker]
     build:

@@ -183,7 +183,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	}
 	response, err := messages.New(ctx, params, option.WithResponseInto(&rawResponse))
 	if err != nil {
-		return provider.Result{}, mapError(err, adapter.Name())
+		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
 		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")

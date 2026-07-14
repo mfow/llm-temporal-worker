@@ -77,9 +77,14 @@ limits:
   token_estimate_safety_ratio: "1.35"
 
 endpoints:
+  # This Docker-only fixture intentionally remains subject to the same
+  # fail-closed policy as production: its private Compose address is denied
+  # by the worker transport. It is a configuration/adapter test fixture, not
+  # an end-to-end provider egress target.
   provider-mock:
     family: openai_chat
     base_url: https://provider-mock:8081/v1
+    outbound_hosts: [provider-mock]
     auth:
       kind: bearer_env
       name: MOCK_API_KEY

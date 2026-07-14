@@ -80,6 +80,7 @@ endpoints:
   openai-prod:
     family: openai_responses
     base_url: https://api.openai.com/v1
+    outbound_hosts: [api.openai.com]
     auth:
       kind: bearer_env
       name: OPENAI_API_KEY
@@ -100,6 +101,7 @@ endpoints:
   azure-openai-au:
     family: azure_openai_responses
     base_url: https://example.openai.azure.com/openai/v1
+    outbound_hosts: [example.openai.azure.com]
     auth:
       kind: azure_default_credential
     account_region: australiaeast
@@ -120,6 +122,7 @@ endpoints:
   openrouter-pinned:
     family: openai_chat
     base_url: https://openrouter.ai/api/v1
+    outbound_hosts: [openrouter.ai]
     auth:
       kind: bearer_env
       name: OPENROUTER_API_KEY
@@ -139,6 +142,7 @@ endpoints:
   exa-answer:
     family: openai_chat
     base_url: https://api.exa.ai
+    outbound_hosts: [api.exa.ai]
     auth:
       kind: bearer_env
       name: EXA_API_KEY
@@ -157,6 +161,7 @@ endpoints:
   anthropic-direct:
     family: anthropic_messages
     base_url: https://api.anthropic.com
+    outbound_hosts: [api.anthropic.com]
     auth:
       kind: header_env
       name: ANTHROPIC_API_KEY
@@ -173,6 +178,7 @@ endpoints:
 
   bedrock-us-east-1:
     family: bedrock_anthropic_messages
+    outbound_hosts: [bedrock-runtime.us-east-1.amazonaws.com]
     region: us-east-1
     auth:
       kind: aws_default_chain

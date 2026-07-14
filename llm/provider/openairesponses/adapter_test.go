@@ -2,6 +2,8 @@ package openairesponses
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -71,6 +73,48 @@ func TestCapabilitiesRejectMismatchedFamily(t *testing.T) {
 	_, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{Family: provider.FamilyOpenAIChat})
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched family error = %v", err)
+	}
+}
+
+func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {
+	cause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
+	client, err := NewClient(ClientConfig{
+		BaseURL: "https://provider.example/v1",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, cause
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "openai-prod", "cap-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "op-transport", Model: "gpt-contract"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Invoke(context.Background(), call, nil)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if got, want := mapped.SafeDetails["endpoint"], "openai-prod"; got != want {
+		t.Fatalf("endpoint detail = %q, want %q", got, want)
+	}
+	encoded, marshalErr := json.Marshal(mapped)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	for _, raw := range []string{"provider-secret", "private-content", "opaque-handle", "provider-raw"} {
+		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
+			t.Fatalf("safe adapter error leaked %q: %s", raw, encoded)
+		}
+	}
+	if !errors.Is(mapped, cause) {
+		t.Fatal("adapter error did not retain the local diagnostic cause")
 	}
 }
 

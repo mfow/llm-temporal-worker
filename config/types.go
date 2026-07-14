@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -174,6 +175,7 @@ type LimitsConfig struct {
 type EndpointConfig struct {
 	Family            string                          `yaml:"family" json:"family"`
 	BaseURL           string                          `yaml:"base_url" json:"base_url"`
+	OutboundHosts     []string                        `yaml:"outbound_hosts" json:"outbound_hosts"`
 	Region            string                          `yaml:"region" json:"region"`
 	Auth              AuthConfig                      `yaml:"auth" json:"auth"`
 	AccountRegion     string                          `yaml:"account_region" json:"account_region"`
@@ -372,15 +374,52 @@ func sortedKeys[T any](values map[string]T) []string {
 	return keys
 }
 
-func validateURL(value, path string, allowEmpty bool) error {
+// NormalizeOutboundHost canonicalizes one explicit provider hostname. Provider
+// endpoints must name DNS hosts rather than literal addresses so the runtime
+// can resolve and apply its IP-address egress policy before each connection.
+func NormalizeOutboundHost(value string) (string, error) {
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if host == "" {
+		return "", fmt.Errorf("hostname is required")
+	}
+	if len(host) > 253 || net.ParseIP(host) != nil {
+		return "", fmt.Errorf("hostname must be a DNS name")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return "", fmt.Errorf("hostname labels must be between 1 and 63 characters")
+		}
+		for index, character := range label {
+			if character > 127 || !(character == '-' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9') {
+				return "", fmt.Errorf("hostname labels must contain only lowercase ASCII letters, digits, or hyphens")
+			}
+			if (index == 0 || index == len(label)-1) && character == '-' {
+				return "", fmt.Errorf("hostname labels must not begin or end with a hyphen")
+			}
+		}
+	}
+	return host, nil
+}
+
+func normalizedHTTPSURLHost(value, path string, allowEmpty bool) (string, error) {
 	if value == "" && allowEmpty {
-		return nil
+		return "", nil
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("%s must be an https URL without userinfo/query/fragment", path)
+		return "", fmt.Errorf("%s must be an https URL without userinfo/query/fragment", path)
 	}
-	return nil
+	if port := parsed.Port(); port != "" {
+		parsedPort, parseErr := strconv.ParseUint(port, 10, 16)
+		if parseErr != nil || parsedPort == 0 {
+			return "", fmt.Errorf("%s must use a valid HTTPS port", path)
+		}
+	}
+	host, err := NormalizeOutboundHost(parsed.Hostname())
+	if err != nil {
+		return "", fmt.Errorf("%s must name a DNS hostname", path)
+	}
+	return host, nil
 }
 
 func validatePositiveDuration(value Duration, path string) error {

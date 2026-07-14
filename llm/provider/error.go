@@ -2,11 +2,18 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/llm"
 )
+
+// ErrProviderEgressDenied marks a request rejected by the configured provider
+// egress transport before any provider bytes can be sent. Concrete transport
+// errors must wrap this marker without exposing the rejected destination or
+// request data.
+var ErrProviderEgressDenied = errors.New("provider egress denied")
 
 type Code string
 
@@ -125,6 +132,15 @@ func NewError(code Code, phase Phase, dispatch DispatchCertainty, retry RetryDis
 	return &Error{Code: code, Phase: phase, Dispatch: dispatch, Retry: retry, SafeMessage: message}
 }
 
+// NewEgressDeniedError converts a provider egress preflight denial into the
+// common error contract. The cause remains available for local diagnostics but
+// is never serialized to callers.
+func NewEgressDeniedError(cause error) *Error {
+	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider egress policy denied request")
+	mapped.Cause = cause
+	return mapped
+}
+
 func (err *Error) Error() string {
 	if err == nil {
 		return ""
@@ -137,6 +153,22 @@ func (err *Error) Unwrap() error {
 		return nil
 	}
 	return err.Cause
+}
+
+// WithEndpointID attaches the configured endpoint identifier to an error's
+// safe details without exposing its diagnostic cause. Endpoint IDs originate
+// from validated operator configuration, never a request-time provider URL.
+func WithEndpointID(err *Error, endpointID string) *Error {
+	if err == nil || endpointID == "" {
+		return err
+	}
+	cloned := *err
+	cloned.SafeDetails = make(map[string]string, len(err.SafeDetails)+1)
+	for key, value := range err.SafeDetails {
+		cloned.SafeDetails[key] = value
+	}
+	cloned.SafeDetails["endpoint"] = endpointID
+	return &cloned
 }
 
 func (err *Error) MarshalJSON() ([]byte, error) {
