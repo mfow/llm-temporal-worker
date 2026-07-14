@@ -43,6 +43,7 @@ make integration
 make compose-smoke
 make deployment-policy-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
+make workflow-verify
 ```
 
 `make integration` runs the offline integration packages with the race
@@ -63,6 +64,15 @@ files (`0440`), and requires the Redis TLS patch to preserve one projected
 Secret volume rather than combine mutually exclusive volume source types. With
 `KUBECTL` set, `make kustomize-verify` also checks those invariants against
 every rendered overlay.
+
+`make workflow-verify` runs pinned `actionlint` syntax validation and a strict
+YAML contract test for the two checked-in GitHub Actions workflows. The test
+requires immutable action commits with readable major-version comments,
+read-only pull-request permissions with no provider credentials, and master
+push/manual triggers plus the exact 05:00 `Australia/Sydney` schedule. It also
+requires both workflows to run the same verification target before the Go
+release gates. This target validates only checked-in workflow definitions; it
+does not deploy, publish, or contact a provider.
 
 The release plan may list additional future gates; the commands above are the
 currently implemented targets. Both CI workflows call the same formatting
