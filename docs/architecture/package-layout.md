@@ -1,8 +1,13 @@
-# Planned Package and Artifact Layout
+# Package and Artifact Layout
 
 The module path is `github.com/mfow/llm-temporal-worker` and the Go baseline is
 1.26. Public reusable packages avoid `internal/`; process wiring and helpers that
 are not stable APIs use `internal/`.
+
+The tree below describes the packages and artifacts checked into the current
+implementation. It is not a promise that every item in the v1 completion plans
+already exists; planned work remains marked in those plans rather than in this
+current-layout reference.
 
 ```text
 .
@@ -17,7 +22,7 @@ are not stable APIs use `internal/`.
 │       └── bedrockmessages/        Bedrock Mantle and isolated legacy runtime profile
 ├── engine/                         End-to-end inference lifecycle composition
 ├── routing/                        Route planning, health, fallback, pinning
-├── pricing/                        Catalogs, decimal arithmetic, quotes, reconciliation
+├── pricing/                        Catalogs, decimal arithmetic, and quotes
 ├── budget/                         Policy matching, estimation, sliding-window semantics
 ├── admission/                      Operation state machine and atomic store port
 ├── state/                          Continuation records, handles, blob references
@@ -29,14 +34,12 @@ are not stable APIs use `internal/`.
 ├── storage/s3blob/                 Production object-store blob implementation
 ├── internal/app/                   Process construction, reload, worker lifecycle
 ├── internal/runtime/               CLI process composition and Temporal client wiring
-├── internal/clock/                 Injected wall and monotonic clock utilities
 ├── internal/httpserver/            Health, readiness, and metrics HTTP server
-├── internal/httptrace/             Before-write/after-write dispatch observation
 ├── internal/observability/         slog, metrics, and trace wiring
 ├── internal/secrets/               Environment/file secret resolution
 ├── deploy/kubernetes/base/         Kustomize base
 ├── deploy/kubernetes/examples/     Non-secret example overlays
-├── testdata/contracts/             Redacted provider wire fixtures
+├── llm/provider/*/testdata/contracts/ Redacted provider wire fixtures by adapter
 ├── Dockerfile                      Multi-stage non-root worker image
 ├── compose.yaml                    Local Temporal, Redis, and worker smoke stack
 ├── config.example.yaml             Safe, non-secret complete example
