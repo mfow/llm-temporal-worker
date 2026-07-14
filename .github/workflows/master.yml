@@ -173,3 +173,134 @@ jobs:
       - name: Scheduled test repetition
         if: github.event_name == 'schedule' && steps.go.outputs.present == 'true'
         run: go test -race -count=5 ./...
+
+  # This produces a retained, redacted evidence bundle only after the normal
+  # master verification job. It is intentionally excluded from manual,
+  # scheduled, and pull-request executions, and does not publish or sign.
+  release-evidence:
+    name: Release evidence
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.x
+          cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Set up pinned kubectl for local manifest rendering
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+        with:
+          version: v1.32.6
+
+      - name: Collect compact redacted release inputs
+        env:
+          RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6
+        run: |
+          bash scripts/release/collect.sh \
+            --artifact-dir release-artifacts \
+            --image-oci-layout "$RUNNER_TEMP/image.oci.tar"
+
+      - name: Inspect immutable OCI manifest descriptor
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci.tar")"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "temporary OCI archive returned an invalid manifest digest" >&2
+            exit 1
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'reference=llm-temporal-worker@%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Download pinned Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.44.0
+
+      - name: Generate and bind CycloneDX SBOM for temporary OCI archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.syft.outputs.cmd }}" oci-archive:"$RUNNER_TEMP/image.oci.tar" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
+          python3 scripts/release/collect.py annotate-sbom \
+            --input "$RUNNER_TEMP/sbom.cdx.json" \
+            --output release-artifacts/sbom.cdx.json \
+            --reference "${{ steps.image.outputs.reference }}" \
+            --digest "${{ steps.image.outputs.digest }}"
+
+      - name: Scan temporary OCI archive with pinned Trivy
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: image
+          input: ${{ runner.temp }}/image.oci.tar
+          format: json
+          output: ${{ runner.temp }}/image-scan.json
+          trivy-config: scripts/release/trivy.yaml
+          version: v0.72.0
+          cache: false
+
+      - name: Bind Trivy result to temporary OCI descriptor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/release/collect.py annotate-scan \
+            --input "$RUNNER_TEMP/image-scan.json" \
+            --output release-artifacts/image-scan.json \
+            --reference "${{ steps.image.outputs.reference }}" \
+            --digest "${{ steps.image.outputs.digest }}"
+
+      - name: Record and verify redacted release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/release/record.sh \
+            -artifact-dir release-artifacts \
+            -output release-artifacts/evidence.json \
+            -repository "https://github.com/${GITHUB_REPOSITORY}" \
+            -revision "$GITHUB_SHA" \
+            -image-reference "${{ steps.image.outputs.reference }}" \
+            -image-digest "${{ steps.image.outputs.digest }}" \
+            -artifact test_summary=test-summary.json \
+            -artifact race_summary=race-summary.json \
+            -artifact fuzz_summary=fuzz-summary.json \
+            -artifact fixture_manifest=fixture-manifest.json \
+            -artifact redis_summary=redis-summary.json \
+            -artifact temporal_summary=temporal-summary.json \
+            -artifact compose_summary=compose-summary.json \
+            -artifact redis_log=redis-log.json \
+            -artifact temporal_log=temporal-log.json \
+            -artifact compose_log=compose-log.json \
+            -artifact rendered_manifests=rendered-manifests.json \
+            -artifact dependency_license=dependencies.json \
+            -artifact vulnerability_results=vulnerabilities.json \
+            -artifact sbom=sbom.cdx.json \
+            -artifact image_scan=image-scan.json
+          make release-verify
+
+      - name: Retain validated redacted release evidence
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary OCI archive
+        if: always()
+        shell: bash
+        run: rm -f -- "$RUNNER_TEMP/image.oci.tar"

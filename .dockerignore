@@ -17,6 +17,7 @@ tmp/
 bin/
 dist/
 coverage/
+release-artifacts/
 vendor/
 _build/
 *.test

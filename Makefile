@@ -11,8 +11,9 @@ IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
 IMAGE_VERIFY_VERSION ?= image-verify
 IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= go1.26.0
+IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -79,13 +80,34 @@ image-verify:
 	@set -eu; \
 		revision="$$(git rev-parse HEAD)"; \
 		build_time="$$(git show -s --format=%cI HEAD)"; \
-		docker build --tag "$(IMAGE_VERIFY_TAG)" \
-			--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
-			--build-arg REVISION="$$revision" \
-			--build-arg BUILD_TIME="$$build_time" \
-			--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
-			--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
-			.; \
+		if [ -n "$(IMAGE_VERIFY_OCI_LAYOUT)" ]; then \
+			layout="$(IMAGE_VERIFY_OCI_LAYOUT)"; \
+			case "$$layout" in \
+				/*) ;; \
+				*) layout="$$PWD/$$layout" ;; \
+			esac; \
+			mkdir -p "$$(dirname "$$layout")"; \
+			test ! -e "$$layout" && test ! -L "$$layout" || { echo "image-verify OCI layout already exists: $$layout" >&2; exit 2; }; \
+			docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+				--tag "$(IMAGE_VERIFY_TAG)" \
+				--output "type=oci,dest=$$layout,name=$(IMAGE_VERIFY_TAG)" \
+				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
+				--build-arg REVISION="$$revision" \
+				--build-arg BUILD_TIME="$$build_time" \
+				--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
+				--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
+				.; \
+			docker load --input "$$layout" >/dev/null; \
+			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
+		else \
+			docker build --tag "$(IMAGE_VERIFY_TAG)" \
+				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
+				--build-arg REVISION="$$revision" \
+				--build-arg BUILD_TIME="$$build_time" \
+				--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
+				--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
+				.; \
+		fi; \
 		LLMTW_IMAGE="$(IMAGE_VERIFY_TAG)" \
 		LLMTW_IMAGE_VERSION="$(IMAGE_VERIFY_VERSION)" \
 		LLMTW_IMAGE_REVISION="$$revision" \
@@ -152,5 +174,10 @@ fuzz-smoke:
 # checked-out source tree.
 mutation-verify:
 	bash scripts/run-mutation.sh
+
+# Validates a previously collected local evidence bundle only. It cannot sign,
+# publish, push an image, or contact an LLM provider.
+release-verify:
+	bash scripts/release/verify.sh --artifact-dir "release-artifacts" --evidence "release-artifacts/evidence.json"
 
 verify: fmt-check schema-verify docs-verify vet test build
