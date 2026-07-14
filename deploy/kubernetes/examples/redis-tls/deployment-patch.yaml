@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmtw-worker
+spec:
+  template:
+    spec:
+      volumes:
+        - name: runtime-secrets
+          projected:
+            defaultMode: 0400
+            sources:
+              - secret:
+                  name: llmtw-worker-secrets
+                  optional: false
+              - secret:
+                  name: llmtw-redis-ca
+                  optional: false
+      containers:
+        - name: worker

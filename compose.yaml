@@ -1,0 +1,103 @@
+name: llmtw
+
+services:
+  temporal:
+    image: temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
+    environment:
+      DB: sqlite
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development.yaml
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7233"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
+  redis:
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  provider-mock:
+    build:
+      context: ./deploy/local/provider-mock
+    image: llmtw/provider-mock:local
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl,urllib.request; urllib.request.urlopen('https://127.0.0.1:8081/health', context=ssl._create_unverified_context())"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # The worker is opt-in because it requires a locally generated continuation
+  # key. Start the dependencies with `docker compose up -d`, then run
+  # `mkdir -p .local && openssl rand -hex 32 > .local/continuation-hmac` and
+  # `docker compose --profile worker up worker`.
+  worker:
+    profiles: [worker]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: local
+        REVISION: working-tree
+        BUILD_TIME: reproducible-local
+    image: llmtw/worker:local
+    command: ["worker", "--config", "/etc/llmtw/config.yaml"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      provider-mock:
+        condition: service_healthy
+    environment:
+      MOCK_API_KEY: local-only
+      REDIS_USERNAME: local
+      REDIS_PASSWORD: local
+      AWS_EC2_METADATA_DISABLED: "true"
+    secrets:
+      - source: continuation_hmac
+        target: /var/run/secrets/llmtw/continuation-hmac
+    volumes:
+      - type: bind
+        source: ./deploy/local/config.yaml
+        target: /etc/llmtw/config.yaml
+        read_only: true
+      - type: bind
+        source: ./deploy/local/capabilities.yaml
+        target: /etc/llmtw/capabilities.yaml
+        read_only: true
+      - type: bind
+        source: ./deploy/local/prices.yaml
+        target: /etc/llmtw/prices.yaml
+        read_only: true
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 134217728
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    stop_grace_period: 90s
+
+secrets:
+  continuation_hmac:
+    file: ${LLMTW_CONTINUATION_KEY_FILE:-./.local/continuation-hmac}
+
+volumes:
+  redis-data:

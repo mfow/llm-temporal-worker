@@ -1,0 +1,10 @@
+version: local-mock-v1
+profiles:
+  local-mock-v1:
+    family: openai_chat
+    model: demo-model
+    input: [text]
+    output: [text]
+    service_classes: [economy, standard, priority]
+    max_context_tokens: 32768
+    max_output_tokens: 4096

@@ -1,0 +1,11 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmtw-worker
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/workload-identity: aws
+    spec:
+      automountServiceAccountToken: true
