@@ -38,6 +38,7 @@ server, or a Kubernetes cluster:
 ```sh
 make integration
 make compose-smoke
+make deployment-policy-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
@@ -51,6 +52,14 @@ than silently starting services. `make kustomize-verify` runs static manifest
 tests and `deploy/verify.sh`, which renders each overlay locally through
 `kubectl kustomize` and never applies anything to a cluster. Set `KUBECTL` to a
 reviewed, pinned executable when `kubectl` is not on `PATH`.
+
+`make deployment-policy-verify` checks the checked-in Kubernetes policy without
+requiring a cluster, credentials, or `kubectl`. It keeps the worker's
+non-root UID/GID and `fsGroup` aligned, requires group-readable runtime Secret
+files (`0440`), and requires the Redis TLS patch to preserve one projected
+Secret volume rather than combine mutually exclusive volume source types. With
+`KUBECTL` set, `make kustomize-verify` also checks those invariants against
+every rendered overlay.
 
 The release plan may list additional future gates; the commands above are the
 currently implemented targets. CI checks formatting with `gofmt -l` rather than

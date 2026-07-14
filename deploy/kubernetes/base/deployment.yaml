@@ -30,6 +30,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -105,10 +106,12 @@ spec:
             name: llmtw-config
             defaultMode: 0444
         - name: runtime-secrets
-          secret:
-            secretName: llmtw-worker-secrets
-            optional: false
-            defaultMode: 0400
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: llmtw-worker-secrets
+                  optional: false
         - name: tmp
           emptyDir:
             medium: Memory

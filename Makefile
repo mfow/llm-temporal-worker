@@ -7,7 +7,7 @@ READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e8
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 READINESS_REDIS_PORT ?= 16379
 
-.PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke kustomize-verify adapter-contracts verify
+.PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke deployment-policy-verify kustomize-verify adapter-contracts verify
 
 fmt-check:
 	@test -z "$$(gofmt -l .)"
@@ -70,12 +70,15 @@ compose-smoke:
 		echo "compose smoke passed (Compose model and offline fixture checks; live services not started)"; \
 	fi
 
+deployment-policy-verify:
+	KUBECTL= $(GO) test ./integration/kubernetes
+
 kustomize-verify:
 	@command -v "$(KUBECTL)" >/dev/null 2>&1 || { \
 		echo "kustomize-verify requires '$(KUBECTL)'; install kubectl or set KUBECTL to a pinned executable" >&2; \
 		exit 2; \
 	}
-	$(GO) test ./integration/kubernetes
+	KUBECTL="$(KUBECTL)" $(GO) test ./integration/kubernetes
 	KUBECTL="$(KUBECTL)" ./deploy/verify.sh
 
 adapter-contracts:
