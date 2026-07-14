@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -46,6 +47,22 @@ type composeContainerHealthSnapshot struct {
 	latestCheckStartedAt time.Time
 }
 
+type composeContainerHealthLogDiagnostic struct {
+	startedAt string
+	endedAt   string
+	exitCode  string
+}
+
+type composeContainerRestartDiagnostic struct {
+	running      string
+	status       string
+	startedAt    string
+	finishedAt   string
+	restartCount string
+	healthStatus string
+	healthLog    []composeContainerHealthLogDiagnostic
+}
+
 type composeContainerHealthVerdict string
 
 const (
@@ -57,6 +74,78 @@ const (
 var composeDockerHealthTimestampLayouts = []string{
 	time.RFC3339Nano,
 	"2006-01-02 15:04:05.999999999 -0700 MST",
+}
+
+const composeContainerRestartDiagnosticFormat = `{{.State.Running}}
+{{.State.Status}}
+{{.State.StartedAt}}
+{{.State.FinishedAt}}
+{{.RestartCount}}
+{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}
+{{if .State.Health}}{{range .State.Health.Log}}{{.Start}}	{{.End}}	{{.ExitCode}}
+{{end}}{{end}}`
+
+// composeRedisAuthenticatedPingCommand intentionally resolves credentials only
+// inside the already-running Redis container. Its raw Compose equivalent is
+// covered by TestComposeRedisHealthcheckTimingComesFromManifest.
+const composeRedisAuthenticatedPingCommand = `redis-cli --user "$REDIS_USERNAME" --pass "$REDIS_PASSWORD" ping`
+
+func TestParseComposeContainerRestartDiagnostic(t *testing.T) {
+	output := strings.Join([]string{
+		"true",
+		"running",
+		"2026-07-14 20:10:00.000000000 +0000 UTC",
+		"0001-01-01 00:00:00 +0000 UTC",
+		"0",
+		"unhealthy",
+		"2026-07-14 20:09:55.000000000 +0000 UTC\t2026-07-14 20:09:58.000000000 +0000 UTC\t1",
+	}, "\n")
+
+	diagnostic, err := parseComposeContainerRestartDiagnostic(output)
+	if err != nil {
+		t.Fatalf("parse restart diagnostic: %v", err)
+	}
+	if got, want := diagnostic.running, "true"; got != want {
+		t.Fatalf("running = %q, want %q", got, want)
+	}
+	if got, want := diagnostic.status, "running"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := diagnostic.startedAt, "2026-07-14 20:10:00.000000000 +0000 UTC"; got != want {
+		t.Fatalf("started at = %q, want %q", got, want)
+	}
+	if got, want := diagnostic.healthStatus, "unhealthy"; got != want {
+		t.Fatalf("health status = %q, want %q", got, want)
+	}
+	if got, want := diagnostic.healthLog, []composeContainerHealthLogDiagnostic{{
+		startedAt: "2026-07-14 20:09:55.000000000 +0000 UTC",
+		endedAt:   "2026-07-14 20:09:58.000000000 +0000 UTC",
+		exitCode:  "1",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("health log = %#v, want %#v", got, want)
+	}
+}
+
+func TestComposeRestartDiagnosticUsesOnlySafeDockerHealthFields(t *testing.T) {
+	for _, required := range []string{
+		".State.Running",
+		".State.Status",
+		".State.StartedAt",
+		".State.Health.Status",
+		".Start",
+		".End",
+		".ExitCode",
+	} {
+		if !strings.Contains(composeContainerRestartDiagnosticFormat, required) {
+			t.Errorf("restart diagnostic is missing %q", required)
+		}
+	}
+	if strings.Contains(composeContainerRestartDiagnosticFormat, ".Output") {
+		t.Error("restart diagnostic must not inspect Docker health output")
+	}
+	if got, want := composeRedisAuthenticatedPingCommand, `redis-cli --user "$REDIS_USERNAME" --pass "$REDIS_PASSWORD" ping`; got != want {
+		t.Fatalf("authenticated Redis diagnostic command = %q, want %q", got, want)
+	}
 }
 
 func TestComposeContainerHealthVerdictRequiresPostRestartProbe(t *testing.T) {
@@ -170,6 +259,17 @@ func TestComposeRedisHealthcheckTimingComesFromManifest(t *testing.T) {
 	if got, want := composeContainerHealthTransitionTimeout(healthcheck), 193*time.Second+100*time.Millisecond; got != want {
 		t.Fatalf("Redis health transition timeout = %s, want %s", got, want)
 	}
+	document, _ := readCompose(t)
+	healthcheckTest := document.Services["redis"].Healthcheck["test"]
+	if healthcheckTest.Kind != yaml.SequenceNode || len(healthcheckTest.Content) != 2 {
+		t.Fatalf("Redis healthcheck test = kind %d with %d arguments, want CMD-SHELL command", healthcheckTest.Kind, len(healthcheckTest.Content))
+	}
+	if got, want := healthcheckTest.Content[0].Value, "CMD-SHELL"; got != want {
+		t.Fatalf("Redis healthcheck mode = %q, want %q", got, want)
+	}
+	if got, want := healthcheckTest.Content[1].Value, `redis-cli --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" ping`; got != want {
+		t.Fatalf("Redis healthcheck command = %q, want %q", got, want)
+	}
 }
 
 func TestComposeReadinessTransitionTimeoutUsesWorkerAndProbeConfiguration(t *testing.T) {
@@ -220,7 +320,7 @@ func TestComposeWorkerReadinessTracksRedis(t *testing.T) {
 	runComposeDocker(t, "start", container)
 	stopped = false
 	restartedAt := composeContainerStartedAt(t, container)
-	waitForComposeContainerHealthy(t, container, restartedAt, composeContainerHealthTransitionTimeout(composeRedisHealthcheckTiming(t)))
+	waitForComposeContainerHealthy(t, address, container, restartedAt, composeContainerHealthTransitionTimeout(composeRedisHealthcheckTiming(t)))
 	waitForComposeStatus(t, address, "/health/ready", http.StatusOK, readinessTransitionTimeout)
 	assertComposeStatus(t, address, "/health/live", http.StatusOK)
 }
@@ -337,7 +437,7 @@ func waitForComposeStatus(t *testing.T, address, path string, want int, timeout 
 	t.Fatalf("%s did not reach HTTP %d within %s: %v", path, want, timeout, last)
 }
 
-func waitForComposeContainerHealthy(t *testing.T, container string, restartedAt time.Time, timeout time.Duration) {
+func waitForComposeContainerHealthy(t *testing.T, address, container string, restartedAt time.Time, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	last := "no Docker health status"
@@ -361,7 +461,7 @@ func waitForComposeContainerHealthy(t *testing.T, container string, restartedAt 
 		}
 		time.Sleep(composeContainerHealthPollInterval)
 	}
-	t.Fatalf("Redis container did not reach Docker health status healthy within %s: %s", timeout, last)
+	t.Fatalf("Redis container did not reach Docker health status healthy within %s: %s\n%s", timeout, last, composeRedisRestartTimeoutDiagnostic(address, container))
 }
 
 func composeContainerStartedAt(t *testing.T, container string) time.Time {
@@ -383,6 +483,45 @@ func composeContainerHealthSnapshotForContainer(container string) (composeContai
 		return composeContainerHealthSnapshot{}, err
 	}
 	return parseComposeContainerHealthSnapshot(output)
+}
+
+func composeContainerRestartDiagnosticForContainer(container string) (composeContainerRestartDiagnostic, error) {
+	output, err := composeDockerInspect(container, composeContainerRestartDiagnosticFormat)
+	if err != nil {
+		return composeContainerRestartDiagnostic{}, err
+	}
+	return parseComposeContainerRestartDiagnostic(output)
+}
+
+func composeRedisAuthenticatedPing(container string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), composeContainerHealthInspectTimeout)
+	defer cancel()
+	if err := exec.CommandContext(ctx, "docker", "exec", container, "/bin/sh", "-ec", composeRedisAuthenticatedPingCommand).Run(); err != nil {
+		return fmt.Errorf("docker exec authenticated Redis PING: %w", err)
+	}
+	return nil
+}
+
+func composeRedisRestartTimeoutDiagnostic(address, container string) string {
+	parts := make([]string, 0, 3)
+	snapshot, err := composeContainerRestartDiagnosticForContainer(container)
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("post-start Redis Docker state inspection error: %v", err))
+	} else {
+		parts = append(parts, snapshot.String())
+	}
+	if err := composeRedisAuthenticatedPing(container); err != nil {
+		parts = append(parts, fmt.Sprintf("authenticated Redis PING failed: %v", err))
+	} else {
+		parts = append(parts, "authenticated Redis PING succeeded")
+	}
+	status, err := composeStatus(address, "/health/ready")
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("worker readiness request error: %v", err))
+	} else {
+		parts = append(parts, fmt.Sprintf("worker readiness HTTP status: %d", status))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func composeDockerInspect(container, format string) (string, error) {
@@ -415,6 +554,54 @@ func parseComposeContainerHealthSnapshot(output string) (composeContainerHealthS
 		}
 	}
 	return snapshot, nil
+}
+
+func parseComposeContainerRestartDiagnostic(output string) (composeContainerRestartDiagnostic, error) {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) < 6 {
+		return composeContainerRestartDiagnostic{}, fmt.Errorf("Docker restart diagnostic has %d fields, want at least 6", len(lines))
+	}
+	diagnostic := composeContainerRestartDiagnostic{
+		running:      strings.TrimSpace(lines[0]),
+		status:       strings.TrimSpace(lines[1]),
+		startedAt:    strings.TrimSpace(lines[2]),
+		finishedAt:   strings.TrimSpace(lines[3]),
+		restartCount: strings.TrimSpace(lines[4]),
+		healthStatus: strings.TrimSpace(lines[5]),
+	}
+	for _, line := range lines[6:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			return composeContainerRestartDiagnostic{}, fmt.Errorf("Docker health log diagnostic has %d fields, want 3", len(fields))
+		}
+		diagnostic.healthLog = append(diagnostic.healthLog, composeContainerHealthLogDiagnostic{
+			startedAt: strings.TrimSpace(fields[0]),
+			endedAt:   strings.TrimSpace(fields[1]),
+			exitCode:  strings.TrimSpace(fields[2]),
+		})
+	}
+	return diagnostic, nil
+}
+
+func (diagnostic composeContainerRestartDiagnostic) String() string {
+	healthLog := make([]string, 0, len(diagnostic.healthLog))
+	for _, entry := range diagnostic.healthLog {
+		healthLog = append(healthLog, fmt.Sprintf("{start=%q end=%q exit_code=%q}", entry.startedAt, entry.endedAt, entry.exitCode))
+	}
+	return fmt.Sprintf(
+		"post-start Redis Docker state: running=%q status=%q started_at=%q finished_at=%q restart_count=%q health_status=%q health_log=[%s]",
+		diagnostic.running,
+		diagnostic.status,
+		diagnostic.startedAt,
+		diagnostic.finishedAt,
+		diagnostic.restartCount,
+		diagnostic.healthStatus,
+		strings.Join(healthLog, ", "),
+	)
 }
 
 func parseComposeDockerHealthTimestamp(value string) (time.Time, error) {
