@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	maxFileBytes   = 1 << 20
-	maxDecodeDepth = 3
-	maxCandidates  = 256
+	maxSourceFileBytes = 1 << 20
+	maxTestOutputBytes = 8 << 20
+	maxDecodeDepth     = 3
+	maxCandidates      = 256
 )
 
 var (
@@ -101,7 +102,7 @@ func verify(root, testOutput string) error {
 		if !shouldScanSource(relative) {
 			return nil
 		}
-		data, err := readBounded(path)
+		data, err := readBounded(path, maxSourceFileBytes)
 		if err != nil {
 			return fmt.Errorf("source safety verification cannot read %s", filepath.ToSlash(relative))
 		}
@@ -125,9 +126,9 @@ func verify(root, testOutput string) error {
 	if outputPath == "" {
 		return nil
 	}
-	data, err := readBounded(outputPath)
+	data, err := readBounded(outputPath, maxTestOutputBytes)
 	if err != nil {
-		return fmt.Errorf("source safety verification cannot read test output")
+		return fmt.Errorf("source safety verification cannot read test output: %w", err)
 	}
 	found, err := scanTestOutput(data)
 	if err != nil {
@@ -172,38 +173,38 @@ func shouldScanSource(relative string) bool {
 	}
 }
 
-func readBounded(path string) ([]byte, error) {
+func readBounded(path string, limit int) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxFileBytes {
-		return nil, fmt.Errorf("file exceeds the verification size limit")
+	if len(data) > limit {
+		return nil, fmt.Errorf("file exceeds the verification size limit of %d bytes", limit)
 	}
 	return data, nil
 }
 
 func scanContent(data []byte) (*finding, error) {
-	return scanWithCredentialFieldPattern(data, credentialFieldPattern, false)
+	return scanWithCredentialFieldPattern(data, credentialFieldPattern, false, maxSourceFileBytes)
 }
 
 func scanSourceContent(data []byte) (*finding, error) {
-	return scanWithCredentialFieldPattern(data, quotedCredentialFieldPattern, false)
+	return scanWithCredentialFieldPattern(data, quotedCredentialFieldPattern, false, maxSourceFileBytes)
 }
 
 func scanTestOutput(data []byte) (*finding, error) {
-	return scanWithCredentialFieldPattern(data, credentialFieldPattern, true)
+	return scanWithCredentialFieldPattern(data, credentialFieldPattern, true, maxTestOutputBytes)
 }
 
-func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, detectOutputLeaks bool) (*finding, error) {
-	if len(data) > maxFileBytes {
-		return nil, fmt.Errorf("source safety verification input exceeds the size limit")
+func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, detectOutputLeaks bool, limit int) (*finding, error) {
+	if len(data) > limit {
+		return nil, fmt.Errorf("source safety verification input exceeds the %d byte limit", limit)
 	}
 	candidates := []candidate{{data: data, encoding: "raw"}}
 	seen := make(map[string]struct{}, maxCandidates)
@@ -222,7 +223,7 @@ func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, de
 			continue
 		}
 		for _, decoded := range decodedCandidates(current.data, current.depth+1) {
-			if len(decoded.data) <= maxFileBytes {
+			if len(decoded.data) <= limit {
 				candidates = append(candidates, decoded)
 			}
 		}
