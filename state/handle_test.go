@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,11 @@ func TestHandleRejectsTamperingAndRetiredKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := strings.Split(handle, ".")
-	parts[2] = "A" + parts[2][1:]
+	replacement := byte('A')
+	if parts[2][0] == replacement {
+		replacement = 'B'
+	}
+	parts[2] = string(replacement) + parts[2][1:]
 	if _, err := keyring.Verify("t", strings.Join(parts, ".")); err != ErrInvalidHandle {
 		t.Fatalf("tampered handle error = %v", err)
 	}
@@ -44,6 +49,73 @@ func TestHandleRejectsTamperingAndRetiredKey(t *testing.T) {
 	if _, err := keyring.Verify("t", unknown); err != ErrInvalidHandle {
 		t.Fatalf("retired key error = %v", err)
 	}
+}
+
+func TestKeyringUsesPrimaryKeyAfterRotation(t *testing.T) {
+	keyring, err := NewKeyring([]Key{
+		{ID: "old", Secret: bytes.Repeat([]byte{1}, 32)},
+		{ID: "new", Secret: bytes.Repeat([]byte{2}, 32), Primary: true},
+	}, bytes.NewReader(bytes.Repeat([]byte{3}, 16)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := keyring.Issue("tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(handle, "ctn_v1.new.") {
+		t.Fatalf("issued handle = %q, want primary key new", handle)
+	}
+	if _, err := keyring.Verify("tenant", handle); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewKeyringRejectsInvalidConfiguration(t *testing.T) {
+	tests := []struct {
+		name string
+		keys []Key
+		want string
+	}{
+		{name: "no keys", want: "exactly one primary"},
+		{name: "invalid id", keys: []Key{{ID: "bad.id", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, want: "invalid continuation key"},
+		{name: "short secret", keys: []Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 31), Primary: true}}, want: "invalid continuation key"},
+		{name: "duplicate id", keys: []Key{
+			{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true},
+			{ID: "k1", Secret: bytes.Repeat([]byte{2}, 32)},
+		}, want: "duplicate continuation key"},
+		{name: "multiple primary", keys: []Key{
+			{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true},
+			{ID: "k2", Secret: bytes.Repeat([]byte{2}, 32), Primary: true},
+		}, want: "multiple primary"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewKeyring(test.keys, nil)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestKeyringIssueRejectsEmptyTenantAndEntropyFailure(t *testing.T) {
+	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, errorReader{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keyring.Issue(""); err != ErrInvalidHandle {
+		t.Fatalf("empty tenant error = %v, want ErrInvalidHandle", err)
+	}
+	if _, err := keyring.Issue("tenant"); err == nil || !strings.Contains(err.Error(), "generate continuation handle") {
+		t.Fatalf("entropy failure = %v, want generation error", err)
+	}
+}
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
 }
 
 func FuzzVerifyHandleNeverPanics(f *testing.F) {
