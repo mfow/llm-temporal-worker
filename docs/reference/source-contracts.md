@@ -33,6 +33,17 @@ Task 6 must add the typed stream contract, direct and Azure SDK dispatch, and
 deterministic transport coverage before either profile can claim enforced
 streaming coverage.
 
+### Direct Responses fixture boundary
+
+The direct `openai-responses` profile has an enforced offline fixture matrix
+for Responses lowering/lifting, tools, structured output, image and document
+parts, opaque response state, continuation, usage, service classes, classified
+errors, strict-loss rejection, best-effort unavailability, and redaction. Its
+`streaming: unsupported` fact remains deliberate: the full and fragmented
+decoder fixture corpus proves SSE reconstruction only, not end-to-end client
+streaming dispatch. The Azure Responses profile remains bootstrap; direct
+OpenAI fixture coverage is not evidence of Azure deployment capability.
+
 ## Azure OpenAI
 
 - [Azure priority processing](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/priority-processing)

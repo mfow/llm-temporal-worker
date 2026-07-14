@@ -116,27 +116,61 @@ func TestResponsesContractFixturesCoverUsageClassAndStrictLoss(t *testing.T) {
 	}
 }
 
-func TestResponsesContractFixturesStayRedactedAndBootstrapUntilStreamingDispatch(t *testing.T) {
+func TestOpenAIResponsesContractFixtureCoversContinuationCompatibility(t *testing.T) {
+	profile := responsesFixtureProfiles[0]
+	request := loadContractRequestFixture(t, profile.id, "continuation-compatibility.semantic.json")
+	adapter := fixtureAdapterForProfile(t, profile)
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: request,
+		Query: provider.CapabilityQuery{
+			EndpointID: profile.endpoint,
+			Family:     provider.FamilyOpenAIResponses,
+			Model:      request.Model,
+		},
+		Strict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !call.Metadata.OpaqueStateRequired {
+		t.Fatal("continuation call did not retain opaque-state requirement")
+	}
+	gotWire, err := json.Marshal(call.SDKParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCanonicalFixtureJSON(t, gotWire, profile.id, "continuation-compatibility.wire.json")
+}
+
+func TestResponsesContractFixturesStayRedactedAndRespectCoverageBoundary(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", "..", ".."))
 	report, err := contracttest.ValidateRepository(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPaths := map[string]string{
-		"openai-responses": "llm/provider/openairesponses/testdata/contracts/openai-responses",
-		"azure-responses":  "llm/provider/openairesponses/testdata/contracts/azure-responses",
+	wantProfiles := map[string]contracttest.Profile{
+		"openai-responses": {
+			ID:       "openai-responses",
+			Coverage: contracttest.CoverageEnforced,
+			Path:     "llm/provider/openairesponses/testdata/contracts/openai-responses",
+		},
+		"azure-responses": {
+			ID:       "azure-responses",
+			Coverage: contracttest.CoverageBootstrap,
+			Path:     "llm/provider/openairesponses/testdata/contracts/azure-responses",
+		},
 	}
 	found := make(map[string]contracttest.Profile)
-	for _, profile := range report.Bootstrap {
+	for _, profile := range append(report.Bootstrap, report.Enforced...) {
 		found[profile.ID] = profile
 	}
-	for id, wantPath := range wantPaths {
+	for id, want := range wantProfiles {
 		profile, ok := found[id]
 		if !ok {
-			t.Fatalf("bootstrap report is missing %s: %#v", id, report)
+			t.Fatalf("coverage report is missing %s: %#v", id, report)
 		}
-		if profile.Path != wantPath {
-			t.Fatalf("%s fixture path = %q, want %q", id, profile.Path, wantPath)
+		if profile != want {
+			t.Fatalf("%s fixture profile = %#v, want %#v", id, profile, want)
 		}
 	}
 	for _, profile := range responsesFixtureProfiles {

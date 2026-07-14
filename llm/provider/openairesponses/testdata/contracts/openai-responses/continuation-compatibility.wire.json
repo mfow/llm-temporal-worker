@@ -1,0 +1,8 @@
+{
+  "input": [{"content": [{"text": "continue response", "type": "input_text"}], "role": "user", "type": "message"}],
+  "model": "gpt-contract",
+  "parallel_tool_calls": false,
+  "previous_response_id": "resp-prior",
+  "service_tier": "default",
+  "tool_choice": "auto"
+}
