@@ -1,0 +1,6 @@
+{
+  "authorization": "[REDACTED]",
+  "x_amz_security_token": "[REDACTED]",
+  "request_id": "bedrock-request-[REDACTED]",
+  "note": "synthetic Bedrock fixture redaction"
+}

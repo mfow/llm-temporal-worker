@@ -533,7 +533,7 @@ func TestRepositoryManifests(t *testing.T) {
 	if len(report.Bootstrap) == 0 {
 		t.Fatal("repository has no bootstrap adapter contract profiles")
 	}
-	const wantEnforced = "anthropic-direct, exa-chat, openai-chat, openrouter-chat"
+	const wantEnforced = "anthropic-direct, bedrock-anthropic, exa-chat, openai-chat, openrouter-chat"
 	if got := profileIDs(report.Enforced); got != wantEnforced {
 		t.Fatalf("repository enforced profiles = %q, want %q", got, wantEnforced)
 	}

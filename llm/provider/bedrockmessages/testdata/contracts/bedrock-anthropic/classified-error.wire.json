@@ -1,0 +1,17 @@
+{
+  "status": 403,
+  "request_id": "bedrock-request-[REDACTED]",
+  "body": {
+    "error": {
+      "type": "permission_error",
+      "message": "fixture body [REDACTED]"
+    }
+  },
+  "expected": {
+    "code": "permission_denied",
+    "phase": "dispatch",
+    "dispatch": "rejected",
+    "retry": "never",
+    "message_contains": "permission"
+  }
+}

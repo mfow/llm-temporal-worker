@@ -1,0 +1,77 @@
+{
+  "replay": {
+    "api_version": "llm.temporal/v1",
+    "operation_key": "fixture-bedrock-continuation",
+    "model": "claude-contract",
+    "service_class": "priority",
+    "service_class_fallbacks": [],
+    "portability": "strict",
+    "instructions": [],
+    "input": [
+      {"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "continue fixture"}]}
+    ],
+    "tools": [],
+    "tool_policy": {"mode": "auto", "parallel": false},
+    "continuation": {
+      "handle": "bedrock-messages:msg-prior",
+      "endpoint_id": "bedrock-fixture",
+      "model": "claude-contract",
+      "pinned": true,
+      "provider_state": [
+        {"kind": "provider_state", "provider": "bedrock", "endpoint_family": "messages", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoidGhpbmtpbmcifQ=="},
+        {"kind": "provider_state", "provider": "bedrock", "endpoint_family": "messages", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoicmVkYWN0ZWRfdGhpbmtpbmcifQ=="}
+      ]
+    },
+    "extensions": {}
+  },
+  "incompatible": [
+    {
+      "name": "direct-anthropic-state",
+      "request": {
+        "api_version": "llm.temporal/v1",
+        "operation_key": "fixture-direct-incompatible",
+        "model": "claude-contract",
+        "service_class": "standard",
+        "service_class_fallbacks": [],
+        "portability": "strict",
+        "instructions": [],
+        "input": [],
+        "tools": [],
+        "tool_policy": {"mode": "auto", "parallel": false},
+        "continuation": {
+          "handle": "bedrock-messages:msg-direct",
+          "pinned": false,
+          "provider_state": [
+            {"kind": "provider_state", "provider": "anthropic", "endpoint_family": "messages", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoidGhpbmtpbmcifQ=="}
+          ]
+        },
+        "extensions": {}
+      }
+    },
+    {
+      "name": "aws-gateway-endpoint",
+      "request": {
+        "api_version": "llm.temporal/v1",
+        "operation_key": "fixture-aws-gateway-incompatible",
+        "model": "claude-contract",
+        "service_class": "standard",
+        "service_class_fallbacks": [],
+        "portability": "strict",
+        "instructions": [],
+        "input": [],
+        "tools": [],
+        "tool_policy": {"mode": "auto", "parallel": false},
+        "continuation": {
+          "handle": "anthropic-messages:msg-aws",
+          "endpoint_id": "anthropic-aws-gateway",
+          "model": "claude-contract",
+          "pinned": true,
+          "provider_state": [
+            {"kind": "provider_state", "provider": "anthropic", "endpoint_family": "messages", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoidGhpbmtpbmcifQ=="}
+          ]
+        },
+        "extensions": {}
+      }
+    }
+  ]
+}

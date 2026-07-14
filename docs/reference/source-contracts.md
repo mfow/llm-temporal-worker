@@ -56,6 +56,9 @@ model, economy-tier, continuation, or streaming availability.
 - [Anthropic Go SDK](https://github.com/anthropics/anthropic-sdk-go) contains
   direct Messages support, configurable retry count, and AWS/Bedrock client
   support; retries are disabled here.
+- [Amazon Bedrock Anthropic Claude Messages API](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html)
+  defines the native Messages request/response shape and the base invocation
+  and response-stream operations.
 - [Anthropic Go SDK AWS gateway source](https://github.com/anthropics/anthropic-sdk-go/blob/v1.57.0/aws/aws.go)
   documents that API-key inputs and `ANTHROPIC_AWS_API_KEY` take precedence
   over SigV4, while unset credentials use the default AWS credential chain.
@@ -72,6 +75,18 @@ silently choose a different auth mode. AWS gateway and Bedrock have separate
 endpoint families, catalog state, and pinned continuations. AWS profiles
 declare exact offering/model mappings; reserved capacity is not a fourth public
 request class.
+
+### Bedrock Anthropic fixture boundary
+
+As of 2026-07-14, the `bedrock-anthropic` profile has an enforced offline
+fixture matrix for native Messages lowering/lifting, service-tier facts,
+opaque thinking state, tool argument fragments, usage with unreported cost,
+classified errors, and source-date/redaction checks. Opaque state remains
+endpoint-pinned: direct Anthropic and AWS-gateway continuation state cannot be
+replayed through the Bedrock adapter without an explicit portable transcript.
+The captured SSE fixtures prove decoder and assembler semantics under
+fragmentation; they are not evidence of an end-to-end client streaming-dispatch
+implementation.
 
 ## OpenAI-compatible endpoints
 

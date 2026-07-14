@@ -1,0 +1,29 @@
+{
+  "api_version": "llm.temporal/v1",
+  "continuation": {"endpoint_id": "bedrock-fixture", "handle": "bedrock-messages:msg-bedrock-usage", "model": "claude-contract", "pinned": true},
+  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-bedrock-usage",
+  "output": [
+    {"actor": "model", "content": [{"kind": "text", "text": "usage fixture"}], "kind": "message"}
+  ],
+  "provider": {"finish_reason": "end_turn", "request_id": "bedrock-request-fixture", "response_id": "msg-bedrock-usage"},
+  "route": {"api_family": "bedrock_messages", "endpoint_id": "bedrock-fixture", "requested_model": "claude-contract", "resolved_model": "claude-contract"},
+  "service": {"actual": "economy", "attempted": "standard", "fallback_index": 0, "provider_value": "flex", "requested": "standard"},
+  "status": "completed",
+  "usage": {
+    "cache_read_tokens": 3,
+    "cache_write_tokens": 2,
+    "input_tokens": 13,
+    "output_tokens": 9,
+    "provider_raw": {
+      "cache_creation_input_tokens": 2,
+      "cache_read_input_tokens": 3,
+      "input_tokens": 13,
+      "output_tokens": 9,
+      "output_tokens_details": {"thinking_tokens": 4},
+      "service_tier": "flex"
+    },
+    "reasoning_tokens": 4
+  }
+}

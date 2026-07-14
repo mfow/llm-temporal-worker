@@ -42,16 +42,22 @@ The shared validator reports the two coverage states separately:
 | `bootstrap` | validates schema, declared artifacts, source metadata, and raw fixture-byte redaction | a structurally governed profile; it does not claim full-matrix coverage |
 | `enforced` | also requires every code-owned case applicable to its capability facts | a profile whose dedicated coverage task has supplied its complete fixture matrix |
 
-The direct Chat, OpenRouter Chat, Exa Chat, and Anthropic Direct Messages
-profiles are currently `enforced` for their declared capability facts.
-Anthropic Direct declares its native usage, service-class, strict-loss, and
-continuation paths; its checked-in stream fixture proves decoder behavior only
-because the adapter does not yet implement streaming dispatch. All other
-checked-in production profiles remain `bootstrap` until their dedicated
-coverage task adds the required semantic request, captured wire request,
-response, usage/cost, error, stream, loss/diagnostic, service-class,
-continuation, and security fixtures. The registry is intentionally code-owned
-so a future semantic field or capability cannot silently escape an enforced
+`bedrock-anthropic`, direct Chat, OpenRouter Chat, Exa Chat, and Anthropic
+Direct Messages are currently `enforced` for their declared capability facts.
+All other checked-in production profiles remain `bootstrap` until their
+dedicated coverage task adds the required semantic request, captured wire
+request, response, usage/cost, error, stream, loss/diagnostic, service-class,
+continuation, and security fixtures.
+
+The Bedrock suite proves exact opaque-state replay, service-tier
+lowering/lifting, classified-error redaction, and captured SSE decoding and
+assembly across deterministic fragment boundaries. Anthropic Direct declares
+its native usage, service-class, strict-loss, and continuation paths; its
+checked-in stream fixture proves decoder behavior only because the adapter does
+not yet implement streaming dispatch. In both cases, captured SSE coverage is
+protocol evidence only; it does not by itself claim a client
+`StreamingAdapter` dispatch path. The registry is intentionally code-owned so
+a future semantic field or capability cannot silently escape an enforced
 profile's fixture matrix.
 
 ### Responses profile boundary
