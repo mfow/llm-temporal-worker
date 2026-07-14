@@ -16,10 +16,16 @@ current-layout reference.
 ├── llm/                            Provider-neutral public domain API
 │   ├── schema/                     JSON Schema normalization and local validation
 │   └── provider/                   Adapter interfaces and provider-neutral calls
+│       ├── internal/               Shared adapter configuration and test helpers
+│       │   ├── clientconfig/       Provider endpoint and URL configuration helpers
+│       │   ├── contract/           Shared adapter contract-test helpers
+│       │   ├── streamdecode/       Shared SSE and event-stream decoding
+│       │   └── streamtest/          Deterministic stream-fragmentation helpers
 │       ├── openairesponses/        OpenAI Responses lowering/lifting
 │       ├── openaichat/             OpenAI-compatible Chat lowering/lifting
 │       ├── anthropicmessages/      Direct and Claude Platform AWS Messages
 │       └── bedrockmessages/        Bedrock Mantle and isolated legacy runtime profile
+├── llm/testdata/                   Shared normalized request and response fixtures
 ├── engine/                         End-to-end inference lifecycle composition
 ├── routing/                        Route planning, health, fallback, pinning
 ├── pricing/                        Catalogs, decimal arithmetic, and quotes
@@ -27,16 +33,27 @@ current-layout reference.
 ├── admission/                      Operation state machine and atomic store port
 ├── state/                          Continuation records, handles, blob references
 ├── activity/                       Temporal payloads and Activity implementation
+├── integration/                    Offline Temporal, Compose, and Kubernetes gates
+│   ├── temporal_lifecycle_test.go  Offline Temporal lifecycle gate
+│   ├── compose/                    Local compose-stack smoke tests
+│   └── kubernetes/                 Manifest and deployment verification tests
 ├── config/                         External config structs and snapshot compiler
+├── storage/blob/                   Shared content-addressed blob-store port
 ├── storage/memory/                 In-process conformance implementation
 ├── storage/redis/                  Redis admission and continuation implementation
+├── storage/redis/functions/        Redis Function source and loader
 ├── storage/fileblob/               Development-only content-addressed blobs
 ├── storage/s3blob/                 Production object-store blob implementation
-├── internal/app/                   Process construction, reload, worker lifecycle
-├── internal/runtime/               CLI process composition and Temporal client wiring
-├── internal/httpserver/            Health, readiness, and metrics HTTP server
-├── internal/observability/         slog, metrics, and trace wiring
-├── internal/secrets/               Environment/file secret resolution
+├── internal/                       Process wiring and repository-only verification
+│   ├── app/                        Process construction, reload, worker lifecycle
+│   ├── architecturetest/           Import-boundary and workflow-structure tests
+│   ├── catalog/                    Verified capability and price catalog loading
+│   ├── documentationtest/          Markdown link and documentation invariant tests
+│   ├── httpserver/                  Health, readiness, and metrics HTTP server
+│   ├── observability/               slog, metrics, and trace wiring
+│   ├── runtime/                     CLI process composition and Temporal client wiring
+│   └── secrets/                     Environment/file secret resolution
+├── deploy/local/provider-mock/     Local provider-mock container
 ├── deploy/kubernetes/base/         Kustomize base
 ├── deploy/kubernetes/examples/     Non-secret example overlays
 ├── llm/provider/*/testdata/contracts/ Redacted provider wire fixtures by adapter
