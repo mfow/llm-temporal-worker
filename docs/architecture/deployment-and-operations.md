@@ -139,7 +139,8 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
 - `llmtw_config_reload_total{outcome}`;
-- Redis/SDK pool, heartbeat age, and worker polling gauges.
+- `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
+- `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat).
 
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
