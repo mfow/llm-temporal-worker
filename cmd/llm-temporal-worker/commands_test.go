@@ -124,19 +124,15 @@ func TestWorkerCommandUsesPathAwareRuntime(t *testing.T) {
 	}
 }
 
-func TestReconcileCommandUsesScopedCallback(t *testing.T) {
+func TestUnavailableReconcileCommandIsNotAdvertised(t *testing.T) {
 	var output, errorsOut bytes.Buffer
-	called := ""
-	code := Execute(context.Background(), []string{"reconcile", "--operation-id", "op-safe"}, CommandOptions{
-		Out:    &output,
-		ErrOut: &errorsOut,
-		Reconcile: func(_ context.Context, operationID string) error {
-			called = operationID
-			return nil
-		},
-	})
-	if code != 0 || called != "op-safe" || !strings.Contains(output.String(), "reconcile complete") {
-		t.Fatalf("reconcile command code=%d called=%q output=%q errors=%q", code, called, output.String(), errorsOut.String())
+	code := Execute(context.Background(), []string{"reconcile", "--operation-id", "op-safe"}, CommandOptions{Out: &output, ErrOut: &errorsOut})
+	if code != 2 || !strings.Contains(errorsOut.String(), "unknown command") {
+		t.Fatalf("reconcile command code=%d output=%q", code, errorsOut.String())
+	}
+	output.Reset()
+	if code = Execute(context.Background(), []string{"help"}, CommandOptions{Out: &output, ErrOut: &errorsOut}); code != 0 || strings.Contains(output.String(), "reconcile") {
+		t.Fatalf("usage code=%d output=%q", code, output.String())
 	}
 }
 

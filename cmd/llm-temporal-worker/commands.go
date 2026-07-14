@@ -34,9 +34,6 @@ type CommandOptions struct {
 	// SIGHUP and atomic replacement reloads. RunWorker remains a compatibility
 	// seam for small embeddings that own their lifecycle trigger.
 	RunWorkerFile func(context.Context, string, []byte, io.Writer) error
-	// Reconcile is a narrowly scoped, read-only callback for an existing
-	// operation ID. The command layer cannot issue provider submissions.
-	Reconcile func(context.Context, string) error
 }
 
 func Execute(ctx context.Context, args []string, options CommandOptions) int {
@@ -64,8 +61,6 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return executeConfigCommand(ctx, args[1:], options, true)
 	case "worker":
 		return executeWorkerCommand(ctx, args[1:], options)
-	case "reconcile":
-		return executeReconcileCommand(ctx, args[1:], options)
 	case "healthcheck":
 		return executeHealthcheckCommand(ctx, args[1:], options)
 	case "help", "-h", "--help":
@@ -279,5 +274,5 @@ func writeCommandError(output io.Writer, err error) {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|validate-config|print-effective-config|reconcile|healthcheck>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|validate-config|print-effective-config|healthcheck>\n")
 }

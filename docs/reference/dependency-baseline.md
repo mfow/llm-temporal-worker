@@ -77,11 +77,11 @@ its redacted report: component pass/fail state, direct-module identifiers/count,
 and finding identifiers. It deliberately excludes test output, source paths,
 scanner traces, provider data, and credential-like material.
 
-### Active vulnerability exception
+### Active vulnerability exceptions
 
-| Finding | Owner | Expires | Remediation reference | Bounded rationale |
-| --- | --- | --- | --- | --- |
-| `GO-2026-5932` | `platform-security` | 2026-08-14T00:00:00Z | [Go vulnerability report](https://pkg.go.dev/vuln/GO-2026-5932) | `module_only`: `azidentity` currently brings `golang.org/x/crypto` for `pkcs12`; the verifier reports this unmaintained `openpgp` advisory only at module level, with no reachable-function trace. No repository package imports `openpgp`. A reachable trace fails unless this scope is explicitly re-reviewed. Re-evaluate before expiry and remove it if the module is split or upstream removes the unused package. |
+There are currently no approved vulnerability exceptions. Any future exception
+must be narrowly scoped, documented here, and removed when the verifier no
+longer reports the finding.
 
 ## Repository module
 
