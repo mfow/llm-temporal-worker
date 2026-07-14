@@ -9,14 +9,17 @@ run without credentials or internet access.
 The standard implementation gate is:
 
 ```sh
-gofmt -l .
+make fmt-check
 go vet ./...
 go test -race ./...
 go build ./...
 docker build --tag llm-temporal-worker:local .
 ```
 
-`gofmt -l` reports files that need formatting without changing the checkout.
+`make fmt-check` delegates to `scripts/check-go-format.sh`. The helper passes
+NUL-delimited Go source paths to `gofmt -l`, excludes `vendor` and
+`.worktrees`, and returns formatter failures instead of treating them as a
+clean result. It never modifies the checkout.
 The fuzz target is selected explicitly rather than through a placeholder name;
 for example, a 30-second provider stream smoke is:
 
@@ -38,6 +41,7 @@ server, or a Kubernetes cluster:
 ```sh
 make integration
 make compose-smoke
+make deployment-policy-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
@@ -52,9 +56,17 @@ tests and `deploy/verify.sh`, which renders each overlay locally through
 `kubectl kustomize` and never applies anything to a cluster. Set `KUBECTL` to a
 reviewed, pinned executable when `kubectl` is not on `PATH`.
 
+`make deployment-policy-verify` checks the checked-in Kubernetes policy without
+requiring a cluster, credentials, or `kubectl`. It keeps the worker's
+non-root UID/GID and `fsGroup` aligned, requires group-readable runtime Secret
+files (`0440`), and requires the Redis TLS patch to preserve one projected
+Secret volume rather than combine mutually exclusive volume source types. With
+`KUBECTL` set, `make kustomize-verify` also checks those invariants against
+every rendered overlay.
+
 The release plan may list additional future gates; the commands above are the
-currently implemented targets. CI checks formatting with `gofmt -l` rather than
-modifying files.
+currently implemented targets. Both CI workflows call the same formatting
+helper as `make fmt-check`, and it checks rather than modifies files.
 
 ## Test layers
 
