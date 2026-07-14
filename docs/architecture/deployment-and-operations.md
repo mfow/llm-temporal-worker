@@ -2,19 +2,26 @@
 
 ## Process modes
 
-The same Go binary supports:
+The production binary supports these commands:
 
 ```text
 llm-temporal-worker worker
 llm-temporal-worker validate-config
 llm-temporal-worker print-effective-config
-llm-temporal-worker reconcile --operation-id <safe-id>
 ```
 
-`print-effective-config` redacts secrets and emits stable digests. Reconciliation
-is read-only unless an explicit operation is selected and the provider supports
-status recovery; production operators normally run it through a controlled
-Temporal Workflow.
+All three commands accept `--config PATH`, defaulting to
+`/etc/llmtw/config.yaml`. `print-effective-config` emits canonical JSON with
+secret references but never resolved secret values. `validate-config` checks
+the strict document without starting external dependencies. `worker` performs
+the full production composition and starts Temporal polling. See the
+[command-line reference](../reference/cli.md) for exact behavior and exit
+statuses.
+
+The dispatcher also contains a `reconcile --operation-id` seam for tests and
+custom embeddings, but the production binary does not provide a reconciliation
+backend and exits with `reconcile backend is unavailable`. It is not an
+operator runbook command yet.
 
 ## Container
 
@@ -85,11 +92,11 @@ worker_stop_timeout + finalization_timeout + telemetry_flush_timeout + margin
 
 ## Configuration delivery
 
-The process accepts a YAML file path plus environment variables for a small set
-of bootstrap fields. Provider credentials use environment/file/workload-identity
-references and are resolved after parsing.
+The process accepts a YAML file path through `--config`. Provider credentials
+use environment/file/workload-identity references and are resolved after
+parsing.
 
-Reload is triggered by `SIGHUP` or watched file replacement:
+The internal application package supports an atomic reload API:
 
 1. read a complete new file;
 2. parse with unknown fields rejected;
@@ -100,8 +107,10 @@ Reload is triggered by `SIGHUP` or watched file replacement:
 6. atomically publish the snapshot;
 7. drain old clients after their captured Activities finish.
 
-A bad reload leaves the old snapshot serving, sets a metric/condition, and logs
-safe diagnostics. Environment variables are not hot-reloaded.
+A bad reload leaves the old snapshot serving. The production CLI does not yet
+wire that API to `SIGHUP` or a file watcher, so operators must restart the
+worker to apply a changed configuration; replacing the file alone does not
+reload a running process. Environment variables are not hot-reloaded.
 
 ## Required metrics
 
@@ -195,5 +204,5 @@ is a later opt-in job; a scheduled validation never deploys automatically.
 
 Both workflows use concurrency cancellation, pinned major official actions,
 dependency caching through `setup-go`, explicit timeouts, and conditional Go/
-Docker steps so the documentation-only repository remains green before
-implementation begins.
+Docker steps. This checkout contains the Go implementation and Dockerfile, so
+the full implementation gates run on pull requests and master pushes.
