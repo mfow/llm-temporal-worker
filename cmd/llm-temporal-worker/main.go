@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
-	"io"
 	"os"
+	"os/signal"
+	"syscall"
+
+	workerruntime "github.com/mfow/llm-temporal-worker/internal/runtime"
 )
 
 func main() {
-	os.Exit(Execute(context.Background(), os.Args[1:], CommandOptions{
-		Out:    os.Stdout,
-		ErrOut: os.Stderr,
-		RunWorker: func(context.Context, []byte, io.Writer) error {
-			return errWorkerRuntimeUnavailable
-		},
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	os.Exit(Execute(ctx, os.Args[1:], CommandOptions{
+		Out:       os.Stdout,
+		ErrOut:    os.Stderr,
+		RunWorker: workerruntime.RunWorker,
 	}))
 }

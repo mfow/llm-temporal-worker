@@ -28,6 +28,7 @@ are not stable APIs use `internal/`.
 ├── storage/fileblob/               Development-only content-addressed blobs
 ├── storage/s3blob/                 Production object-store blob implementation
 ├── internal/app/                   Process construction, reload, worker lifecycle
+├── internal/runtime/               CLI process composition and Temporal client wiring
 ├── internal/clock/                 Injected wall and monotonic clock utilities
 ├── internal/httpserver/            Health, readiness, and metrics HTTP server
 ├── internal/httptrace/             Before-write/after-write dispatch observation
@@ -48,7 +49,7 @@ are not stable APIs use `internal/`.
 The permitted dependency direction is:
 
 ```text
-cmd -> internal/app
+cmd -> internal/runtime -> internal/app
 internal/app -> activity/engine/config/storage/provider/observability
 activity -> engine + Temporal SDK
 engine -> llm/routing/pricing/budget/admission/state
