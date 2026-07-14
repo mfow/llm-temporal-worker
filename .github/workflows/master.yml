@@ -17,6 +17,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  fuzz-shard:
+    name: Fuzz shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.x
+          cache: true
+
+      - name: Run bounded semantic fuzz shard
+        run: FUZZ_TIME=45s bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"
+
   verify:
     name: Verify
     runs-on: ubuntu-latest

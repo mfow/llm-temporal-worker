@@ -43,6 +43,13 @@ func TestDecodeStreamRejectsTruncatedTerminal(t *testing.T) {
 	}
 }
 
+func TestDecodeStreamRejectsTerminalWithUnfinishedOutput(t *testing.T) {
+	wire := "data: {\"choices\":[{}]}\n\ndata: [DONE]\n\n"
+	if _, err := DecodeStream(strings.NewReader(wire)); err == nil {
+		t.Fatal("terminal stream with unfinished output unexpectedly succeeded")
+	}
+}
+
 type chunkReader struct {
 	chunks [][]byte
 	index  int

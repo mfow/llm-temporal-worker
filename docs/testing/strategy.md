@@ -151,11 +151,31 @@ Fuzz targets include:
 - Redis Function argument codec;
 - response aggregation under arbitrary event sequences.
 
-Seed corpora contain every golden fixture plus minimized past failures. The
-current pull-request and master workflows replay those seeds through ordinary
-`go test` but do not run Go's `-fuzz` mode. Short deterministic fuzz smoke and
-longer scheduled fuzz jobs remain planned release gates; run a named target
-locally as shown above when investigating a decoder or parser change.
+Seed corpora contain every governed golden fixture plus minimized past failures.
+Pull requests replay all checked-in seeds deterministically and verify the
+focused mutation manifest:
+
+```sh
+make fuzz-smoke
+make mutation-verify
+```
+
+`make fuzz-smoke` runs each `Fuzz*` target once with ordinary `go test`, so the
+gate is reproducible and does not mutate a shared corpus. To reproduce a saved
+corpus input directly, run:
+
+```sh
+go test <package> -run '^<FuzzTarget>/<corpus-entry>$' -count=1
+```
+
+The trusted master workflow separately runs three bounded `-fuzz` shards
+(`FUZZ_TIME=45s`, one worker per target). `scripts/run-fuzz.sh shard <0|1|2>`
+uses the same explicit target list locally. `make mutation-verify` compiles a
+reviewed overlay for each boundary mutation—decimal round-up, budget comparison,
+dispatch certainty, omitted service class, and legal state transition—and
+requires its named invariant to fail. A mutation survivor is therefore a gate
+failure; adding a mutation requires either a failing invariant or a documented
+semantic boundary before it can enter the manifest.
 
 ### Store conformance
 

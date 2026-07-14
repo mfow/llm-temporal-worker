@@ -12,12 +12,18 @@ import (
 func DecodeAnthropic(events []SSE) ([]provider.Event, error) {
 	result := make([]provider.Event, 0)
 	tools := map[int]struct{ id, name string }{}
+	started := map[int]bool{}
+	finished := map[int]bool{}
+	nextIndex := 0
 	terminal := false
 	for _, event := range events {
 		data := bytes.TrimSpace(event.Data)
 		if bytes.Equal(data, []byte("[DONE]")) {
 			if terminal {
 				return nil, fmt.Errorf("stream has more than one terminal event")
+			}
+			if unfinished, ok := firstUnfinishedOutput(started, finished); ok {
+				return nil, fmt.Errorf("Anthropic stream ended with unfinished output index %d", unfinished)
 			}
 			result = append(result, provider.StreamCompleted{})
 			terminal = true
@@ -49,7 +55,12 @@ func DecodeAnthropic(events []SSE) ([]provider.Event, error) {
 			if index < 0 {
 				return nil, fmt.Errorf("content_block_start has invalid index")
 			}
+			if index != nextIndex {
+				return nil, fmt.Errorf("content_block_start index %d is out of order", index)
+			}
 			result = append(result, provider.OutputStarted{Index: index})
+			started[index] = true
+			nextIndex++
 			var block struct {
 				Type string `json:"type"`
 				ID   string `json:"id"`
@@ -64,6 +75,9 @@ func DecodeAnthropic(events []SSE) ([]provider.Event, error) {
 		case "content_block_delta":
 			if index < 0 {
 				return nil, fmt.Errorf("content_block_delta has invalid index")
+			}
+			if !started[index] || finished[index] {
+				return nil, fmt.Errorf("content_block_delta index %d has no active output", index)
 			}
 			var delta struct {
 				Type        string `json:"type"`
@@ -92,7 +106,11 @@ func DecodeAnthropic(events []SSE) ([]provider.Event, error) {
 			if index < 0 {
 				return nil, fmt.Errorf("content_block_stop has invalid index")
 			}
+			if !started[index] || finished[index] {
+				return nil, fmt.Errorf("content_block_stop index %d has no active output", index)
+			}
 			result = append(result, provider.OutputFinished{Index: index})
+			finished[index] = true
 		case "message_delta":
 			var delta struct {
 				Usage struct {
@@ -106,6 +124,9 @@ func DecodeAnthropic(events []SSE) ([]provider.Event, error) {
 				result = append(result, provider.UsageUpdated{Usage: llm.Usage{OutputTokens: delta.Usage.OutputTokens}})
 			}
 		case "message_stop":
+			if unfinished, ok := firstUnfinishedOutput(started, finished); ok {
+				return nil, fmt.Errorf("Anthropic stream ended with unfinished output index %d", unfinished)
+			}
 			result = append(result, provider.StreamCompleted{})
 			terminal = true
 		case "error":
@@ -128,12 +149,16 @@ func DecodeChat(events []SSE) ([]provider.Event, error) {
 	result := make([]provider.Event, 0)
 	started := map[int]bool{}
 	finished := map[int]bool{}
+	nextIndex := 0
 	terminal := false
 	for _, event := range events {
 		data := bytes.TrimSpace(event.Data)
 		if bytes.Equal(data, []byte("[DONE]")) {
 			if terminal {
 				return nil, fmt.Errorf("stream has more than one terminal event")
+			}
+			if unfinished, ok := firstUnfinishedOutput(started, finished); ok {
+				return nil, fmt.Errorf("chat stream ended with unfinished output index %d", unfinished)
 			}
 			result = append(result, provider.StreamCompleted{})
 			terminal = true
@@ -174,8 +199,15 @@ func DecodeChat(events []SSE) ([]provider.Event, error) {
 				return nil, fmt.Errorf("chat choice index %d is invalid", choice.Index)
 			}
 			if !started[choice.Index] {
+				if choice.Index != nextIndex {
+					return nil, fmt.Errorf("chat choice index %d is out of order", choice.Index)
+				}
 				result = append(result, provider.OutputStarted{Index: choice.Index})
 				started[choice.Index] = true
+				nextIndex++
+			}
+			if finished[choice.Index] {
+				return nil, fmt.Errorf("chat output index %d is already finished", choice.Index)
 			}
 			if choice.Delta.Content != "" {
 				result = append(result, provider.TextDelta{Index: choice.Index, Text: choice.Delta.Content})
@@ -198,10 +230,22 @@ func DecodeChat(events []SSE) ([]provider.Event, error) {
 	return result, nil
 }
 
+func firstUnfinishedOutput(started, finished map[int]bool) (int, bool) {
+	first, found := 0, false
+	for index := range started {
+		if finished[index] || (found && index >= first) {
+			continue
+		}
+		first, found = index, true
+	}
+	return first, found
+}
+
 func DecodeResponses(events []SSE) ([]provider.Event, error) {
 	result := make([]provider.Event, 0)
 	started := map[int]bool{}
 	finished := map[int]bool{}
+	nextIndex := 0
 	terminal := false
 	for _, event := range events {
 		if terminal {
@@ -218,11 +262,15 @@ func DecodeResponses(events []SSE) ([]provider.Event, error) {
 			if index < 0 {
 				return nil, fmt.Errorf("Responses output index is invalid")
 			}
+			if started[index] || index != nextIndex {
+				return nil, fmt.Errorf("Responses output index %d is out of order", index)
+			}
 			result = append(result, provider.OutputStarted{Index: index})
 			started[index] = true
+			nextIndex++
 		case "response.output_text.delta":
-			if !started[index] {
-				return nil, fmt.Errorf("Responses text delta precedes output start")
+			if !started[index] || finished[index] {
+				return nil, fmt.Errorf("Responses text delta has no active output")
 			}
 			var delta string
 			if err := json.Unmarshal(envelope["delta"], &delta); err != nil {
@@ -230,8 +278,8 @@ func DecodeResponses(events []SSE) ([]provider.Event, error) {
 			}
 			result = append(result, provider.TextDelta{Index: index, Text: delta})
 		case "response.function_call_arguments.delta":
-			if !started[index] {
-				return nil, fmt.Errorf("Responses tool delta precedes output start")
+			if !started[index] || finished[index] {
+				return nil, fmt.Errorf("Responses tool delta has no active output")
 			}
 			var delta string
 			_ = json.Unmarshal(envelope["delta"], &delta)
@@ -251,6 +299,9 @@ func DecodeResponses(events []SSE) ([]provider.Event, error) {
 			result = append(result, provider.OutputFinished{Index: index})
 			finished[index] = true
 		case "response.completed":
+			if unfinished, ok := firstUnfinishedOutput(started, finished); ok {
+				return nil, fmt.Errorf("Responses stream ended with unfinished output index %d", unfinished)
+			}
 			result = append(result, provider.StreamCompleted{})
 			terminal = true
 		case "response.failed", "response.incomplete":

@@ -184,3 +184,84 @@ func TestDecodersRejectPostTerminalAndUnknownEvents(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodersRejectSequencesTheAssemblerWouldReject(t *testing.T) {
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "anthropic unfinished output",
+			call: func() error {
+				_, err := DecodeAnthropic([]SSE{
+					{Event: "content_block_start", Data: []byte(`{"index":0,"content_block":{"type":"text"}}`)},
+					{Event: "message_stop", Data: []byte(`{}`)},
+				})
+				return err
+			},
+		},
+		{
+			name: "anthropic out of order output",
+			call: func() error {
+				_, err := DecodeAnthropic([]SSE{
+					{Event: "content_block_start", Data: []byte(`{"index":1,"content_block":{"type":"text"}}`)},
+					{Event: "content_block_stop", Data: []byte(`{"index":1}`)},
+					{Event: "message_stop", Data: []byte(`{}`)},
+				})
+				return err
+			},
+		},
+		{
+			name: "chat out of order output",
+			call: func() error {
+				_, err := DecodeChat([]SSE{
+					{Data: []byte(`{"choices":[{"index":1,"delta":{},"finish_reason":"stop"}]}`)},
+					{Data: []byte("[DONE]")},
+				})
+				return err
+			},
+		},
+		{
+			name: "chat delta after output finish",
+			call: func() error {
+				_, err := DecodeChat([]SSE{
+					{Data: []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)},
+					{Data: []byte(`{"choices":[{"index":0,"delta":{"content":"late"}}]}`)},
+					{Data: []byte("[DONE]")},
+				})
+				return err
+			},
+		},
+		{
+			name: "responses out of order output",
+			call: func() error {
+				_, err := DecodeResponses([]SSE{
+					{Event: "response.output_item.added", Data: []byte(`{"output_index":1}`)},
+					{Event: "response.output_item.done", Data: []byte(`{"output_index":1}`)},
+					{Event: "response.completed", Data: []byte(`{}`)},
+				})
+				return err
+			},
+		},
+		{
+			name: "responses delta after output finish",
+			call: func() error {
+				_, err := DecodeResponses([]SSE{
+					{Event: "response.output_item.added", Data: []byte(`{"output_index":0}`)},
+					{Event: "response.output_item.done", Data: []byte(`{"output_index":0}`)},
+					{Event: "response.output_text.delta", Data: []byte(`{"output_index":0,"delta":"late"}`)},
+					{Event: "response.completed", Data: []byte(`{}`)},
+				})
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); err == nil {
+				t.Fatal("decoder accepted a sequence the event assembler would reject")
+			}
+		})
+	}
+}

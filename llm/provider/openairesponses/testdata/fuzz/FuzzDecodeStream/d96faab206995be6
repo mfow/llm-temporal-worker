@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("event:response.output_item.added\ndata:{}\n\nevent:response.completed\ndata:{}\n\n")
