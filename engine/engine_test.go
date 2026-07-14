@@ -28,6 +28,8 @@ type fakeAdapter struct {
 	preDispatchDeadline bool
 	rawDeadlineFirst    bool
 	ambiguous           bool
+	capabilities        int
+	compiles            int
 	invokes             int
 	calls               []provider.Call
 	response            llm.Response

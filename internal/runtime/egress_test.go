@@ -365,7 +365,7 @@ func TestProviderEgressRoundTripperRecordsCompletedPreflightDenialAfterCancellat
 			}
 			finish := state.beginPreflight()
 			cancel()
-		finish(deniedProviderEgress("unsafe_address"))
+			finish(deniedProviderEgress("unsafe_address"))
 			return nil, request.Context().Err()
 		}),
 	}
