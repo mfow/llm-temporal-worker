@@ -10,37 +10,109 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/admission"
+	"github.com/mfow/llm-temporal-worker/budget"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
+	"github.com/mfow/llm-temporal-worker/pricing"
+	"github.com/mfow/llm-temporal-worker/routing"
 )
 
 func TestStreamRejectsAdapterWithoutRealStreamBeforeDispatch(t *testing.T) {
 	adapter := &fakeAdapter{name: "non-streaming", response: successfulResponse()}
 	harness := newHarness(t, adapter)
+	request := baseRequest("no-stream-port")
 
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("no-stream-port"))
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	defer stream.Close()
-
-	events := readTerminalStream(t, stream)
-	terminal := events[len(events)-1]
-	failure, ok := terminal.(llm.StreamErrored)
-	if !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", terminal)
+	stream, err := harness.engine.Stream(context.Background(), request)
+	if stream != nil {
+		_ = stream.Close()
+		t.Fatal("Stream returned an EventStream for an adapter without provider.StreamingAdapter")
 	}
 	var providerErr *provider.Error
-	if !errors.As(failure.Err, &providerErr) {
-		t.Fatalf("terminal error = %v, want provider error", failure.Err)
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Stream error = %v, want provider error", err)
 	}
 	if providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Dispatch != provider.DispatchNotDispatched {
-		t.Fatalf("terminal error = %#v, want pre-dispatch streaming rejection", providerErr)
+		t.Fatalf("Stream error = %#v, want pre-admission streaming rejection", providerErr)
+	}
+	normalized, normalizeErr := llm.NormalizeRequest(request)
+	if normalizeErr != nil {
+		t.Fatal(normalizeErr)
+	}
+	digest, digestErr := llm.RequestDigest(normalized)
+	if digestErr != nil {
+		t.Fatal(digestErr)
+	}
+	operationID, _ := operationIdentity(normalized, digest)
+	if _, operationErr := harness.admission.Get(context.Background(), operationID); !errors.Is(operationErr, admission.ErrOperationNotFound) {
+		t.Fatalf("admission operation error = %v, want no operation", operationErr)
 	}
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
 	if adapter.capabilities != 0 || adapter.compiles != 0 || adapter.invokes != 0 {
 		t.Fatalf("non-streaming adapter was touched: capabilities=%d compiles=%d invokes=%d, want all zero", adapter.capabilities, adapter.compiles, adapter.invokes)
+	}
+}
+
+func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *testing.T) {
+	native := &fakeAdapter{name: "native-only", response: successfulResponse()}
+	streaming := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "streaming", response: successfulResponse()}}
+	harness := newHarness(t, streaming)
+	harness.engine.dependencies.Adapters = AdapterMap{"native": native, "streaming": streaming}
+	quoted := quotedPlan{candidates: []quotedCandidate{
+		{
+			candidate: routing.Candidate{EndpointID: "native", Family: string(provider.FamilyOpenAIResponses), Model: "native-model", AttemptedClass: llm.ServiceClassStandard},
+			entry:     pricing.Entry{Version: "native-price"},
+			estimate:  budget.Estimate{MicroUSD: 99},
+			reservations: []admission.WindowReservation{{
+				PolicyID: "policy", WindowID: "window", Amount: 99, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),
+			}},
+		},
+		{
+			candidate: routing.Candidate{EndpointID: "streaming", Family: string(provider.FamilyOpenAIResponses), Model: "stream-model", AttemptedClass: llm.ServiceClassStandard},
+			entry:     pricing.Entry{Version: "stream-price"},
+			estimate:  budget.Estimate{MicroUSD: 7},
+			reservations: []admission.WindowReservation{{
+				PolicyID: "policy", WindowID: "window", Amount: 7, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),
+			}},
+		},
+	}, maximum: 99}
+	request := baseRequest("filtered-stream-admission")
+	filtered, err := harness.engine.preflightStreamingPlan(context.Background(), request, quoted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered.candidates) != 1 || filtered.candidates[0].candidate.EndpointID != "streaming" || filtered.maximum != 7 {
+		t.Fatalf("filtered stream plan = %#v, want only the streaming candidate with maximum 7", filtered)
+	}
+	if version := priceVersion(filtered.candidates); version != "stream-price" {
+		t.Fatalf("filtered price version = %q, want stream-price", version)
+	}
+	snapshot, err := harness.engine.dependencies.Snapshots.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := llm.RequestDigest(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, scopeKey := operationIdentity(normalized, digest)
+	operation, existing, err := harness.engine.beginOrResume(context.Background(), normalized, snapshot, operationID, scopeKey, digest, filtered, harness.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existing || operation.ReservedMicroUSD != 7 || operation.PriceVersion != "stream-price" || len(operation.Reservations) != 1 || operation.Reservations[0].Amount != 7 {
+		t.Fatalf("stream admission operation = %#v, want only the streaming candidate's reservation and price", operation)
+	}
+	native.mu.Lock()
+	nativeCapabilities := native.capabilities
+	native.mu.Unlock()
+	if nativeCapabilities != 0 {
+		t.Fatalf("non-streaming candidate capability calls = %d, want 0", nativeCapabilities)
 	}
 }
 
@@ -450,8 +522,8 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 	}
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
-	if adapter.capabilities != 0 || adapter.compiles != 0 || adapter.invokes != 0 {
-		t.Fatalf("pre-dispatch cancellation touched provider: capabilities=%d compiles=%d invokes=%d", adapter.capabilities, adapter.compiles, adapter.invokes)
+	if adapter.capabilities != 1 || adapter.compiles != 0 || adapter.invokes != 0 {
+		t.Fatalf("pre-dispatch cancellation did more than the read-only stream preflight: capabilities=%d compiles=%d invokes=%d", adapter.capabilities, adapter.compiles, adapter.invokes)
 	}
 }
 

@@ -38,6 +38,38 @@ func (engine fakeEngine) Stream(_ context.Context, _ llm.Request) (llm.EventStre
 	return &sliceEventStream{events: events}, nil
 }
 
+type nativeFallbackEngine struct {
+	response      llm.Response
+	generateCalls int
+	streamCalls   int
+}
+
+func (engine *nativeFallbackEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
+	engine.generateCalls++
+	return engine.response, nil
+}
+
+func (engine *nativeFallbackEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
+	engine.streamCalls++
+	return nil, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming")
+}
+
+type terminalUnsupportedStreamEngine struct {
+	response      llm.Response
+	generateCalls int
+}
+
+func (engine *terminalUnsupportedStreamEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
+	engine.generateCalls++
+	return engine.response, nil
+}
+
+func (engine *terminalUnsupportedStreamEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
+	return &sliceEventStream{events: []llm.Event{
+		llm.StreamErrored{EventHeader: llm.EventHeader{Sequence: 1, OperationID: engine.response.OperationID}, Err: provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "stream became unavailable after admission")},
+	}}, nil
+}
+
 type sliceEventStream struct {
 	events []llm.Event
 	next   int
@@ -114,6 +146,34 @@ func TestGenerateActivityMapsEngineError(t *testing.T) {
 	}
 	if applicationErr.Type() != ErrorTypeAmbiguous || !applicationErr.NonRetryable() {
 		t.Fatalf("error type = %q non_retryable=%v", applicationErr.Type(), applicationErr.NonRetryable())
+	}
+}
+
+func TestGenerateActivityFallsBackForPreAdmissionStreamingUnsupported(t *testing.T) {
+	heartbeater := &fakeHeartbeater{}
+	native := &nativeFallbackEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
+	activities := Activities{Engine: native, Heartbeater: heartbeater}
+	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Metadata.OperationID != "operation-id" || native.streamCalls != 1 || native.generateCalls != 1 {
+		t.Fatalf("response=%#v stream calls=%d generate calls=%d", response, native.streamCalls, native.generateCalls)
+	}
+	if len(heartbeater.progress) != 2 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "finalizing" {
+		t.Fatalf("fallback heartbeats = %#v, want planning/finalizing only", heartbeater.progress)
+	}
+}
+
+func TestGenerateActivityNeverFallsBackAfterReturnedStreamTerminal(t *testing.T) {
+	streaming := &terminalUnsupportedStreamEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
+	activities := Activities{Engine: streaming}
+	_, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
+	if err == nil {
+		t.Fatal("Activity accepted a terminal stream failure")
+	}
+	if streaming.generateCalls != 0 {
+		t.Fatalf("Activity called Generate %d times after Stream returned a terminal event", streaming.generateCalls)
 	}
 }
 

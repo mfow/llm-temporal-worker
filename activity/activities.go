@@ -33,6 +33,13 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 	}
 	stream, err := activities.Engine.Stream(ctx, request)
 	if err != nil {
+		if preAdmissionStreamingUnavailable(err) {
+			response, generateErr := activities.Engine.Generate(ctx, request)
+			if generateErr != nil {
+				return GenerateResponse{}, ToTemporalError(generateErr)
+			}
+			return activities.completeGenerate(ctx, response)
+		}
 		return GenerateResponse{}, ToTemporalError(err)
 	}
 	defer stream.Close()
@@ -62,6 +69,16 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 			return GenerateResponse{}, ToTemporalError(terminal.Err)
 		}
 	}
+}
+
+// preAdmissionStreamingUnavailable is deliberately narrow: Activity may use
+// the native Generate lifecycle only when Stream returned before it created an
+// EventStream or an admitted operation. A terminal StreamErrored event is
+// never eligible for this fallback because its operation may already be
+// finalized or ambiguous.
+func preAdmissionStreamingUnavailable(err error) bool {
+	var providerErr *provider.Error
+	return errors.As(err, &providerErr) && providerErr.Code == provider.CodeUnsupportedCapability && providerErr.Dispatch == provider.DispatchNotDispatched
 }
 
 func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response) (GenerateResponse, error) {

@@ -18,10 +18,11 @@ import (
 const streamBufferCapacity = 16
 
 // Stream starts one provider-neutral event stream. It never calls Generate or
-// synthesizes a stream from a completed response. Provider adapters must
-// expose provider.StreamingAdapter; otherwise the admitted operation is closed
-// without a possible provider write and the stream terminates with a typed
-// unsupported-capability error.
+// synthesizes a stream from a completed response. Before admission, it filters
+// the quoted route plan to adapters that expose provider.StreamingAdapter and
+// currently advertise streaming support. If none remain, Stream returns a
+// typed pre-admission unsupported-capability error directly and creates no
+// EventStream or durable operation.
 func (engine *Engine) Stream(ctx context.Context, request llm.Request) (llm.EventStream, error) {
 	if engine == nil {
 		return nil, engineError(provider.CodeInternal, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "engine is nil", nil)
@@ -94,12 +95,59 @@ func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (s
 	if err != nil {
 		return streamSetup{}, err
 	}
+	quoted, err = engine.preflightStreamingPlan(ctx, normalized, quoted)
+	if err != nil {
+		return streamSetup{}, err
+	}
+	if len(quoted.candidates) == 0 {
+		return streamSetup{}, engineError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming", nil)
+	}
 	operationID, scopeKey := operationIdentity(normalized, digest)
 	operation, existing, err := engine.beginOrResume(ctx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
 	if err != nil {
 		return streamSetup{}, err
 	}
 	return streamSetup{request: normalized, providerRequest: providerRequest, snapshot: snapshot, quoted: quoted, operation: operation, parent: parent, existing: existing, now: now}, nil
+}
+
+// preflightStreamingPlan performs the non-mutating half of stream dispatch.
+// It keeps only candidates with both the optional StreamingAdapter port and a
+// currently supported streaming capability. The returned plan intentionally
+// rebuilds maximum from retained candidates so Begin reserves, aggregates, and
+// versions only the routes that Stream can actually attempt. dispatchStreamPlan
+// repeats this check after admission because an adapter capability can change
+// between preflight and the provider call.
+func (engine *Engine) preflightStreamingPlan(ctx context.Context, request llm.Request, quoted quotedPlan) (quotedPlan, error) {
+	filtered := quotedPlan{candidates: make([]quotedCandidate, 0, len(quoted.candidates))}
+	strict := request.Portability != llm.PortabilityBestEffort
+	for _, candidate := range quoted.candidates {
+		if err := ctx.Err(); err != nil {
+			return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "streaming preflight canceled", err)
+		}
+		adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
+		if err != nil {
+			continue
+		}
+		if _, ok := adapter.(provider.StreamingAdapter); !ok {
+			continue
+		}
+		query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
+		capability, err := adapter.Capabilities(ctx, query)
+		if err != nil {
+			if cause := ctx.Err(); cause != nil {
+				return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "streaming preflight canceled", cause)
+			}
+			continue
+		}
+		if !capability.Supports(provider.FeatureStreaming, strict) {
+			continue
+		}
+		filtered.candidates = append(filtered.candidates, candidate)
+		if candidate.estimate.MicroUSD > filtered.maximum {
+			filtered.maximum = candidate.estimate.MicroUSD
+		}
+	}
+	return filtered, nil
 }
 
 func (engine *Engine) runPreparedStream(ctx context.Context, setup streamSetup, emitter *streamEmitter) error {

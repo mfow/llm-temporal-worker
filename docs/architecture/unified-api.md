@@ -301,7 +301,11 @@ Status is one of `completed`, `tool_calls`, `refused`, `length`, or
 read with `Next(ctx)` and must call `Close` when they stop before a terminal
 event. It follows the same request normalization, route plan, admission,
 continuation, dispatch-certainty, result-store, and ledger-finalization path as
-`Generate`. It never fabricates a stream by calling `Generate` first.
+`Generate`. Before admission it filters the quoted route plan to real
+`StreamingAdapter` implementations that currently support streaming. If none
+remain, it returns a direct typed `unsupported_capability` error with
+`not_dispatched` certainty and creates neither an event stream nor a durable
+operation. It never fabricates a stream by calling `Generate` first.
 
 The reusable library emits an ordered, closed Go `Event` union:
 
@@ -336,11 +340,13 @@ they are never decoded merely to make a stream portable.
 
 An adapter must implement the separate provider streaming port to use this
 API. It calls the dispatch observer immediately before its first possible
-provider write and reports dispatch certainty with its event source. An
-adapter without that port is rejected before capability lookup, compilation,
-or provider dispatch; it cannot expose a fabricated success stream. A full
-consumer buffer stops further provider reads until the caller drains it, and
-`Close` or context cancellation stops the provider source promptly.
+provider write and reports dispatch certainty with its event source. A route
+whose adapter lacks that port is rejected without capability lookup,
+compilation, or provider dispatch. If no eligible streaming route remains,
+the direct pre-admission error above is returned; it cannot expose a fabricated
+success stream. A full consumer buffer stops further provider reads until the
+caller drains it, and `Close` or context cancellation stops the provider source
+promptly.
 
 Task 5 supplies this engine lifecycle and the provider-port contract only;
 the checked-in production adapters do not implement `StreamingAdapter` yet.
@@ -355,6 +361,10 @@ rejects an identity-less fragment at the provider boundary rather than emit an
 invalid public event.
 
 Temporal Activity payloads do not expose the live event stream. The Activity
-uses the stream internally for liveness, heartbeats bounded progress only, and
-returns the final normalized response. Raw deltas, tool arguments, and opaque
-provider state never enter workflow history as heartbeat details.
+uses a returned real stream internally for liveness and bounded progress, and
+returns the final normalized response. If the engine reports the specific
+pre-admission streaming-unavailable error, the Activity uses native `Generate`
+instead; it does not turn that response into an `EventStream`, and it never
+falls back after an `EventStream` has been returned. Raw deltas, tool
+arguments, and opaque provider state never enter workflow history as heartbeat
+details.

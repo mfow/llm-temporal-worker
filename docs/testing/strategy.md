@@ -99,15 +99,19 @@ duplicate/out-of-order IDs, invalid UTF-8, partial JSON/tool arguments, missing
 terminal event, terminal error after deltas, cancellation, and oversized event.
 
 The engine stream contract suite additionally proves that a non-streaming
-adapter is rejected before any provider dispatch (rather than falling back to
-`Generate`), event order is preserved, and every consumer sees exactly one
-typed terminal followed by EOF. It covers bounded-buffer backpressure,
-cancellation closing the provider source, duplicate-terminal rejection,
-byte-exact opaque provider state, completed-operation replay, pre-write
-fallback retry, ambiguous post-write replay refusal, and equivalent finalized
-stream/non-stream responses. Activity tests prove that live raw stream deltas
-never appear in heartbeat details or as separate return records; only bounded
-progress and the final semantic response cross the Temporal boundary.
+adapter is rejected before admission or provider dispatch with a direct typed
+error (rather than an EventStream or a fabricated `Generate` result), event
+order is preserved, and every returned stream has exactly one typed terminal
+followed by EOF. It covers bounded-buffer backpressure, cancellation closing
+the provider source, duplicate-terminal rejection, byte-exact opaque provider
+state, completed-operation replay, pre-write fallback retry, ambiguous
+post-write replay refusal, filtered stream-only budget reservations, and
+equivalent finalized stream/non-stream responses. Activity and integration
+tests prove that a real stream is consumed when available, while the exact
+pre-admission unsupported error uses native `Generate` for a non-streaming
+production-style adapter. Live raw stream deltas never appear in heartbeat
+details or as separate return records; only bounded progress and the final
+semantic response cross the Temporal boundary.
 
 ### Property and fuzz tests
 
