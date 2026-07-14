@@ -1,0 +1,15 @@
+{
+  "api_version": "llm.temporal/v1",
+  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-stream",
+  "output": [
+    {"actor": "model", "content": [{"kind": "text", "text": "fixture response"}], "kind": "message"},
+    {"arguments": {"query": "fixture"}, "id": "call-stream", "kind": "tool_call", "name": "lookup"}
+  ],
+  "provider": {},
+  "route": {},
+  "service": {"attempted": "standard", "fallback_index": 0, "requested": "standard"},
+  "status": "completed",
+  "usage": {"cache_read_tokens": 0, "cache_write_tokens": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+}

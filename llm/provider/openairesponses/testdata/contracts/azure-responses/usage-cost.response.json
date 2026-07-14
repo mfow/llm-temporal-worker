@@ -1,0 +1,14 @@
+{
+  "id": "azure-resp-usage",
+  "model": "azure-responses/fixture",
+  "output": [],
+  "service_tier": "default",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 31,
+    "input_tokens_details": {"cached_tokens": 7, "cache_write_tokens": 2},
+    "output_tokens": 17,
+    "output_tokens_details": {"reasoning_tokens": 4},
+    "total_tokens": 48
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "azure-resp-1",
+  "created_at": 1710000100,
+  "error": {},
+  "incomplete_details": {},
+  "instructions": "azure fixture developer",
+  "metadata": {},
+  "model": "azure-responses/fixture",
+  "object": "response",
+  "output": [
+    {
+      "id": "azure-msg-1",
+      "type": "message",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{"type": "output_text", "text": "azure hello", "annotations": [], "logprobs": []}]
+    },
+    {
+      "id": "azure-fc-1",
+      "type": "function_call",
+      "status": "completed",
+      "call_id": "azure-call-1",
+      "name": "lookup",
+      "arguments": "{\"q\":\"azure\"}"
+    },
+    {
+      "id": "azure-reason-1",
+      "type": "reasoning",
+      "status": "completed",
+      "summary": [{"type": "summary_text", "text": "azure brief"}],
+      "content": [],
+      "encrypted_content": null
+    }
+  ],
+  "parallel_tool_calls": false,
+  "temperature": 0.3,
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1,
+  "previous_response_id": null,
+  "service_tier": "priority",
+  "status": "completed",
+  "text": {"format": {"type": "text"}},
+  "usage": {
+    "input_tokens": 12,
+    "input_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 1},
+    "output_tokens": 9,
+    "output_tokens_details": {"reasoning_tokens": 3},
+    "total_tokens": 21
+  }
+}

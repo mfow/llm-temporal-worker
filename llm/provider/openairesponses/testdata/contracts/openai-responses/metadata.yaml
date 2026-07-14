@@ -5,14 +5,16 @@ sdk_version: github.com/openai/openai-go/v3@v3.42.0
 provenance: synthetic
 redactions:
   - credentials
-  - unstable provider identifiers
+  - provider request and response identifiers
+  - opaque provider payloads
 capability_facts:
   usage: supported
-  streaming: supported
-  strict_loss: pending
-  best_effort: pending
+  streaming: unsupported
+  stream_decoder: supported
+  strict_loss: supported
+  best_effort: unsupported
   service_class: supported
-  continuation: supported
+  continuation: unsupported
 generated_field_exemptions:
   - provider.request_id
   - provider.response_id

@@ -1,0 +1,47 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-azure-response",
+  "model": "azure-responses/fixture",
+  "service_class": "priority",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [
+    {"kind": "text", "level": "policy", "text": "azure fixture policy"},
+    {"kind": "parts", "content": [{"kind": "text", "text": "azure fixture developer"}]}
+  ],
+  "input": [
+    {
+      "kind": "message",
+      "actor": "human",
+      "content": [
+        {"kind": "text", "text": "describe the azure fixture"},
+        {"kind": "image", "url": "https://example.test/azure-fixture.png", "media_type": "image/png", "detail": "high"},
+        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf", "title": "azure-fixture.pdf"}
+      ]
+    },
+    {"kind": "tool_call", "id": "azure-call-input", "name": "lookup", "arguments": {"query": "azure fixture"}},
+    {"kind": "tool_result", "call_id": "azure-call-input", "name": "lookup", "content": [{"kind": "text", "text": "azure fixture result"}], "is_error": false}
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "azure fixture lookup",
+      "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+      "output_schema": {"type": "object"}
+    }
+  ],
+  "tool_policy": {"mode": "named", "name": "lookup", "parallel": true},
+  "output": {
+    "max_tokens": 96,
+    "format": {
+      "kind": "json_schema",
+      "name": "azure_answer",
+      "description": "azure fixture answer",
+      "strict": true,
+      "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+    }
+  },
+  "sampling": {"temperature": 0.3, "top_p": 0.8},
+  "reasoning": {"mode": "enabled", "effort": "high", "summary": "detailed"},
+  "extensions": {"openai.responses": {"include": ["reasoning.encrypted_content"], "store": false, "truncation": "auto"}}
+}

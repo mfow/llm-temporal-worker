@@ -1,0 +1,47 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-openai-response",
+  "model": "gpt-contract",
+  "service_class": "priority",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [
+    {"kind": "text", "level": "policy", "text": "fixture policy"},
+    {"kind": "parts", "content": [{"kind": "text", "text": "fixture developer"}]}
+  ],
+  "input": [
+    {
+      "kind": "message",
+      "actor": "human",
+      "content": [
+        {"kind": "text", "text": "describe the fixture"},
+        {"kind": "image", "url": "https://example.test/fixture.png", "media_type": "image/png", "detail": "high"},
+        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf", "title": "fixture.pdf"}
+      ]
+    },
+    {"kind": "tool_call", "id": "call-input", "name": "lookup", "arguments": {"query": "fixture"}},
+    {"kind": "tool_result", "call_id": "call-input", "name": "lookup", "content": [{"kind": "text", "text": "fixture result"}], "is_error": false}
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "fixture lookup",
+      "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+      "output_schema": {"type": "object"}
+    }
+  ],
+  "tool_policy": {"mode": "named", "name": "lookup", "parallel": true},
+  "output": {
+    "max_tokens": 128,
+    "format": {
+      "kind": "json_schema",
+      "name": "answer",
+      "description": "fixture answer",
+      "strict": true,
+      "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+    }
+  },
+  "sampling": {"temperature": 0.2, "top_p": 0.9},
+  "reasoning": {"mode": "enabled", "effort": "high", "summary": "detailed"},
+  "extensions": {"openai.responses": {"include": ["reasoning.encrypted_content"], "store": false, "truncation": "auto"}}
+}
