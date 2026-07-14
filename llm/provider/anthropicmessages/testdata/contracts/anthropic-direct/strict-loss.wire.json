@@ -1,0 +1,6 @@
+{
+  "code": "invalid_argument",
+  "phase": "compile",
+  "dispatch": "not_dispatched",
+  "message_contains": "sampling field"
+}
