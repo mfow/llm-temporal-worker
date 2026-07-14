@@ -86,18 +86,7 @@ jobs:
       - name: Check Go formatting
         if: steps.go.outputs.present == 'true'
         shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -d '' files < <(find . -name '*.go' -not -path './vendor/*' -print0)
-          if (( ${#files[@]} == 0 )); then
-            echo "go.mod exists but no Go files were found."
-            exit 1
-          fi
-          unformatted="$(gofmt -l "${files[@]}")"
-          if [[ -n "$unformatted" ]]; then
-            echo "$unformatted"
-            exit 1
-          fi
+        run: bash scripts/check-go-format.sh
 
       - name: Verify schemas and documentation
         if: steps.go.outputs.present == 'true'

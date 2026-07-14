@@ -9,14 +9,17 @@ run without credentials or internet access.
 The standard implementation gate is:
 
 ```sh
-gofmt -l .
+make fmt-check
 go vet ./...
 go test -race ./...
 go build ./...
 docker build --tag llm-temporal-worker:local .
 ```
 
-`gofmt -l` reports files that need formatting without changing the checkout.
+`make fmt-check` delegates to `scripts/check-go-format.sh`. The helper passes
+NUL-delimited Go source paths to `gofmt -l`, excludes `vendor` and
+`.worktrees`, and returns formatter failures instead of treating them as a
+clean result. It never modifies the checkout.
 The fuzz target is selected explicitly rather than through a placeholder name;
 for example, a 30-second provider stream smoke is:
 
@@ -53,8 +56,8 @@ tests and `deploy/verify.sh`, which renders each overlay locally through
 reviewed, pinned executable when `kubectl` is not on `PATH`.
 
 The release plan may list additional future gates; the commands above are the
-currently implemented targets. CI checks formatting with `gofmt -l` rather than
-modifying files.
+currently implemented targets. Both CI workflows call the same formatting
+helper as `make fmt-check`, and it checks rather than modifies files.
 
 ## Test layers
 
