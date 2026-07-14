@@ -110,6 +110,23 @@ exactly-once semantics.
 
 ## Heartbeats
 
+`Generate` first asks `llm.Engine.Stream` for a real provider stream. It
+observes `response_started` and `content_completed` only to report bounded
+streaming progress, then returns the sole `response_completed` value.
+`Stream` returns a direct typed `unsupported_capability` error with
+`not_dispatched` certainty when its pre-admission route/capability preflight
+finds no real `StreamingAdapter`. Only in that narrow case, before an
+`EventStream` or durable operation exists, the Activity invokes native
+`Engine.Generate` and returns its final semantic response. The fallback match
+also requires stream phase and an empty operation ID, so an unsupported
+compile/planning error or any operation-bearing error cannot enter the native
+path. It never falls back after a stream has been returned or after a stream
+terminal event. Text/JSON
+deltas, tool arguments, and opaque provider-state events are deliberately
+drained without being copied as live event payloads into a Temporal heartbeat;
+only the final normalized response crosses the Activity return boundary. A
+stream error is converted by the normal common-error classifier.
+
 Heartbeats contain small, redacted progress only:
 
 ```go
@@ -130,10 +147,10 @@ or SDK object is allowed.
 
 The Activity heartbeats:
 
-- immediately after admission;
-- immediately before possible network write;
-- periodically while waiting or streaming, with jitter;
-- before a potentially slow final store operation.
+- while planning, and for real streams when a response starts or an output
+  item completes, with only bounded counts;
+- before returning a finalized semantic response, including the native
+  pre-admission fallback path;
 
 Heartbeat failure does not cancel the provider call by itself; context
 cancellation does. The implementation watches `ctx.Done()` through all

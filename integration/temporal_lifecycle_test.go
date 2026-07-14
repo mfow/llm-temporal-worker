@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -103,6 +104,8 @@ type recordingAdapter struct {
 	mu       sync.Mutex
 	response llm.Response
 	calls    int
+	invokes  int
+	streams  int
 }
 
 func (adapter *recordingAdapter) Name() string { return "offline-integration-adapter" }
@@ -111,7 +114,8 @@ func (*recordingAdapter) Capabilities(context.Context, provider.CapabilityQuery)
 	return provider.CapabilitySet{
 		Version: "capabilities-1",
 		Features: map[provider.Feature]provider.Capability{
-			provider.FeatureText: {State: provider.CapabilityNative},
+			provider.FeatureText:      {State: provider.CapabilityNative},
+			provider.FeatureStreaming: {State: provider.CapabilityNative},
 		},
 	}, nil
 }
@@ -133,16 +137,90 @@ func (adapter *recordingAdapter) Invoke(ctx context.Context, _ provider.Call, ob
 	}
 	adapter.mu.Lock()
 	adapter.calls++
+	adapter.invokes++
 	response := adapter.response
 	adapter.mu.Unlock()
 	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
 	return provider.Result{Response: response}, nil
 }
 
+func (adapter *recordingAdapter) OpenStream(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.StreamResult, error) {
+	if err := observer.BeforePossibleWrite(ctx); err != nil {
+		return provider.StreamResult{}, err
+	}
+	adapter.mu.Lock()
+	adapter.calls++
+	adapter.streams++
+	response := adapter.response
+	adapter.mu.Unlock()
+	events := make([]provider.Event, 0, len(response.Output)*2+2)
+	for index, item := range response.Output {
+		events = append(events, provider.OutputStarted{Index: index}, provider.OutputFinished{Index: index, Item: item})
+	}
+	events = append(events, provider.UsageUpdated{Usage: response.Usage}, provider.StreamCompleted{Response: response})
+	return provider.StreamResult{Source: &recordingEventSource{events: events}, Metadata: provider.ResponseMetadata{RequestID: response.Provider.RequestID}, Dispatch: provider.DispatchAccepted}, nil
+}
+
+type recordingEventSource struct {
+	events []provider.Event
+	next   int
+}
+
+func (source *recordingEventSource) Next(ctx context.Context) (provider.Event, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if source.next == len(source.events) {
+		return nil, io.EOF
+	}
+	event := source.events[source.next]
+	source.next++
+	return event, nil
+}
+
+func (*recordingEventSource) Close() error { return nil }
+
 func (adapter *recordingAdapter) Calls() int {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
 	return adapter.calls
+}
+
+func (adapter *recordingAdapter) Invokes() int {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.invokes
+}
+
+func (adapter *recordingAdapter) Streams() int {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.streams
+}
+
+// nativeRecordingAdapter deliberately exposes only the normal Adapter port.
+// It mirrors a production adapter that can invoke a completed request but has
+// not yet implemented the optional provider.StreamingAdapter extension.
+type nativeRecordingAdapter struct{ recording *recordingAdapter }
+
+func (adapter *nativeRecordingAdapter) Name() string { return adapter.recording.Name() }
+
+func (*nativeRecordingAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
+	return provider.CapabilitySet{
+		Version: "capabilities-1",
+		Features: map[provider.Feature]provider.Capability{
+			provider.FeatureText:      {State: provider.CapabilityNative},
+			provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
+		},
+	}, nil
+}
+
+func (adapter *nativeRecordingAdapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
+	return adapter.recording.Compile(ctx, input)
+}
+
+func (adapter *nativeRecordingAdapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
+	return adapter.recording.Invoke(ctx, call, observer)
 }
 
 type recordingResultStore struct {
@@ -185,6 +263,14 @@ type integrationEngine struct {
 }
 
 func newIntegrationEngine(t *testing.T) integrationEngine {
+	return newIntegrationEngineWithAdapter(t, false)
+}
+
+func newNativeIntegrationEngine(t *testing.T) integrationEngine {
+	return newIntegrationEngineWithAdapter(t, true)
+}
+
+func newIntegrationEngineWithAdapter(t *testing.T, nativeOnly bool) integrationEngine {
 	t.Helper()
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	classes := []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
@@ -225,6 +311,10 @@ func newIntegrationEngine(t *testing.T) integrationEngine {
 		Usage:    llm.Usage{OutputTokens: 1},
 		Provider: llm.ProviderFacts{RequestID: "provider-request-1"},
 	}}
+	var providerAdapter provider.Adapter = adapter
+	if nativeOnly {
+		providerAdapter = &nativeRecordingAdapter{recording: adapter}
+	}
 	results := &recordingResultStore{values: make(map[string]llm.Response)}
 	admissionStore := memory.NewAdmissionStore(memory.AdmissionOptions{Clock: func() time.Time { return now }})
 	value, err := engine.New(engine.Dependencies{
@@ -232,7 +322,7 @@ func newIntegrationEngine(t *testing.T) integrationEngine {
 			Version: "snapshot-1", Routes: routes, Prices: pricing.NewResolver(priceCatalog),
 			ReservationLease: time.Minute, OperationRetention: time.Hour,
 		}},
-		Planner: routing.DeterministicPlanner{}, Adapters: engine.AdapterMap{"endpoint-1": adapter},
+		Planner: routing.DeterministicPlanner{}, Adapters: engine.AdapterMap{"endpoint-1": providerAdapter},
 		Admission: admissionStore, Results: results, Clock: func() time.Time { return now },
 		Estimator: budget.Estimator{MaxOutput: 1}, MaxAttempts: 2,
 	})
@@ -330,6 +420,9 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 	if calls := engineValue.adapter.Calls(); calls != 1 {
 		t.Fatalf("provider dispatches = %d, want one for replay", calls)
 	}
+	if streams, invokes := engineValue.adapter.Streams(), engineValue.adapter.Invokes(); streams != 1 || invokes != 0 {
+		t.Fatalf("Activity dispatches = streams %d invokes %d, want one real stream and no native Invoke", streams, invokes)
+	}
 	if puts := engineValue.results.Puts(); puts != 1 {
 		t.Fatalf("result writes = %d, want one for replay", puts)
 	}
@@ -337,6 +430,24 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 	worker.Stop()
 	if health.Ready() || metricsPolling(t, metrics) || !controllerWasStopped(controller) {
 		t.Fatal("worker did not fail readiness and polling before Stop returned")
+	}
+}
+
+func TestGenerateActivityFallsBackToNativeEngineForNonStreamingAdapter(t *testing.T) {
+	engineValue := newNativeIntegrationEngine(t)
+	activities := &activity.Activities{Engine: engineValue.engine}
+	response, err := activities.Generate(context.Background(), activity.GenerateRequest{APIVersion: activity.APIVersion, Request: integrationRequest("native-adapter-operation")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Response.OperationID == "" || response.Response.Status != llm.ResponseStatusCompleted {
+		t.Fatalf("native Activity response = %#v", response)
+	}
+	if streams, invokes := engineValue.adapter.Streams(), engineValue.adapter.Invokes(); streams != 0 || invokes != 1 {
+		t.Fatalf("Activity dispatches = streams %d invokes %d, want no stream and one native Invoke", streams, invokes)
+	}
+	if puts := engineValue.results.Puts(); puts != 1 {
+		t.Fatalf("result writes = %d, want one", puts)
 	}
 }
 
