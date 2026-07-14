@@ -32,6 +32,48 @@ func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 			message: "positive numeric UID",
 		},
 		{
+			name: "container UID override",
+			change: func(value string) string {
+				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsUser: 65532\n            allowPrivilegeEscalation: false", 1)
+			},
+			message: "container securityContext must not set runAsUser",
+		},
+		{
+			name: "container group override",
+			change: func(value string) string {
+				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsGroup: 65532\n            allowPrivilegeEscalation: false", 1)
+			},
+			message: "container securityContext must not set runAsGroup",
+		},
+		{
+			name: "container non-root override",
+			change: func(value string) string {
+				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsNonRoot: true\n            allowPrivilegeEscalation: false", 1)
+			},
+			message: "container securityContext must not set runAsNonRoot",
+		},
+		{
+			name: "container privileged override",
+			change: func(value string) string {
+				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            privileged: true\n            allowPrivilegeEscalation: false", 1)
+			},
+			message: "container securityContext must not set privileged",
+		},
+		{
+			name: "container capability addition",
+			change: func(value string) string {
+				return strings.Replace(value, "drop: [ALL]", "drop: [ALL]\n              add: [NET_ADMIN]", 1)
+			},
+			message: "worker must not add Linux capabilities",
+		},
+		{
+			name: "container seccomp override",
+			change: func(value string) string {
+				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            seccompProfile:\n              type: RuntimeDefault\n            allowPrivilegeEscalation: false", 1)
+			},
+			message: "container securityContext must not set seccompProfile",
+		},
+		{
 			name: "unexpected group",
 			change: func(value string) string {
 				return strings.Replace(value, "runAsGroup: 65532", "runAsGroup: 1", 1)

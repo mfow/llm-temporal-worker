@@ -245,7 +245,7 @@ compose-live-integration:
 
 deployment-policy-verify:
 	KUBECTL="$(KUBECTL)" ./deploy/verify.sh
-	$(GO) test ./integration/kubernetes
+	KUBECTL="$(KUBECTL)" $(GO) test ./integration/kubernetes
 
 kustomize-verify:
 	@command -v "$(KUBECTL)" >/dev/null 2>&1 || { \
@@ -253,6 +253,7 @@ kustomize-verify:
 		exit 2; \
 	}
 	KUBECTL="$(KUBECTL)" ./deploy/verify.sh
+	KUBECTL="$(KUBECTL)" $(GO) test ./integration/kubernetes
 
 adapter-contracts:
 	$(GO) test -v ./llm/provider/contracttest ./llm/provider/...

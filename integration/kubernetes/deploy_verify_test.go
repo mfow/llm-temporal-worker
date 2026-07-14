@@ -34,6 +34,29 @@ func TestDeploymentVerificationRejectsRootRenderedWorkload(t *testing.T) {
 	}
 }
 
+func TestDeploymentPolicyTargetsPropagateKUBECTL(t *testing.T) {
+	makefile := readRepositoryFile(t, "Makefile")
+	for _, target := range []string{"deployment-policy-verify", "kustomize-verify"} {
+		body := makeTarget(t, makefile, target)
+		if !strings.Contains(body, `KUBECTL="$(KUBECTL)" $(GO) test ./integration/kubernetes`) {
+			t.Fatalf("%s must propagate KUBECTL to the rendered Kubernetes policy test:\n%s", target, body)
+		}
+	}
+}
+
+func makeTarget(t *testing.T, makefile, name string) string {
+	t.Helper()
+	start := strings.Index(makefile, name+":\n")
+	if start == -1 {
+		t.Fatalf("Makefile is missing target %q", name)
+	}
+	body := makefile[start:]
+	if end := strings.Index(body, "\n\n"); end != -1 {
+		return body[:end]
+	}
+	return body
+}
+
 const rootRenderedWorkload = `apiVersion: v1
 kind: ServiceAccount
 metadata:

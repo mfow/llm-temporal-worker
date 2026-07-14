@@ -211,6 +211,9 @@ func verifyWorkerContainer(container map[string]any) error {
 	if !ok {
 		return errors.New("worker securityContext is missing")
 	}
+	if err := rejectContainerSecurityOverrides(securityContext); err != nil {
+		return err
+	}
 	allowPrivilegeEscalation, allowPrivilegeEscalationSet := boolValue(valueAt(securityContext, "allowPrivilegeEscalation"))
 	if !allowPrivilegeEscalationSet || allowPrivilegeEscalation {
 		return errors.New("worker must disable privilege escalation")
@@ -233,6 +236,26 @@ func verifyWorkerContainer(container map[string]any) error {
 	}
 	if err := verifyProbe(container, "readinessProbe", "/health/ready"); err != nil {
 		return err
+	}
+	return nil
+}
+
+func rejectContainerSecurityOverrides(securityContext map[string]any) error {
+	for _, field := range []string{
+		"runAsUser",
+		"runAsGroup",
+		"runAsNonRoot",
+		"privileged",
+		"seccompProfile",
+	} {
+		if _, exists := securityContext[field]; exists {
+			return fmt.Errorf("container securityContext must not set %s", field)
+		}
+	}
+	if capabilities, ok := mapAt(securityContext, "capabilities"); ok {
+		if _, exists := capabilities["add"]; exists {
+			return errors.New("worker must not add Linux capabilities")
+		}
 	}
 	return nil
 }
