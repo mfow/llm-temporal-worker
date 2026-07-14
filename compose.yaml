@@ -2,15 +2,15 @@ name: llmtw
 
 services:
   temporal:
-    image: temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
-    environment:
-      DB: sqlite
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development.yaml
+    # The official CLI development server owns its embedded SQLite lifecycle;
+    # auto-setup only supports external Cassandra, MySQL, or PostgreSQL.
+    image: temporalio/temporal:1.5.1@sha256:597a5dbbcc6e7716b326dde4a51622d5ea0879eb0cf06ff8a94381361d0a987d
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
     ports:
       - "7233:7233"
       - "8233:8233"
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7233"]
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
       interval: 5s
       timeout: 3s
       retries: 24

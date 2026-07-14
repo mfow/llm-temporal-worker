@@ -193,8 +193,9 @@ Release dashboards and runbooks cover:
 
 ## Local stack
 
-`compose.yaml` starts pinned Temporal development services, Redis with
-persistence, and a deterministic provider mock. The `worker` profile is
+`compose.yaml` starts the pinned official Temporal CLI development server with
+its embedded SQLite persistence, Redis with persistence, and a deterministic
+provider mock. The `worker` profile is
 opt-in because it requires a locally generated continuation HMAC key. Profiles
 add the worker without introducing a live provider credential. Local smoke
 checks are parser/configuration/readiness-only because the provider mock

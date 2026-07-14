@@ -18,6 +18,8 @@ type composeDocument struct {
 
 type composeService struct {
 	Image       string               `yaml:"image"`
+	Command     yaml.Node            `yaml:"command"`
+	Environment map[string]string    `yaml:"environment"`
 	Build       composeBuild         `yaml:"build"`
 	Profiles    []string             `yaml:"profiles"`
 	DependsOn   map[string]yaml.Node `yaml:"depends_on"`
@@ -100,6 +102,33 @@ func TestComposeFixtureIsOfflineSafe(t *testing.T) {
 	if !strings.Contains(string(raw), "continuation_hmac") ||
 		!strings.Contains(string(raw), "${LLMTW_CONTINUATION_KEY_FILE:-./.local/continuation-hmac}") {
 		t.Error("continuation key must come from an explicit local secret-file override")
+	}
+}
+
+func TestTemporalFixtureUsesSupportedEmbeddedSQLiteServer(t *testing.T) {
+	document, raw := readCompose(t)
+	temporal, ok := document.Services["temporal"]
+	if !ok {
+		t.Fatal("Compose fixture is missing Temporal")
+	}
+	const temporalImage = "temporalio/temporal:1.5.1@sha256:597a5dbbcc6e7716b326dde4a51622d5ea0879eb0cf06ff8a94381361d0a987d"
+	if temporal.Image != temporalImage {
+		t.Fatalf("Temporal image = %q, want %q", temporal.Image, temporalImage)
+	}
+	var command []string
+	if err := temporal.Command.Decode(&command); err != nil {
+		t.Fatalf("decode Temporal command: %v", err)
+	}
+	if command := strings.Join(command, " "); command != "server start-dev --ip 0.0.0.0" {
+		t.Fatalf("Temporal command = %q, want supported externally reachable development server", command)
+	}
+	for _, key := range []string{"DB", "DYNAMIC_CONFIG_FILE_PATH"} {
+		if _, ok := temporal.Environment[key]; ok {
+			t.Errorf("Temporal development server must not set unsupported auto-setup environment %q", key)
+		}
+	}
+	if !strings.Contains(string(raw), `test: ["CMD", "temporal", "operator", "cluster", "health"]`) {
+		t.Error("Temporal healthcheck must use the bundled CLI's service health command")
 	}
 }
 
