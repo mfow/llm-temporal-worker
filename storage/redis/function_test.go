@@ -28,6 +28,20 @@ func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
 	}
 }
 
+func TestAdmissionFunctionPreservesRecordRetentionOnUpdates(t *testing.T) {
+	source := AdmissionFunctionSource()
+	for _, fragment := range []string{
+		"local current_ttl = redis.call('TTL', key)",
+		"current_ttl == -2",
+		"current_ttl >= 0 and current_ttl < ttl_value",
+		"redis.call('EXPIRE', key, tostring(restore_ttl))",
+	} {
+		if !strings.Contains(source, fragment) {
+			t.Fatalf("admission function does not preserve record TTL: missing %q", fragment)
+		}
+	}
+}
+
 func TestContinuationFunctionUsesCreateIfAbsentAndTTL(t *testing.T) {
 	if !strings.Contains(continuationFunctionSource, "'NX'") || !strings.Contains(continuationFunctionSource, "EXPIRE") {
 		t.Fatal("continuation function is not immutable/expiring")

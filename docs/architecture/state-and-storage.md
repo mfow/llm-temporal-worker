@@ -97,7 +97,8 @@ llmtw:{admission}:op:<scope-hmac>:<operation-hmac>
 llmtw:{admission}:budget:<policy-version>:<window>:<bucket>
 llmtw:{admission}:function-version
 
-llmtw:continuation:<tenant-hmac>:<continuation-id>
+llmtw:{admission}:continuation:<tenant-hmac>:<continuation-id>
+llmtw:{admission}:continuation:index:<handle-hmac>
 llmtw:result:<tenant-hmac>:<digest>
 ```
 

@@ -220,10 +220,26 @@ end
 
 local function set_record(key, record, ttl)
     local encoded = cjson.encode(record)
+    -- SET clears an existing expiry. Capture it first, then restore the
+    -- longer of the existing and requested retention windows. A zero TTL is
+    -- used by terminal/dispatch updates and must preserve the record's
+    -- current expiry rather than making it persistent.
+    local current_ttl = redis.call('TTL', key)
     redis.call('SET', key, encoded)
     local ttl_value = integer(ttl)
+    local restore_ttl = nil
+    if current_ttl >= 0 then
+        restore_ttl = current_ttl
+    end
     if ttl_value and ttl_value > 0 then
-        redis.call('EXPIRE', key, tostring(ttl_value))
+        -- A persistent existing record (TTL -1) is intentionally not
+        -- shortened by a later update that happens to carry an expiry.
+        if current_ttl == -2 or (current_ttl >= 0 and current_ttl < ttl_value) then
+            restore_ttl = ttl_value
+        end
+    end
+    if restore_ttl and restore_ttl >= 0 then
+        redis.call('EXPIRE', key, tostring(restore_ttl))
     end
     return encoded
 end

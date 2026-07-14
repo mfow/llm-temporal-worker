@@ -94,11 +94,14 @@ func (space keySpace) operationKey(scope, id string) string {
 }
 
 func (space keySpace) continuationIndexKey(handle string) string {
-	return space.prefix + ":continuation:index:" + space.digest("continuation-index", handle)
+	// Continuation writes can atomically update the handle index, immutable
+	// record, and (for child writes) the admission operation index. Keep all
+	// three keys in the configured Redis Cluster hash slot.
+	return space.admissionPrefix() + "continuation:index:" + space.digest("continuation-index", handle)
 }
 
 func (space keySpace) continuationKey(tenant, handle string) string {
-	return space.prefix + ":continuation:" + space.digest("tenant", tenant) + ":" + space.digest("continuation", handle)
+	return space.admissionPrefix() + "continuation:" + space.digest("tenant", tenant) + ":" + space.digest("continuation", handle)
 }
 
 // HashSlotKey is useful to readiness checks and tests: every admission key

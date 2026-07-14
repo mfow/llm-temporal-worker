@@ -164,7 +164,14 @@ func TestAdmissionKeysUseOneHashSlotAndOpaqueDigests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := []string{space.scopeKey("tenant/secret"), space.operationIndexKey("operation"), space.operationKey("tenant/secret", "operation"), space.budgetKey("policy", "window")}
+	keys := []string{
+		space.scopeKey("tenant/secret"),
+		space.operationIndexKey("operation"),
+		space.operationKey("tenant/secret", "operation"),
+		space.budgetKey("policy", "window"),
+		space.continuationIndexKey("handle"),
+		space.continuationKey("tenant/secret", "handle"),
+	}
 	for _, key := range keys {
 		if key == "" || key == "tenant/secret" || key == "operation" {
 			t.Fatalf("key leaked raw identifier: %q", key)
