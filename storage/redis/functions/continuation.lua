@@ -49,5 +49,8 @@ if #KEYS >= 3 then
         redis.call('DEL', KEYS[1], KEYS[2])
         return {'existing', operation}
     end
+    if ttl and ttl > 0 then
+        redis.call('EXPIRE', KEYS[3], tostring(ttl))
+    end
 end
 return {'created', ''}

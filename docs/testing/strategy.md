@@ -172,7 +172,10 @@ and a real Redis container. It tests:
 - ambiguous reservation retention;
 - Redis timeout after mutation followed by read resolution;
 - Function version/digest mismatch;
-- continuation immutable branching, MAC/tenant/digest checks, TTL, and BlobRefs.
+- continuation immutable branching, MAC/tenant/digest checks, BlobRefs, and
+  namespace isolation across prefix/hash-tag/key-secret changes;
+- continuation record, handle-index, and child operation-idempotency TTLs,
+  plus expired-index versus dangling-index fail-closed behavior.
 
 Concurrency tests coordinate goroutines with barriers rather than sleeps and
 assert accepted total never exceeds the limit. Race tests run for memory and

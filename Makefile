@@ -53,7 +53,7 @@ readiness-integration:
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi; \
-	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedisAdmission$$'; then \
+	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; then \
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi
