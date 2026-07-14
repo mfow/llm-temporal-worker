@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
@@ -87,9 +89,10 @@ func (config AWSClientConfig) MarshalJSON() ([]byte, error) {
 }
 
 // NewAWSClient constructs an Anthropic AWS gateway client using the SDK's
-// supported authentication middleware. The caller may use a default AWS
-// credential chain, an AWS profile, explicit credentials, or the gateway API
-// key according to anthropicaws.ClientConfig.
+// supported authentication middleware. Routing identity is always explicit so
+// ambient region, workspace, and base-URL environment defaults cannot change
+// a configured endpoint. Authentication selection remains available to direct
+// SDK callers; production route construction uses NewAWSGatewayClient.
 func NewAWSClient(ctx context.Context, config AWSClientConfig) (*Client, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("anthropic AWS messages: context is required")
@@ -97,15 +100,23 @@ func NewAWSClient(ctx context.Context, config AWSClientConfig) (*Client, error) 
 	if config.HTTPClient == nil {
 		return nil, fmt.Errorf("anthropic AWS messages: HTTP client is required")
 	}
-	baseURL := ""
-	if config.BaseURL != "" {
-		validated, err := clientconfig.BaseURL(config.BaseURL)
-		if err != nil {
-			return nil, fmt.Errorf("anthropic AWS messages: %w", err)
-		}
-		baseURL = validated
-		config.AWSConfig.BaseURL = validated
+	if strings.TrimSpace(config.BaseURL) == "" {
+		return nil, fmt.Errorf("anthropic AWS messages: AWS gateway base URL is required")
 	}
+	if strings.TrimSpace(config.AWSConfig.AWSRegion) == "" || strings.TrimSpace(config.AWSConfig.AWSRegion) != config.AWSConfig.AWSRegion {
+		return nil, fmt.Errorf("anthropic AWS messages: AWS region is required")
+	}
+	if strings.TrimSpace(config.AWSConfig.WorkspaceID) == "" || strings.TrimSpace(config.AWSConfig.WorkspaceID) != config.AWSConfig.WorkspaceID {
+		return nil, fmt.Errorf("anthropic AWS messages: AWS workspace ID is required")
+	}
+	if config.AWSConfig.BaseURL != "" {
+		return nil, fmt.Errorf("anthropic AWS messages: base URL must be supplied through AWSClientConfig.BaseURL")
+	}
+	baseURL, err := clientconfig.BaseURL(config.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic AWS messages: %w", err)
+	}
+	config.AWSConfig.BaseURL = baseURL
 	options := []option.RequestOption{
 		option.WithoutEnvironmentDefaults(),
 		option.WithHTTPClient(config.HTTPClient),
@@ -118,7 +129,16 @@ func NewAWSClient(ctx context.Context, config AWSClientConfig) (*Client, error) 
 	return &Client{messages: &client.Messages, baseURL: baseURL}, nil
 }
 
-// NewAWSGatewayClient is a descriptive alias for route registries.
+// NewAWSGatewayClient is the production route constructor. It accepts only
+// the official SDK's default AWS credential chain, which is workload-identity
+// aware. API-key/static-credential modes and the SDK's AWS API-key fallback
+// are rejected before a request client is constructed.
 func NewAWSGatewayClient(ctx context.Context, config AWSClientConfig) (*Client, error) {
+	if config.AWSConfig.SkipAuth || config.AWSConfig.APIKey != "" || config.AWSConfig.AWSAccessKey != "" || config.AWSConfig.AWSSecretAccessKey != "" || config.AWSConfig.AWSSessionToken != "" || config.AWSConfig.AWSProfile != "" {
+		return nil, fmt.Errorf("anthropic AWS gateway: aws_default_chain authentication is required")
+	}
+	if os.Getenv("ANTHROPIC_AWS_API_KEY") != "" {
+		return nil, fmt.Errorf("anthropic AWS gateway: ANTHROPIC_AWS_API_KEY is not permitted when aws_default_chain is configured")
+	}
 	return NewAWSClient(ctx, config)
 }

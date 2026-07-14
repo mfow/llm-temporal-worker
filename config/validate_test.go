@@ -56,6 +56,43 @@ func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 	}
 }
 
+func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := loaded.Endpoints["anthropic-aws-us-east-1"]
+	endpoint.AWSWorkspaceID = ""
+	loaded.Endpoints["anthropic-aws-us-east-1"] = endpoint
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err == nil {
+		t.Fatal("schema accepted an Anthropic AWS gateway endpoint without a workspace ID")
+	}
+
+	endpoint.AWSWorkspaceID = "ws-example-123"
+	endpoint.Auth.Kind = "bearer_env"
+	loaded.Endpoints["anthropic-aws-us-east-1"] = endpoint
+	encoded, err = json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err == nil {
+		t.Fatal("schema accepted secret auth for an Anthropic AWS gateway endpoint")
+	}
+
+}
+
 func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),

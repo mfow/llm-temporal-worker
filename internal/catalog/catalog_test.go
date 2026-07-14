@@ -257,6 +257,15 @@ entries:
 	}
 }
 
+func TestEndpointFamilyMapsAnthropicAWSWithoutConflatingBedrock(t *testing.T) {
+	if got := endpointFamily("anthropic_aws_messages"); got != provider.FamilyAnthropicMessages {
+		t.Fatalf("Anthropic AWS family = %q, want %q", got, provider.FamilyAnthropicMessages)
+	}
+	if got := endpointFamily("bedrock_anthropic_messages"); got != provider.FamilyBedrockMessages {
+		t.Fatalf("Bedrock family = %q, want %q", got, provider.FamilyBedrockMessages)
+	}
+}
+
 func writeCatalog(t *testing.T, body string) config.CatalogRef {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "catalog.yaml")
