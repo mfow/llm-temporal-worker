@@ -34,6 +34,26 @@ func TestAssemblerBuildsTerminalResponseInOrder(t *testing.T) {
 	}
 }
 
+func TestAssemblerMergesPartialUsageUpdates(t *testing.T) {
+	assembler := provider.NewAssembler("operation-usage")
+	for _, event := range []provider.Event{
+		provider.UsageUpdated{Usage: llm.Usage{InputTokens: 4}},
+		provider.UsageUpdated{Usage: llm.Usage{OutputTokens: 2}},
+		provider.StreamCompleted{},
+	} {
+		if err := assembler.Add(event); err != nil {
+			t.Fatalf("add %T: %v", event, err)
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage.InputTokens != 4 || response.Usage.OutputTokens != 2 {
+		t.Fatalf("merged usage = %#v", response.Usage)
+	}
+}
+
 func TestAssemblerRejectsInvalidOrderAndTerminalReuse(t *testing.T) {
 	for _, events := range [][]provider.Event{
 		{provider.TextDelta{Index: 0, Text: "before start"}},
