@@ -51,6 +51,10 @@ type Route struct {
 	AllowedRegions []string
 	Capabilities   CapabilitySet
 	PriceVersion   string
+	// PriceAvailable reports whether every service class advertised by this
+	// route had a current quote while the immutable snapshot was compiled. The
+	// engine still resolves each selected candidate and applies its budgeted
+	// unpriced policy before admission or dispatch.
 	PriceAvailable bool
 	ExtensionNames []string
 	ContextBytes   int

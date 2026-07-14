@@ -317,6 +317,20 @@ telemetry:
   content_logging: disabled
 ```
 
+## Pricing and budget matching
+
+`pricing.require_price_when_budgeted` controls the explicit unpriced policy.
+When it is `true`, a route without a current catalog quote is eligible only if
+it matches no monetary budget policy. A matching policy always requires a
+current quote. When it is `false`, all candidates require a current quote.
+
+`budgets.require_match: true` is independent: it removes a candidate with no
+matching budget policy before quote selection. Consequently, setting both
+fields to `true` requires every dispatched candidate to match a budget and to
+have a current price. An intentionally allowed unpriced result has
+`cost_status: unknown`; its zero cost fields are unknown accounting facts, not
+a free-use assertion.
+
 ## Provider egress policy
 
 Every endpoint requires a non-empty `outbound_hosts` list. Entries are DNS

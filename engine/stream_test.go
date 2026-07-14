@@ -62,7 +62,7 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 	quoted := quotedPlan{candidates: []quotedCandidate{
 		{
 			candidate: routing.Candidate{EndpointID: "native", Family: string(provider.FamilyOpenAIResponses), Model: "native-model", AttemptedClass: llm.ServiceClassStandard},
-			entry:     pricing.Entry{Version: "native-price"},
+			entry:     &pricing.Entry{Version: "native-price"},
 			estimate:  budget.Estimate{MicroUSD: 99},
 			reservations: []admission.WindowReservation{{
 				PolicyID: "policy", WindowID: "window", Amount: 99, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),
@@ -70,7 +70,7 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 		},
 		{
 			candidate: routing.Candidate{EndpointID: "streaming", Family: string(provider.FamilyOpenAIResponses), Model: "stream-model", AttemptedClass: llm.ServiceClassStandard},
-			entry:     pricing.Entry{Version: "stream-price"},
+			entry:     &pricing.Entry{Version: "stream-price"},
 			estimate:  budget.Estimate{MicroUSD: 7},
 			reservations: []admission.WindowReservation{{
 				PolicyID: "policy", WindowID: "window", Amount: 7, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),

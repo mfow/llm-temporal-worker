@@ -69,16 +69,17 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 		return engine.Snapshot{}, err
 	}
 	return engine.Snapshot{
-		Version:               snapshot.ConfigVersion(),
-		Routes:                routes,
-		Health:                routing.HealthView{},
-		Prices:                pricing.NewResolver(price),
-		BudgetPolicies:        policies,
-		RequireBudgetMatch:    value.Budgets.RequireMatch,
-		Environment:           value.Environment,
-		ReservationLease:      time.Duration(value.State.ReservationLease),
-		OperationRetention:    time.Duration(value.State.OperationTerminalRetention),
-		ContinuationRetention: time.Duration(value.State.ContinuationRetention),
+		Version:                  snapshot.ConfigVersion(),
+		Routes:                   routes,
+		Health:                   routing.HealthView{},
+		Prices:                   pricing.NewResolver(price),
+		BudgetPolicies:           policies,
+		RequireBudgetMatch:       value.Budgets.RequireMatch,
+		RequirePriceWhenBudgeted: value.Pricing.RequirePriceWhenBudgeted,
+		Environment:              value.Environment,
+		ReservationLease:         time.Duration(value.State.ReservationLease),
+		OperationRetention:       time.Duration(value.State.OperationTerminalRetention),
+		ContinuationRetention:    time.Duration(value.State.ContinuationRetention),
 	}, nil
 }
 
@@ -139,7 +140,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 			if profile.Model != routeValue.Model {
 				return routing.Catalog{}, fmt.Errorf("route %q model %q does not match capability profile %q model %q", routeValue.ID, routeValue.Model, endpoint.CapabilityProfile, profile.Model)
 			}
-			providerName, routeRegion, priceVersion, err := routePriceIdentity(bundle, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, now)
+			providerName, routeRegion, priceVersion, priceAvailable, err := routePriceIdentity(bundle, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, now)
 			if err != nil {
 				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
 			}
@@ -171,7 +172,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				AllowedRegions: append([]string(nil), modelValue.DataRegions...),
 				Capabilities:   routingCapabilities(profile.Set),
 				PriceVersion:   priceVersion,
-				PriceAvailable: true,
+				PriceAvailable: priceAvailable,
 				ExtensionNames: extensions,
 			})
 		}
@@ -180,16 +181,21 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 	return routing.CompileCatalog(value.Version, models)
 }
 
-func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, now time.Time) (string, string, string, error) {
-	// Catalog.Load has already checked that the endpoint has at least one
-	// family/endpoint price. Route compilation tightens that check to every
-	// concrete model/class so admission can never reserve against a missing
-	// quote later in the request.
+func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, now time.Time) (string, string, string, bool, error) {
 	priceCatalog, ok := bundle.Pricing[endpoint.PriceCatalog]
 	if !ok {
-		return "", "", "", fmt.Errorf("price catalog %q is unavailable", endpoint.PriceCatalog)
+		return "", "", "", false, fmt.Errorf("price catalog %q is unavailable", endpoint.PriceCatalog)
 	}
-	var providerName, routeRegion, priceVersion string
+	// A current quote is not the source of the endpoint identity. The verified
+	// catalog supplies that identity even when this route's model/tier is
+	// deliberately unpriced, so the engine can make the candidate-level policy
+	// decision without guessing a provider or region.
+	providerName, routeRegion, err := routeCatalogIdentity(priceCatalog.Catalog.Entries, endpointID, endpoint, now)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	var priceVersion string
+	priceAvailable := true
 	family := endpointFamily(endpoint.Family)
 	for _, class := range classes {
 		tier := endpoint.ServiceClasses[class].ProviderValue
@@ -205,23 +211,17 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 				continue
 			}
 			if found != nil {
-				return "", "", "", fmt.Errorf("multiple active price entries for model %q tier %q", model, tier)
+				return "", "", "", false, fmt.Errorf("multiple active price entries for model %q tier %q", model, tier)
 			}
 			copy := *entry
 			found = &copy
 		}
 		if found == nil {
-			return "", "", "", fmt.Errorf("no active price entry for model %q tier %q", model, tier)
+			priceAvailable = false
+			continue
 		}
-		if providerName == "" {
-			providerName = found.Provider
-		} else if providerName != found.Provider {
-			return "", "", "", fmt.Errorf("price entries use multiple providers")
-		}
-		if routeRegion == "" {
-			routeRegion = found.Region
-		} else if routeRegion != found.Region {
-			return "", "", "", fmt.Errorf("price entries use multiple regions")
+		if found.Provider != providerName || found.Region != routeRegion {
+			return "", "", "", false, fmt.Errorf("active price entry does not match verified endpoint identity")
 		}
 		entryVersion := found.Version
 		if entryVersion == "" {
@@ -230,10 +230,49 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 		if priceVersion == "" {
 			priceVersion = entryVersion
 		} else if priceVersion != entryVersion {
-			return "", "", "", fmt.Errorf("price entries use multiple versions")
+			return "", "", "", false, fmt.Errorf("price entries use multiple versions")
 		}
 	}
-	return providerName, routeRegion, priceVersion, nil
+	return providerName, routeRegion, priceVersion, priceAvailable, nil
+}
+
+func routeCatalogIdentity(entries []pricing.Entry, endpointID string, endpoint config.EndpointConfig, now time.Time) (string, string, error) {
+	family := endpointFamily(endpoint.Family)
+	active := make([]pricing.Entry, 0)
+	references := make([]pricing.Entry, 0)
+	for _, entry := range entries {
+		if entry.EndpointID != endpointID || entry.Family != string(family) {
+			continue
+		}
+		if endpoint.Region != "" && entry.Region != endpoint.Region {
+			continue
+		}
+		references = append(references, entry)
+		if entry.Active(now) {
+			active = append(active, entry)
+		}
+	}
+	if len(references) == 0 {
+		return "", "", fmt.Errorf("no price entry for endpoint %q family %q", endpointID, family)
+	}
+	// Prefer a current catalog identity. If the whole endpoint is between price
+	// intervals, accept an identity only when every verified historical/future
+	// reference agrees; otherwise refusing the unpriced route is safer than
+	// choosing a provider or region from an arbitrary interval.
+	identity := active
+	if len(identity) == 0 {
+		identity = references
+	}
+	providerName, routeRegion := identity[0].Provider, identity[0].Region
+	for _, entry := range identity[1:] {
+		if entry.Provider != providerName {
+			return "", "", fmt.Errorf("price entries use multiple providers")
+		}
+		if entry.Region != routeRegion {
+			return "", "", fmt.Errorf("price entries use multiple regions")
+		}
+	}
+	return providerName, routeRegion, nil
 }
 
 func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {

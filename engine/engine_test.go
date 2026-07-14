@@ -227,6 +227,9 @@ func TestGenerateRejectsUnmatchedRequiredBudgetPolicyBeforeAdmission(t *testing.
 	if mapped.Code != provider.CodeNoRoute || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
 		t.Fatalf("budget-policy error = %#v", mapped)
 	}
+	if mapped.SafeDetails["reason"] != "no_matching_budget_policy" {
+		t.Fatalf("budget-policy safe details = %#v, want no_matching_budget_policy", mapped.SafeDetails)
+	}
 	adapter.mu.Lock()
 	invokes := adapter.invokes
 	adapter.mu.Unlock()

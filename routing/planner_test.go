@@ -55,3 +55,22 @@ func TestPlannerCollectsSafeRejections(t *testing.T) {
 		t.Fatalf("unexpected rejection: %#v", plan.Rejections)
 	}
 }
+
+func TestPlannerDoesNotTrustCallerBudgetedTagForPricePolicy(t *testing.T) {
+	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{{
+		ID: "unpriced", EndpointID: "ep", Provider: "openai", Family: "openai_responses", Model: "model",
+		Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"},
+		Capabilities: testCapabilities(), PriceAvailable: false,
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := llm.Request{OperationKey: "op-unpriced", Model: "logical", Context: llm.RequestContext{Tags: map[string]string{"budgeted": "true"}}}
+	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if len(plan.Candidates) != 1 || plan.Candidates[0].RouteID != "unpriced" {
+		t.Fatalf("plan candidates = %#v, want unpriced route", plan.Candidates)
+	}
+}

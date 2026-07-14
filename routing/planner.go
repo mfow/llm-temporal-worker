@@ -114,9 +114,6 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 			}
 		}
 	}
-	if route.PriceVersion == "" && request.Context.Tags["budgeted"] == "true" {
-		return reject(RejectPrice, "price_version", "budgeted request requires a versioned price")
-	}
 	if route.ContextBytes > 0 {
 		requestBytes, _ := llm.CanonicalJSON(mustRequestJSON(request))
 		if len(requestBytes) > route.ContextBytes {

@@ -26,9 +26,18 @@ const (
 
 type quotedCandidate struct {
 	candidate    routing.Candidate
-	entry        pricing.Entry
+	entry        *pricing.Entry
 	estimate     budget.Estimate
 	reservations []admission.WindowReservation
+}
+
+func (candidate quotedCandidate) priceKnown() bool { return candidate.entry != nil }
+
+func (candidate quotedCandidate) priceVersion() string {
+	if candidate.entry == nil {
+		return ""
+	}
+	return candidate.entry.Version
 }
 
 type quotedPlan struct {
@@ -146,12 +155,15 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		return quotedPlan{}, engineError(provider.CodeConfiguration, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing resolver is unavailable", nil)
 	}
 	quoted := quotedPlan{candidates: make([]quotedCandidate, 0, len(plan.Candidates))}
+	skippedForBudgetMatch := false
+	skippedForPrice := false
 	for _, candidate := range plan.Candidates {
 		if err := ctx.Err(); err != nil {
 			return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing canceled", err)
 		}
 		matches := budget.MatchPolicies(snapshot.BudgetPolicies, budget.ContextFor(request, candidate, snapshot.Environment))
 		if snapshot.RequireBudgetMatch && len(matches) == 0 {
+			skippedForBudgetMatch = true
 			continue
 		}
 		quote, err := snapshot.Prices.Resolve(pricing.Query{
@@ -159,6 +171,14 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 			Region: candidate.Region, Model: candidate.Model, ProviderTier: candidate.ProviderTier, At: now,
 		})
 		if err != nil {
+			if errors.Is(err, pricing.ErrNoActivePrice) {
+				if len(matches) > 0 || !snapshot.RequirePriceWhenBudgeted {
+					skippedForPrice = true
+					continue
+				}
+				quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate})
+				continue
+			}
 			return quotedPlan{}, engineError(provider.CodeConfiguration, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate has no active price", err)
 		}
 		entry := quote.Entry
@@ -170,13 +190,19 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate cost estimate failed", err)
 		}
 		reservations := reservations(matches, estimate.MicroUSD, now)
-		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: entry, estimate: estimate, reservations: reservations})
+		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: &entry, estimate: estimate, reservations: reservations})
 		if estimate.MicroUSD > quoted.maximum {
 			quoted.maximum = estimate.MicroUSD
 		}
 	}
-	if len(quoted.candidates) == 0 && snapshot.RequireBudgetMatch {
-		return quotedPlan{}, engineError(provider.CodeNoRoute, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "no candidate matches the required budget policy", nil)
+	if len(quoted.candidates) == 0 {
+		reason, message := "no_eligible_price", "no candidate has a usable price"
+		if skippedForBudgetMatch && !skippedForPrice {
+			reason, message = "no_matching_budget_policy", "no candidate matches a budget policy"
+		}
+		failure := engineError(provider.CodeNoRoute, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, message, nil)
+		failure.SafeDetails = map[string]string{"reason": reason}
+		return quotedPlan{}, failure
 	}
 	return quoted, nil
 }
@@ -274,12 +300,17 @@ func operationIdentity(request llm.Request, digest [32]byte) (string, string) {
 }
 
 func priceVersion(candidates []quotedCandidate) string {
-	if len(candidates) == 0 {
-		return ""
-	}
-	first := candidates[0].entry.Version
-	for _, candidate := range candidates[1:] {
-		if candidate.entry.Version != first {
+	first := ""
+	for _, candidate := range candidates {
+		if !candidate.priceKnown() {
+			continue
+		}
+		version := candidate.priceVersion()
+		if first == "" {
+			first = version
+			continue
+		}
+		if version != first {
 			return "mixed"
 		}
 	}
