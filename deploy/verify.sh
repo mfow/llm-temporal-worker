@@ -30,6 +30,7 @@ for overlay in \
   rendered="$tmp/$name.yaml"
   "$kubectl_bin" kustomize "$overlay" >"$rendered"
   grep -Fq 'runAsNonRoot: true' "$rendered" || fail "$name does not enforce non-root execution"
+  grep -Fq 'fsGroup: 65532' "$rendered" || fail "$name does not grant the worker group access to mounted secrets"
   grep -Fq 'readOnlyRootFilesystem: true' "$rendered" || fail "$name does not enforce read-only root"
   grep -Fq 'type: RuntimeDefault' "$rendered" || fail "$name does not set the default seccomp profile"
   grep -Fq 'path: /health/live' "$rendered" || fail "$name is missing liveness probe"
