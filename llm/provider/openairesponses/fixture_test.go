@@ -1,25 +1,25 @@
 package openairesponses
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
-	"os"
 	"testing"
-
-	"github.com/openai/openai-go/v3/responses"
-	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 )
 
 func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
-	params, err := lowerRequest(llm.Request{
-		OperationKey: "fixture-op",
-		Model:        "gpt-contract",
-		ServiceClass: llm.ServiceClassEconomy,
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
-	}, llm.ServiceClassEconomy)
+	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := lowerRequest(normalized, serviceClass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,26 +27,21 @@ func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := readFixture(t, "request.wire.json")
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("wire fixture mismatch\n got: %s\nwant: %s", gotCanonical, wantCanonical)
-	}
+	assertCanonicalFixtureJSON(t, got, "openai-responses", "request.wire.json")
 }
 
 func TestSemanticFixtureMatchesLiftedResponse(t *testing.T) {
-	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
-	response.ID = "resp-fixture"
-	response.Model = shared.ResponsesModel("gpt-contract")
-	call := provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := liftResponse(call, &response, "req-fixture")
+	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
+	call, err := fixtureAdapterForProfile(t, responsesFixtureProfiles[0]).Compile(context.Background(), provider.CompileInput{
+		Request: request,
+		Query:   provider.CapabilityQuery{EndpointID: "openai-fixture", Family: provider.FamilyOpenAIResponses, Model: request.Model},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := loadContractResponseFixture(t, "openai-responses", "response.completed.json")
+	lifted, err := liftResponse(call, &response, "req-openai-fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,25 +49,5 @@ func TestSemanticFixtureMatchesLiftedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := readFixture(t, "response.semantic.json")
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("semantic fixture mismatch\n got: %s\nwant: %s", gotCanonical, wantCanonical)
-	}
-}
-
-func readFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile("testdata/contracts/openai-responses/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	assertCanonicalFixtureJSON(t, got, "openai-responses", "response.semantic.json")
 }
