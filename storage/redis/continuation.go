@@ -141,7 +141,11 @@ func (store *ContinuationStore) Get(ctx context.Context, handle state.Handle) (s
 	data, err := store.reader.Get(ctx, index)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return state.Continuation{}, state.ErrNotFound
+			// A handle index without its immutable record is not a normal miss:
+			// the index and record share one expiry and must disappear together.
+			// Treat this as unavailable persisted state rather than allowing a
+			// caller to mistake corruption or partial retention for expiration.
+			return state.Continuation{}, ErrUnavailable
 		}
 		return state.Continuation{}, resolveStateError(ctx, err)
 	}

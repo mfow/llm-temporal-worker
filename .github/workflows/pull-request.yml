@@ -98,6 +98,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -race ./...
 
+      - name: Run live Redis conformance
+        if: steps.go.outputs.present == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        run: make readiness-integration
+
       - name: Build worker
         if: steps.go.outputs.present == 'true'
         run: go build ./...
