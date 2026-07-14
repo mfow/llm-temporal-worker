@@ -9,7 +9,8 @@ retry. Its responsibilities are:
 1. declare capabilities for an endpoint/model/service-class tuple;
 2. lower one normalized semantic request to SDK parameter types;
 3. invoke the SDK exactly once with the supplied context and dispatch observer;
-4. lift a response or stream into semantic output and typed usage;
+4. lift a response into semantic output and typed usage (and, when a runtime
+   stream port is enabled, lift provider events through that port);
 5. classify the provider result without deciding whether another route runs.
 
 Every SDK client is constructed with automatic retries disabled. This prevents
@@ -47,6 +48,14 @@ It never crosses the adapter package boundary or enters Temporal history.
 `CallMetadata` contains the redacted facts needed to validate the compiled call,
 including schema digests, estimated bytes, capability version, provider tier
 value, and whether opaque state is required in the response.
+
+The `Adapter` interface above is the one-shot compile/invoke boundary. Provider
+packages may also expose `DecodeStream` helpers, but those helpers only parse a
+provider wire stream into neutral events. Decoder fixtures and fuzz tests prove
+wire-fragmentation and event-mapping behavior; they do not prove that an
+adapter, engine, or Activity can dispatch and consume a production stream.
+`FeatureStreaming` must therefore be read together with the runtime stream
+port and lifecycle integration available for the deployment.
 
 ## Capability model
 
@@ -179,10 +188,20 @@ type OutputFinished struct{ Index int; Item llm.Item }
 type StreamCompleted struct{ Response llm.Response }
 ```
 
-The decoder validates event order, stable indexes, UTF-8 boundaries, tool JSON
-completion, terminal usage, and exactly one terminal event. The Activity does
-not expose a network stream through Temporal; it consumes events, heartbeats
-redacted progress, and returns the final response.
+The wire decoder reconstructs SSE framing, rejects malformed or truncated
+records, maps supported provider events, and enforces provider-specific event
+ordering and terminal markers. `provider.Assembler` then enforces the neutral
+output lifecycle (including sequential starts, finished outputs, valid UTF-8
+text/tool fragments, and complete tool JSON when it assembles an item) before
+returning the final response. Usage updates are retained when a provider sends
+them, but their absence is not treated as a terminal-stream guarantee.
+
+Streaming is an end-to-end capability only when a runtime stream port connects
+the adapter to the engine and Activity lifecycle. That integration must prove
+dispatch, cancellation, backpressure, redacted heartbeats, and finalization;
+decoder-only coverage is insufficient. The Temporal boundary still returns a
+final response rather than exposing a provider network stream or raw provider
+events in history.
 
 ## Error decoding
 
@@ -207,7 +226,10 @@ An adapter is not registered until it has:
 - request and response tier fixtures for every public service-class mapping;
 - errors before write, after possible write, rate limit, auth, invalid input,
   timeout, cancellation, and malformed response;
-- stream fixtures fragmented at every byte boundary for representative events;
+- stream decoder fixtures fragmented at every byte boundary for representative
+  events;
+- end-to-end stream-port and Activity lifecycle tests before claiming production
+  streaming support;
 - strict rejection fixtures for every unsupported/lossy feature;
 - provider-state byte-preservation and continuation-pinning tests;
 - a redacted fixture provenance record tied to an upstream API/SDK version.
