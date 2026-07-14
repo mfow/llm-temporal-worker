@@ -94,8 +94,19 @@ func (activities *Activities) completeGenerate(ctx context.Context, response llm
 	return result, nil
 }
 
+// generateTemporal keeps the Temporal Activity result absent when Generate
+// returns an error. The SDK serializes any non-nil result before propagating
+// the error, and a zero GenerateResponse is not a valid durable response.
+func (activities *Activities) generateTemporal(ctx context.Context, payload GenerateRequest) (*GenerateResponse, error) {
+	result, err := activities.Generate(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // Register installs the exact versioned Activity name rather than relying on
 // a Go method name that could change during a refactor.
 func (activities *Activities) Register(registry worker.ActivityRegistry) {
-	registry.RegisterActivityWithOptions(activities.Generate, sdkactivity.RegisterOptions{Name: GenerateActivityName})
+	registry.RegisterActivityWithOptions(activities.generateTemporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 }
