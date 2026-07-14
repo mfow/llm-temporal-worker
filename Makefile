@@ -181,6 +181,16 @@ compose-live-integration:
 	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
 	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
 	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 180; then \
+		echo "compose-live-integration Temporal healthcheck output (redacted):" >&2; \
+		temporal_container="$$( $(COMPOSE) ps -q temporal 2>/dev/null || true )"; \
+		if [ -n "$$temporal_container" ]; then \
+			docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' "$$temporal_container" 2>&1 | \
+				LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
+				LLMTW_LOG_REDACT_POSTGRES_PASSWORD="$$postgres_password" \
+				LLMTW_LOG_REDACT_MOCK_API_KEY="$$mock_api_key" \
+				LLMTW_LOG_REDACT_CONTINUATION_HMAC="$$continuation_hmac" \
+				sh ./scripts/redact-compose-logs.sh >&2 || true; \
+		fi; \
 		echo "compose-live-integration service logs (redacted; service output only; no environment inspection):" >&2; \
 		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
 			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \

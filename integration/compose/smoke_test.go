@@ -161,7 +161,7 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 	}
 }
 
-func TestComposeTemporalHealthcheckUsesBundledSemanticReadiness(t *testing.T) {
+func TestComposeTemporalHealthcheckUsesEntrypointBoundSemanticReadiness(t *testing.T) {
 	document, _ := readCompose(t)
 	temporal, ok := document.Services["temporal"]
 	if !ok {
@@ -177,7 +177,7 @@ func TestComposeTemporalHealthcheckUsesBundledSemanticReadiness(t *testing.T) {
 	if got, want := healthcheckTest.Content[0].Value, "CMD-SHELL"; got != want {
 		t.Fatalf("Temporal healthcheck mode = %q, want %q", got, want)
 	}
-	if got, want := healthcheckTest.Content[1].Value, "temporal operator cluster health | grep -q SERVING"; got != want {
+	if got, want := healthcheckTest.Content[1].Value, `TEMPORAL_ADDRESS="$$(getent hosts "$$(hostname)" | awk '{print $$1;}'):7233" temporal operator cluster health | grep -q SERVING`; got != want {
 		t.Fatalf("Temporal healthcheck command = %q, want %q", got, want)
 	}
 }
@@ -422,6 +422,32 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 	} {
 		if strings.Contains(string(data), fixedPort) {
 			t.Errorf("compose live integration target retains fixed host port %q", fixedPort)
+		}
+	}
+}
+
+func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "compose-live-integration Temporal healthcheck output (redacted):"
+	start := strings.Index(string(data), marker)
+	if start < 0 {
+		t.Fatalf("compose live integration target is missing %q", marker)
+	}
+	diagnostics := string(data)[start:]
+	for _, required := range []string{
+		"$$( $(COMPOSE) ps -q temporal 2>/dev/null || true )",
+		"docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}'",
+		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
+		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD=\"$$postgres_password\"",
+		"LLMTW_LOG_REDACT_MOCK_API_KEY=\"$$mock_api_key\"",
+		"LLMTW_LOG_REDACT_CONTINUATION_HMAC=\"$$continuation_hmac\"",
+		"sh ./scripts/redact-compose-logs.sh",
+	} {
+		if !strings.Contains(diagnostics, required) {
+			t.Errorf("Temporal healthcheck diagnostics are missing %q", required)
 		}
 	}
 }
