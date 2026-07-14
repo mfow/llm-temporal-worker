@@ -149,7 +149,9 @@ Fuzz targets include:
 - budget window boundary and retry-after calculation;
 - continuation handle parse/MAC/tenant binding;
 - Redis Function argument codec;
-- response aggregation under arbitrary event sequences.
+- response aggregation under bounded arbitrary event sequences, each ending in
+  either a semantic terminal result, a terminal error, or an explicit
+  state-machine rejection.
 
 Seed corpora contain every governed golden fixture plus minimized past failures.
 Pull requests replay all checked-in seeds deterministically and verify the
