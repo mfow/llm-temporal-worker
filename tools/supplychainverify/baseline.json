@@ -97,6 +97,12 @@
       "source": "https://github.com/open-telemetry/opentelemetry-go"
     },
     {
+      "path": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
+      "version": "v1.43.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/open-telemetry/opentelemetry-go"
+    },
+    {
       "path": "go.opentelemetry.io/otel/sdk",
       "version": "v1.43.0",
       "license": "Apache-2.0",

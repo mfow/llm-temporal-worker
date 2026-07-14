@@ -38,6 +38,7 @@ the `llm` package.
 | `github.com/prometheus/client_model` | `v0.6.2` | Prometheus metric model types used by tests and exposition boundaries | Apache-2.0; [official repository](https://github.com/prometheus/client_model) |
 | `github.com/prometheus/common` | `v0.70.0` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
 | `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.43.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.43.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
 
 The versions in this table match the direct requirements in `go.mod` on the
