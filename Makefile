@@ -7,7 +7,7 @@ READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e8
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 READINESS_REDIS_PORT ?= 16379
 
-.PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke kustomize-verify verify
+.PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke kustomize-verify adapter-contracts verify
 
 fmt-check:
 	@test -z "$$(gofmt -l .)"
@@ -77,5 +77,8 @@ kustomize-verify:
 	}
 	$(GO) test ./integration/kubernetes
 	KUBECTL="$(KUBECTL)" ./deploy/verify.sh
+
+adapter-contracts:
+	$(GO) test -v ./llm/provider/contracttest ./llm/provider/...
 
 verify: fmt-check schema-verify docs-verify vet test build

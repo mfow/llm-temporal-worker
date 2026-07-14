@@ -1,0 +1,19 @@
+profile: anthropic-direct
+upstream_url: https://docs.anthropic.com/en/api/messages
+upstream_date: "2026-07-14"
+sdk_version: github.com/anthropics/anthropic-sdk-go@v1.57.0
+provenance: synthetic
+redactions:
+  - credentials
+  - unstable provider identifiers
+capability_facts:
+  usage: supported
+  streaming: supported
+  strict_loss: pending
+  best_effort: pending
+  service_class: supported
+  continuation: supported
+generated_field_exemptions:
+  - provider.request_id
+  - provider.response_id
+  - provider.created_at

@@ -1,7 +1,9 @@
 version: 1
+id: exa-chat
 provider: exa
 family: chat
-profile: exa-chat-v1
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     supported: false
@@ -13,6 +15,7 @@ service_classes:
   reported_cost:
     cost_field: costDollars.total
     currency: USD
-fixtures:
-  - request.wire.json
-  - response.completed.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json

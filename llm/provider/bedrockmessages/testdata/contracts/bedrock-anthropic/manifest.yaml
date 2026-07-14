@@ -1,7 +1,9 @@
 version: 1
+id: bedrock-anthropic
 provider: bedrock
 family: messages
-profile: bedrock-anthropic
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     requested_tier: flex
@@ -12,7 +14,10 @@ service_classes:
   priority:
     requested_tier: priority
     actual_tier: priority
-fixtures:
-  - request.wire.json
-  - response.completed.json
-  - error.access-denied.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json
+  - id: classified-error
+    artifacts:
+      wire: error.access-denied.json

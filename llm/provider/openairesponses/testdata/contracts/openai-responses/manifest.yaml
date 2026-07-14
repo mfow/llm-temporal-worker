@@ -1,6 +1,9 @@
 version: 1
+id: openai-responses
 provider: openai
 family: responses
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     requested_tier: flex
@@ -16,5 +19,11 @@ service_classes:
     actual_tier: default
   unknown_tier:
     actual_tier: scale
-fixtures:
-  - response.completed.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json
+  - id: response
+    artifacts:
+      wire: response.completed.json
+      semantic: response.semantic.json

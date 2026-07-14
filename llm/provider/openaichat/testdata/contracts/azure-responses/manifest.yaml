@@ -1,7 +1,9 @@
 version: 1
+id: azure-responses
 provider: azure_openai
 family: chat
-profile: deployment-specific
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     supported: false
@@ -16,6 +18,7 @@ service_classes:
     actual_tier: default
   unknown_tier:
     actual_tier: scale
-fixtures:
-  - request.wire.json
-  - response.completed.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json

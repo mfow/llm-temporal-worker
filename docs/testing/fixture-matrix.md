@@ -7,6 +7,7 @@ The initial fixture suite defines one exact test profile for each path:
 | ID | Family | Transport/client | Purpose |
 | --- | --- | --- | --- |
 | `openai-responses` | OpenAI Responses | official OpenAI Go SDK | native typed Responses contract |
+| `openai-chat` | OpenAI-compatible Chat | official OpenAI Go SDK | common Chat fixture contract |
 | `azure-responses` | Azure OpenAI Responses | official OpenAI Go SDK with Azure options | deployment-specific compatibility/tier |
 | `openrouter-chat` | OpenAI-compatible Chat | official OpenAI Go SDK with pinned OpenRouter endpoint | provider routing controls and compatible differences |
 | `exa-chat` | OpenAI-compatible Chat | official OpenAI Go SDK with Exa endpoint | answer/search response and reported cost |
@@ -16,6 +17,49 @@ The initial fixture suite defines one exact test profile for each path:
 
 An optional compatible endpoint copies `openrouter-chat`'s common suite but must
 add its own profile directory and difference fixtures before registration.
+
+## Manifest governance and staged coverage
+
+Every profile directory owns a strict `manifest.yaml` and `metadata.yaml`.
+The manifest has a stable profile ID, provider/family, coverage state, service
+class facts, and only code-owned case IDs. Each listed case explicitly names
+its local semantic, wire, or event artifact; a missing or traversal path fails
+the offline adapter-contract gate. `metadata.yaml` records the profile ID,
+HTTPS source URL, ISO-8601 source review date, SDK version, provenance,
+redactions, capability facts, and the narrow list of generated fields that may
+be ignored in equivalence checks.
+
+The shared validator reports the two coverage states separately:
+
+| State | Gate behavior | Meaning |
+| --- | --- | --- |
+| `bootstrap` | validates schema, declared artifacts, source metadata, and raw fixture-byte redaction | a structurally governed profile; it does not claim full-matrix coverage |
+| `enforced` | also requires every code-owned case applicable to its capability facts | a profile whose dedicated coverage task has supplied its complete fixture matrix |
+
+All currently checked-in production profiles are `bootstrap`. A profile must
+remain there until its dedicated coverage task adds the required semantic
+request, captured wire request, response, usage/cost, error, stream,
+loss/diagnostic, service-class, continuation, and security fixtures. The
+registry is intentionally code-owned so a future semantic field or capability
+cannot silently escape an enforced profile's fixture matrix.
+
+Bootstrap metadata can use `pending` while a capability is still being
+researched. An enforced profile must instead declare every registry capability
+as `native`, `emulated`, `supported`, `unsupported`, or `not_applicable`; this
+prevents an omitted or undecided fact from silently shrinking its required
+matrix.
+
+Run the offline gate with:
+
+```sh
+make adapter-contracts
+```
+
+It prints bootstrap and enforced profile IDs independently, never calls a
+provider, and never rewrites a fixture. The raw-byte scan covers every file
+under each `testdata/contracts` root, including shared event files that are not
+yet attributed to an enforced profile. Failure output contains only a clean
+repository-relative fixture path, never its bytes.
 
 ## Common semantic cases
 
@@ -132,9 +176,9 @@ llm/provider/anthropicmessages/testdata/contracts/anthropic-aws/
 llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic/
 ```
 
-Each listed profile has a `manifest.yaml` listing its required matrix cases.
+Each listed profile has a `manifest.yaml` listing its declared matrix cases.
 Error fixtures live beside the provider profile that emits them, and security
-cases are package tests rather than a root-level fixture directory. A test
-compares manifests to a code-owned required-case list, so adding a new semantic
-field or enum fails the owning adapter until support/rejection fixtures are
-added.
+cases are package tests rather than a root-level fixture directory. Bootstrap
+profiles are structurally checked now; enforced profiles are compared against
+the complete code-owned required-case list, so adding a new semantic field or
+enum fails every enforced adapter until support/rejection fixtures are added.
