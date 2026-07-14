@@ -1,0 +1,28 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-anthropic-direct-continuation",
+  "model": "claude-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "continue direct"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": {
+    "handle": "anthropic-messages:msg-continuation",
+    "endpoint_id": "anthropic-prod",
+    "model": "claude-contract",
+    "pinned": true,
+    "provider_state": [
+      {
+        "kind": "provider_state",
+        "provider": "anthropic",
+        "endpoint_family": "messages",
+        "media_type": "application/vnd.anthropic.content-block+json",
+        "opaque": "eyJ0eXBlIjoidGhpbmtpbmciLCJ0aGlua2luZyI6InByaXZhdGUiLCJzaWduYXR1cmUiOiJzaWctY29udGludWUifQ=="
+      }
+    ]
+  },
+  "extensions": {}
+}
