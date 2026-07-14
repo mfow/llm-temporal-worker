@@ -1,7 +1,9 @@
 version: 1
+id: openrouter-chat
 provider: openrouter
 family: chat
-profile: pinned-provider-order
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     supported: false
@@ -13,6 +15,7 @@ service_classes:
   provider_fallback_disabled:
     allow_fallbacks: false
     require_parameters: true
-fixtures:
-  - request.wire.json
-  - response.completed.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json

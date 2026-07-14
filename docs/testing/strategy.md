@@ -190,22 +190,48 @@ is inferred from HTTP status alone; the fixture declares dispatch/cost contract.
 
 ## Golden fixture governance
 
-Each fixture directory contains:
+Each profile directory contains a manifest and metadata file plus the local
+artifacts it currently declares:
 
 ```text
+manifest.yaml
+metadata.yaml
 request.semantic.json
 request.wire.json
 response.wire.json
 response.semantic.json
-events.wire
-events.semantic.jsonl
-metadata.yaml
 ```
 
-`metadata.yaml` records profile ID, SDK version, upstream contract URL/date,
-capture/synthetic provenance, redactions, expected capability, and tier/cost
-facts. Fixtures contain no real credentials, personal content, account IDs, or
-unstable timestamps. A redaction test scans both decoded and raw bytes.
+Shared stream fixtures may live once at the parent `testdata/contracts` root:
+
+```text
+events.wire
+events.semantic.jsonl
+```
+
+`metadata.yaml` records profile ID, SDK version, HTTPS upstream contract URL,
+source review date, capture/synthetic provenance, redactions, capability
+facts, and generated-field exemptions. Fixtures contain no real credentials,
+personal content, account IDs, or unstable timestamps. The adapter-contract
+harness strictly parses manifests and metadata, verifies declared files stay
+within the profile, and scans every raw file below `testdata/contracts` for
+credential-like bytes. It only reports clean repository-relative paths.
+
+`coverage: bootstrap` means the profile is structurally governed but is not a
+claim of complete adapter coverage. `coverage: enforced` activates the full
+code-owned case matrix selected by capability facts. No production profile is
+enforced until its dedicated fixture task supplies every required case. The
+offline release target makes that distinction visible:
+
+```sh
+make adapter-contracts
+```
+
+For each enforced profile, its adapter fixture test uses the shared
+`contracttest.VerifySemanticRoundTrip` helper for reversible semantic
+conversion and `contracttest.VerifyStreamAssemblyEquivalent` for
+stream/non-stream response assembly. Both helpers compare JSON after removing
+only that profile's explicit generated-field exemptions.
 
 Golden updates require an intentional `-update` test flag locally, a human
 reviewable diff, and source-contract update. Normal tests never rewrite files.

@@ -1,7 +1,9 @@
 version: 1
+id: anthropic-direct
 provider: anthropic
 family: messages
-profile: direct-messages
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     supported: false
@@ -11,12 +13,14 @@ service_classes:
   priority:
     requested_tier: auto
     actual_tier: priority
-fixtures:
-  - request.wire.json
-  - request.multimodal-tools.json
-  - request.media-rejection.json
-  - response.completed.json
-  - response.thinking-tool.json
-  - response.semantic.json
-  - error.rate-limit.json
-  - error.authentication.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json
+  - id: response
+    artifacts:
+      wire: response.completed.json
+      semantic: response.semantic.json
+  - id: classified-error
+    artifacts:
+      wire: error.rate-limit.json

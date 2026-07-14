@@ -1,7 +1,9 @@
 version: 1
+id: anthropic-aws
 provider: anthropic
 family: messages
-profile: anthropic-aws
+coverage: bootstrap
+metadata: metadata.yaml
 service_classes:
   economy:
     supported: false
@@ -11,7 +13,10 @@ service_classes:
   priority:
     requested_tier: auto
     actual_tier: priority
-fixtures:
-  - request.wire.json
-  - response.completed.json
-  - error.authentication.json
+cases:
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json
+  - id: classified-error
+    artifacts:
+      wire: error.authentication.json
