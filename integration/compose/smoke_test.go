@@ -102,3 +102,50 @@ func TestComposeFixtureIsOfflineSafe(t *testing.T) {
 		t.Error("continuation key must come from an explicit local secret-file override")
 	}
 }
+
+func TestWorkerComposeProvisionsAdmissionFunctionBeforeStart(t *testing.T) {
+	document, raw := readCompose(t)
+	provisioner, ok := document.Services["redis-function-provisioner"]
+	if !ok {
+		t.Fatal("Compose fixture is missing redis Function provisioner")
+	}
+	if len(provisioner.Profiles) != 1 || provisioner.Profiles[0] != "worker" {
+		t.Fatalf("provisioner profiles = %#v, want [worker]", provisioner.Profiles)
+	}
+	if _, ok := provisioner.DependsOn["redis"]; !ok {
+		t.Fatal("redis Function provisioner does not wait for Redis")
+	}
+	worker := document.Services["worker"]
+	dependency, ok := worker.DependsOn["redis-function-provisioner"]
+	if !ok {
+		t.Fatal("worker does not wait for Redis Function provisioning")
+	}
+	var condition struct {
+		Condition string `yaml:"condition"`
+	}
+	if err := dependency.Decode(&condition); err != nil {
+		t.Fatalf("decode provisioner dependency: %v", err)
+	}
+	if condition.Condition != "service_completed_successfully" {
+		t.Fatalf("worker provisioner condition = %q, want service_completed_successfully", condition.Condition)
+	}
+	for _, required := range []string{
+		"FUNCTION LOAD",
+		"./storage/redis/functions/admission.lua",
+		"llmtw_admission_v1",
+		"admission_v1",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("Compose fixture is missing explicit Redis Function provisioning input %q", required)
+		}
+	}
+}
+
+func TestRedisFunctionProvisionerEscapesShellVariablesFromCompose(t *testing.T) {
+	_, raw := readCompose(t)
+	for _, variable := range []string{"library", "version", "source"} {
+		if !strings.Contains(string(raw), "$${"+variable+"}") {
+			t.Errorf("provisioner does not escape shell variable %q from Compose interpolation", variable)
+		}
+	}
+}

@@ -137,11 +137,17 @@ type Options struct {
 	InitialConfig []byte
 	Builder       SnapshotBuilder
 	Clients       func(context.Context, *config.Snapshot) (ClientSet, error)
+	// Verify runs after replacement clients are constructed but before their
+	// snapshot is published. It is intentionally generic: runtime supplies
+	// dependency readiness checks without making the app package know about
+	// Redis, object storage, or HTTP handlers.
+	Verify func(context.Context, *config.Snapshot, ClientSet) error
 }
 
 type App struct {
 	builder SnapshotBuilder
 	clients func(context.Context, *config.Snapshot) (ClientSet, error)
+	verify  func(context.Context, *config.Snapshot, ClientSet) error
 	current atomic.Pointer[RuntimeSnapshot]
 }
 
@@ -160,11 +166,18 @@ func New(ctx context.Context, options Options) (*App, error) {
 			return nil, fmt.Errorf("construct initial clients: %w", err)
 		}
 	}
+	if options.Verify != nil {
+		if err := options.Verify(ctx, snapshot, clients); err != nil {
+			closeUnpublishedClients(clients)
+			return nil, fmt.Errorf("verify initial dependencies: %w", err)
+		}
+	}
 	runtimeSnapshot, err := NewRuntimeSnapshot(snapshot, clients)
 	if err != nil {
+		closeUnpublishedClients(clients)
 		return nil, err
 	}
-	app := &App{builder: options.Builder, clients: options.Clients}
+	app := &App{builder: options.Builder, clients: options.Clients, verify: options.Verify}
 	app.current.Store(runtimeSnapshot)
 	return app, nil
 }
@@ -202,8 +215,15 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 			return fmt.Errorf("construct reloaded clients: %w", err)
 		}
 	}
+	if app.verify != nil {
+		if err := app.verify(ctx, nextConfig, clients); err != nil {
+			closeUnpublishedClients(clients)
+			return fmt.Errorf("verify reloaded dependencies: %w", err)
+		}
+	}
 	next, err := NewRuntimeSnapshot(nextConfig, clients)
 	if err != nil {
+		closeUnpublishedClients(clients)
 		return err
 	}
 	old := app.current.Swap(next)
@@ -214,6 +234,12 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 		return fmt.Errorf("drain previous snapshot: %w", err)
 	}
 	return nil
+}
+
+func closeUnpublishedClients(clients ClientSet) {
+	if clients != nil {
+		_ = clients.Close(context.Background())
+	}
 }
 
 func (app *App) Close(ctx context.Context) error {

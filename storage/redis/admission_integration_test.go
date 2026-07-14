@@ -12,7 +12,8 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 )
 
-// Run with a pinned Redis image and persistence profile, for example:
+// Run with a pinned Redis image and persistence profile whose admission
+// Function was deliberately provisioned before this test, for example:
 //
 //	LLMTW_REDIS_ADDR=127.0.0.1:6379 go test -tags=integration ./storage/redis -run Live
 //
@@ -32,7 +33,13 @@ func TestLiveRedisAdmission(t *testing.T) {
 	if err := client.Ping(ctx).Err(); err != nil {
 		t.Fatalf("Redis ping: %v", err)
 	}
-	store, err := NewAdmissionStore(AdmissionOptions{Client: client, Keys: testKeyOptions(), MaxRecordBytes: 256 << 10})
+	store, err := NewAdmissionStore(AdmissionOptions{
+		Client:          client,
+		Mode:            AdmissionModeFunction,
+		FunctionVersion: AdmissionFunctionVersion,
+		Keys:            testKeyOptions(),
+		MaxRecordBytes:  256 << 10,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

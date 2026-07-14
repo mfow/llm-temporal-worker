@@ -29,6 +29,37 @@ services:
       timeout: 3s
       retries: 24
 
+  # Runtime only verifies this immutable library. The worker profile starts
+  # this explicit local-stack provisioner after Redis is healthy and before
+  # the worker may poll. Existing libraries are deliberately left unchanged;
+  # readiness will fail closed if a retained local volume has the wrong code.
+  redis-function-provisioner:
+    profiles: [worker]
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      library=llmtw_admission_v1
+      version=admission_v1
+      source=/opt/llmtw/functions/admission.lua
+      if redis-cli -h redis --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
+        echo "Redis Function $${library} already exists; leaving it unchanged"
+        exit 0
+      fi
+      {
+        printf '%s\n' "#!lua name=$${library}"
+        printf '%s\n' "redis.register_function('$${version}', function(KEYS, ARGV)"
+        cat "$${source}"
+        printf '\nend)\n'
+      } | redis-cli -h redis -x FUNCTION LOAD
+    volumes:
+      - type: bind
+        source: ./storage/redis/functions/admission.lua
+        target: /opt/llmtw/functions/admission.lua
+        read_only: true
+
   provider-mock:
     build:
       context: ./deploy/local/provider-mock
@@ -59,6 +90,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-function-provisioner:
+        condition: service_completed_successfully
       provider-mock:
         condition: service_healthy
     environment:

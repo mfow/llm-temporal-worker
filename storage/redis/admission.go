@@ -25,18 +25,21 @@ var (
 // redis.ClusterClient both satisfy it). Invoker and Reader are injectable
 // seams for offline command/function harnesses.
 type AdmissionOptions struct {
-	Client         redis.Scripter
-	Reader         StringReader
-	Invoker        FunctionInvoker
-	Keys           KeyOptions
-	Clock          func() time.Time
-	MaxRecordBytes int
+	Client          redis.Scripter
+	Reader          StringReader
+	Invoker         FunctionInvoker
+	Mode            AdmissionMode
+	FunctionVersion string
+	Keys            KeyOptions
+	Clock           func() time.Time
+	MaxRecordBytes  int
 }
 
 type AdmissionStore struct {
 	space          keySpace
 	clock          func() time.Time
 	invoke         FunctionInvoker
+	function       string
 	reader         StringReader
 	maxRecordBytes int
 }
@@ -58,12 +61,21 @@ func NewAdmissionStore(options AdmissionOptions) (*AdmissionStore, error) {
 		options.MaxRecordBytes = 256 << 10
 	}
 	invoke := options.Invoker
+	function := options.FunctionVersion
+	if function == "" {
+		function = AdmissionFunctionVersion
+	}
 	if invoke == nil {
 		client, ok := options.Client.(redis.Scripter)
 		if !ok || client == nil {
 			return nil, fmt.Errorf("Redis Function client is required")
 		}
-		invoke = redisInvoker{client: client}
+		switch options.Mode {
+		case AdmissionModeFunction, AdmissionModeLua:
+		default:
+			return nil, fmt.Errorf("Redis admission mode must be function or lua")
+		}
+		invoke = redisInvoker{client: client, mode: options.Mode, version: function}
 	}
 	reader := options.Reader
 	if reader == nil {
@@ -75,7 +87,7 @@ func NewAdmissionStore(options AdmissionOptions) (*AdmissionStore, error) {
 		}
 		reader = redisReader{client: client}
 	}
-	return &AdmissionStore{space: space, clock: options.Clock, invoke: invoke, reader: reader, maxRecordBytes: options.MaxRecordBytes}, nil
+	return &AdmissionStore{space: space, clock: options.Clock, invoke: invoke, function: function, reader: reader, maxRecordBytes: options.MaxRecordBytes}, nil
 }
 
 func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginRequest) (admission.BeginResult, error) {
@@ -101,7 +113,7 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 	for index, reservation := range request.Reservations {
 		keys[index+3] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
 	}
-	result, err := store.invoke.Run(ctx, AdmissionFunctionVersion, keys, "begin", string(payload), strconv.FormatInt(int64(ttl), 10))
+	result, err := store.invoke.Run(ctx, store.function, keys, "begin", string(payload), strconv.FormatInt(int64(ttl), 10))
 	if err != nil {
 		return admission.BeginResult{}, resolveMutationError(ctx, err)
 	}
@@ -145,7 +157,7 @@ func (store *AdmissionStore) MarkDispatching(ctx context.Context, request admiss
 		return err
 	}
 	keys := []string{store.space.operationIndexKey(request.OperationID), operationKey}
-	result, err := store.invoke.Run(ctx, AdmissionFunctionVersion, keys, "mark_dispatching", request.DispatchToken, string(attempt), request.LeaseUntil.Format(time.RFC3339Nano), "0")
+	result, err := store.invoke.Run(ctx, store.function, keys, "mark_dispatching", request.DispatchToken, string(attempt), request.LeaseUntil.Format(time.RFC3339Nano), "0")
 	if err != nil {
 		return resolveMutationError(ctx, err)
 	}
@@ -198,7 +210,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 		keys[base+index] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
 	}
 	ttl := ttlSeconds(store.clock(), request.ExpiresAt)
-	result, err := store.invoke.Run(ctx, AdmissionFunctionVersion, keys, "continue", request.DispatchToken, string(outcome), strconv.FormatInt(int64(request.Remaining), 10), string(reservations), request.LeaseUntil.Format(time.RFC3339Nano), request.ExpiresAt.Format(time.RFC3339Nano), strconv.FormatInt(int64(ttl), 10))
+	result, err := store.invoke.Run(ctx, store.function, keys, "continue", request.DispatchToken, string(outcome), strconv.FormatInt(int64(request.Remaining), 10), string(reservations), request.LeaseUntil.Format(time.RFC3339Nano), request.ExpiresAt.Format(time.RFC3339Nano), strconv.FormatInt(int64(ttl), 10))
 	if err != nil {
 		return admission.ContinueResult{}, resolveMutationError(ctx, err)
 	}
@@ -256,7 +268,7 @@ func (store *AdmissionStore) Complete(ctx context.Context, request admission.Com
 	for index, reservation := range operation.Reservations {
 		keys[index+2] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
 	}
-	result, err := store.invoke.Run(ctx, AdmissionFunctionVersion, keys, "complete", request.DispatchToken, strconv.FormatInt(int64(request.Actual), 10), string(resultRef), string(attempt), "0")
+	result, err := store.invoke.Run(ctx, store.function, keys, "complete", request.DispatchToken, strconv.FormatInt(int64(request.Actual), 10), string(resultRef), string(attempt), "0")
 	if err != nil {
 		return resolveMutationError(ctx, err)
 	}
@@ -292,7 +304,7 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 	for index, reservation := range operation.Reservations {
 		keys[index+2] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
 	}
-	result, err := store.invoke.Run(ctx, AdmissionFunctionVersion, keys, "fail", request.DispatchToken, string(request.Certainty), strconv.FormatInt(int64(request.Incurred), 10), string(attempt), strconv.FormatInt(int64(0), 10), "0")
+	result, err := store.invoke.Run(ctx, store.function, keys, "fail", request.DispatchToken, string(request.Certainty), strconv.FormatInt(int64(request.Incurred), 10), string(attempt), strconv.FormatInt(int64(0), 10), "0")
 	if err != nil {
 		return resolveMutationError(ctx, err)
 	}

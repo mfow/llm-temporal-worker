@@ -88,11 +88,13 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	HealthAddress       string   `yaml:"health_address" json:"health_address"`
-	MetricsAddress      string   `yaml:"metrics_address" json:"metrics_address"`
-	ShutdownTimeout     Duration `yaml:"shutdown_timeout" json:"shutdown_timeout"`
-	FinalizationTimeout Duration `yaml:"finalization_timeout" json:"finalization_timeout"`
-	InlinePayloadBytes  int      `yaml:"inline_payload_bytes" json:"inline_payload_bytes"`
+	HealthAddress          string   `yaml:"health_address" json:"health_address"`
+	MetricsAddress         string   `yaml:"metrics_address" json:"metrics_address"`
+	ShutdownTimeout        Duration `yaml:"shutdown_timeout" json:"shutdown_timeout"`
+	FinalizationTimeout    Duration `yaml:"finalization_timeout" json:"finalization_timeout"`
+	ReadinessProbeInterval Duration `yaml:"readiness_probe_interval" json:"readiness_probe_interval"`
+	ReadinessProbeTimeout  Duration `yaml:"readiness_probe_timeout" json:"readiness_probe_timeout"`
+	InlinePayloadBytes     int      `yaml:"inline_payload_bytes" json:"inline_payload_bytes"`
 }
 
 type TemporalConfig struct {
@@ -131,7 +133,10 @@ type RedisConfig struct {
 	Password            SecretRef `yaml:"password" json:"password"`
 	TLS                 TLSConfig `yaml:"tls" json:"tls"`
 	AdmissionHashTag    string    `yaml:"admission_hash_tag" json:"admission_hash_tag"`
+	AdmissionMode       string    `yaml:"admission_mode" json:"admission_mode"`
 	FunctionLibrary     string    `yaml:"function_library" json:"function_library"`
+	AdmissionVersion    string    `yaml:"admission_version" json:"admission_version"`
+	AdmissionDigest     string    `yaml:"admission_digest" json:"admission_digest"`
 	MaxConnections      int       `yaml:"max_connections" json:"max_connections"`
 	DialTimeout         Duration  `yaml:"dial_timeout" json:"dial_timeout"`
 	OperationTimeout    Duration  `yaml:"operation_timeout" json:"operation_timeout"`

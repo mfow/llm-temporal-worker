@@ -76,17 +76,22 @@ by the workload-identity overlays.
 | Endpoint | Meaning | Failure effect |
 | --- | --- | --- |
 | `/health/live` | event loop and internal deadlock sentinel responsive | restart pod |
-| `/health/ready` | valid snapshot and Temporal worker controller started | remove from service/polling |
+| `/health/ready` | valid snapshot, worker polling, required state stores healthy | remove from service/polling |
 | `/metrics` | Prometheus exposition | none |
 
-The current readiness signal is lifecycle-driven: the runtime starts false,
-sets it true after the Temporal worker starts, and sets it false before worker
-shutdown. It does not yet perform a separate Redis/blob/persistence probe or
-revoke readiness after a dependency fails. The v1 completion plan calls for
-dependency-aware readiness; until that gate is implemented, `/health/ready`
-must not be treated as proof that every required state operation will succeed.
-Provider route eligibility is evaluated per request by the planner and is not a
-current readiness check.
+Provider endpoints are excluded from readiness because one route can be down
+while another is valid. A configuration with zero eligible routes is not ready.
+
+The runtime's required state checks are bounded by the configured readiness
+timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
+configured AOF/RDB policy, and expose the exact configured admission Function
+library/version/digest. The default Function path is provisioned by deployment
+automation before the worker starts; the runtime only verifies and calls it.
+The explicit Lua compatibility mode similarly requires a preloaded script and
+never falls back to loading or replacing code. S3 readiness uses `HeadBucket`
+against the configured bucket only, never a tenant key. A failed state check
+keeps liveness `200`, sets readiness `503`, and pauses Temporal polling;
+periodic checks resume polling only after every dependency has recovered.
 
 On termination, readiness fails immediately, polling stops, in-flight Activities
 receive the Temporal worker grace period, and telemetry flushes. Deployment
@@ -109,8 +114,7 @@ The internal application package supports an atomic reload API:
 3. resolve all references and compile catalogs;
 4. validate routes, cycles, capability mappings, prices, budgets, retention, and
    Redis numeric bounds;
-5. build clients; constructor failures reject the candidate snapshot (the
-   current production factory does not add a separate dependency probe);
+5. build clients and perform bounded Redis and bucket-only dependency checks;
 6. atomically publish the snapshot;
 7. drain old clients after their captured Activities finish.
 
@@ -189,11 +193,16 @@ The offline release checks are available without starting this stack:
 
 ```sh
 make integration
+make readiness-integration
 make compose-smoke
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
-The Compose check only validates the model and local fixture invariants. It
+The readiness integration target starts one digest-pinned local Redis instance,
+explicitly provisions the test Function, then stops and restores Redis while a
+worker is running. It proves liveness remains `200`, readiness transitions
+`200` to `503` to `200`, polling resumes only after recovery, and no provider
+call is made. The Compose check only validates the model and local fixture invariants. It
 does not create containers; `LLMTW_COMPOSE_LIVE=1` is a fail-closed guard for
 operators who need the separately authorized live runbook. The Kubernetes
 check renders every overlay with `kubectl kustomize` and never contacts a

@@ -38,11 +38,14 @@ type WorkerOptions struct {
 
 type TemporalWorker struct {
 	controller WorkerController
+	build      func() (WorkerController, error)
 	health     *httpserver.HealthState
 	metrics    *observability.Metrics
 
 	mu       sync.Mutex
 	started  bool
+	starting bool
+	paused   bool
 	stopping bool
 }
 
@@ -65,20 +68,27 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 	if options.Factory == nil {
 		options.Factory = defaultWorkerFactory
 	}
-	controller, registry, err := options.Factory(options.Client, options.TaskQueue, sdkworker.Options{
-		Identity:                           options.Identity,
-		MaxConcurrentActivityExecutionSize: options.MaxConcurrentActivities,
-		MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
-		WorkerStopTimeout:                  options.GracefulStopTimeout,
-	})
+	build := func() (WorkerController, error) {
+		controller, registry, err := options.Factory(options.Client, options.TaskQueue, sdkworker.Options{
+			Identity:                           options.Identity,
+			MaxConcurrentActivityExecutionSize: options.MaxConcurrentActivities,
+			MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
+			WorkerStopTimeout:                  options.GracefulStopTimeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("construct Temporal worker: %w", err)
+		}
+		if controller == nil || registry == nil {
+			return nil, fmt.Errorf("Temporal worker factory returned incomplete worker")
+		}
+		options.Activities.Register(registry)
+		return controller, nil
+	}
+	controller, err := build()
 	if err != nil {
-		return nil, fmt.Errorf("construct Temporal worker: %w", err)
+		return nil, err
 	}
-	if controller == nil || registry == nil {
-		return nil, fmt.Errorf("Temporal worker factory returned incomplete worker")
-	}
-	options.Activities.Register(registry)
-	return &TemporalWorker{controller: controller, health: options.Health, metrics: options.Metrics}, nil
+	return &TemporalWorker{controller: controller, build: build, health: options.Health, metrics: options.Metrics}, nil
 }
 
 func defaultWorkerFactory(workflowClient client.Client, taskQueue string, options sdkworker.Options) (WorkerController, sdkworker.ActivityRegistry, error) {
@@ -90,7 +100,7 @@ func defaultWorkerFactory(workflowClient client.Client, taskQueue string, option
 }
 
 func (worker *TemporalWorker) Start() error {
-	if worker == nil || worker.controller == nil {
+	if worker == nil {
 		return fmt.Errorf("Temporal worker is not initialized")
 	}
 	worker.mu.Lock()
@@ -98,20 +108,104 @@ func (worker *TemporalWorker) Start() error {
 		worker.mu.Unlock()
 		return ErrWorkerStopping
 	}
-	if worker.started {
+	if worker.started || worker.starting {
 		worker.mu.Unlock()
 		return fmt.Errorf("Temporal worker is already started")
 	}
+	worker.paused = false
+	worker.starting = true
+	controller := worker.controller
 	worker.mu.Unlock()
+	return worker.startController(controller)
+}
 
-	if err := worker.controller.Start(); err != nil {
-		worker.health.SetReady(false)
-		return fmt.Errorf("start Temporal worker: %w", err)
+// Pause stops Temporal polling without making the worker permanently
+// unavailable. Resume creates and registers a fresh controller because a
+// stopped Temporal SDK worker is not reusable.
+func (worker *TemporalWorker) Pause() {
+	if worker == nil {
+		return
+	}
+	worker.health.SetReady(false)
+	if worker.metrics != nil {
+		worker.metrics.SetWorkerPolling(false)
 	}
 	worker.mu.Lock()
 	if worker.stopping {
 		worker.mu.Unlock()
-		worker.controller.Stop()
+		return
+	}
+	worker.paused = true
+	if !worker.started {
+		worker.mu.Unlock()
+		return
+	}
+	controller := worker.controller
+	worker.controller = nil
+	worker.started = false
+	worker.mu.Unlock()
+	if controller != nil {
+		controller.Stop()
+	}
+}
+
+// Resume restarts Temporal polling after a dependency monitor has proved that
+// every required dependency is healthy again.
+func (worker *TemporalWorker) Resume() error {
+	if worker == nil {
+		return fmt.Errorf("Temporal worker is not initialized")
+	}
+	worker.mu.Lock()
+	if worker.stopping {
+		worker.mu.Unlock()
+		return ErrWorkerStopping
+	}
+	if worker.started || worker.starting {
+		worker.mu.Unlock()
+		return fmt.Errorf("Temporal worker is already started")
+	}
+	worker.paused = false
+	worker.starting = true
+	controller := worker.controller
+	worker.mu.Unlock()
+	return worker.startController(controller)
+}
+
+func (worker *TemporalWorker) startController(controller WorkerController) error {
+	if controller == nil {
+		if worker.build == nil {
+			worker.finishStartFailure()
+			return fmt.Errorf("Temporal worker is not initialized")
+		}
+		var err error
+		controller, err = worker.build()
+		if err != nil {
+			worker.finishStartFailure()
+			return err
+		}
+		worker.mu.Lock()
+		if worker.stopping {
+			worker.starting = false
+			worker.mu.Unlock()
+			return ErrWorkerStopping
+		}
+		worker.controller = controller
+		worker.mu.Unlock()
+	}
+	if err := controller.Start(); err != nil {
+		worker.finishStartFailure()
+		return fmt.Errorf("start Temporal worker: %w", err)
+	}
+	worker.mu.Lock()
+	worker.starting = false
+	if worker.stopping || worker.paused {
+		paused := worker.paused
+		worker.controller = nil
+		worker.mu.Unlock()
+		controller.Stop()
+		if paused {
+			return nil
+		}
 		return ErrWorkerStopping
 	}
 	worker.started = true
@@ -123,10 +217,20 @@ func (worker *TemporalWorker) Start() error {
 	return nil
 }
 
+func (worker *TemporalWorker) finishStartFailure() {
+	worker.health.SetReady(false)
+	if worker.metrics != nil {
+		worker.metrics.SetWorkerPolling(false)
+	}
+	worker.mu.Lock()
+	worker.starting = false
+	worker.mu.Unlock()
+}
+
 // Stop turns readiness off before stopping pollers. The Temporal SDK owns the
 // configured graceful wait for in-flight Activity calls.
 func (worker *TemporalWorker) Stop() {
-	if worker == nil || worker.controller == nil {
+	if worker == nil {
 		return
 	}
 	worker.health.SetReady(false)
@@ -140,9 +244,12 @@ func (worker *TemporalWorker) Stop() {
 	}
 	worker.stopping = true
 	started := worker.started
+	controller := worker.controller
+	worker.started = false
+	worker.controller = nil
 	worker.mu.Unlock()
-	if started {
-		worker.controller.Stop()
+	if started && controller != nil {
+		controller.Stop()
 	}
 }
 
