@@ -776,6 +776,19 @@ func TestProviderEgressTransportBoundsConnectAndReadTimeouts(t *testing.T) {
 	}
 }
 
+func TestNewProviderEgressHTTPClientUsesProductionPolicy(t *testing.T) {
+	client, err := NewProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint())
+	if err != nil {
+		t.Fatalf("NewProviderEgressHTTPClient() error = %v", err)
+	}
+	if _, ok := client.Transport.(*providerEgressRoundTripper); !ok {
+		t.Fatalf("client transport = %T, want production provider egress guard", client.Transport)
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("client does not retain the production redirect guard")
+	}
+}
+
 func providerEgressEndpoint() config.EndpointConfig {
 	return config.EndpointConfig{
 		BaseURL:       "https://provider.example/v1",

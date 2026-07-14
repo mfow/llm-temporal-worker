@@ -72,8 +72,11 @@ requires immutable action commits with readable major-version comments,
 read-only pull-request permissions with no provider credentials, and master
 push/manual triggers plus the exact 05:00 `Australia/Sydney` schedule. It also
 requires both workflows to run the same verification target before the Go
-release gates. This target validates only checked-in workflow definitions; it
-does not deploy, publish, or contact a provider.
+release gates and to compile the build-tagged provider contract harness with
+`go test -tags=live ./integration/live -run '^$'`. That compile-only step has
+no live gates or provider credentials; the master schedule runs the same safe
+check. This target validates only checked-in workflow definitions; it does not
+deploy, publish, or contact a provider.
 
 The release plan may list additional future gates; the commands above are the
 currently implemented targets. Both CI workflows call the same formatting
@@ -313,14 +316,22 @@ reviewable diff, and source-contract update. Normal tests never rewrite files.
 
 ## Optional live tests
 
-Live tests are build-tagged `live` and disabled by default. Each endpoint needs
-an explicit enable flag, credentials, allow-listed model, maximum microUSD, and
-test tenant. Tests use tiny deterministic prompts and no tools with side effects.
+Live provider contracts are build-tagged `live` and disabled by default. Their
+full safety model, pinned profile matrix, and protected-workflow handoff are in
+[Guarded live provider contracts](../reference/live-provider-contracts.md).
 
-They verify only facts mocks cannot: authentication, current wire acceptance,
-reported actual tier, request IDs, usage/cost, and continuation. A live failure
-does not auto-update capabilities or prices. Fork pull requests never receive
-credentials.
+The compile-only gate is safe in ordinary CI:
+
+```sh
+go test -tags=live ./integration/live -run '^$'
+```
+
+An invocation needs all three exact `"1"` gates: `LLMTW_LIVE_TESTS`,
+`LLMTW_LIVE_AUTHORIZED`, and the selected profile enable flag. Fork and normal
+pull-request workflows receive neither those gates nor live credentials;
+scheduled workflows must not invoke the suite. The protected manual release
+workflow runs one scoped profile with its allow-listed model, tenant, and cost
+ceiling. A live failure never auto-updates capabilities or prices.
 
 ## Coverage and mutation expectations
 

@@ -52,6 +52,7 @@ tests are the source of truth for behavior that has already been implemented.
 - [Catalog loader contract](reference/catalog-loaders.md)
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)
+- [Guarded live provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
 

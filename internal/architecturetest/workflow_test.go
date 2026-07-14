@@ -71,6 +71,23 @@ func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testin
 	}
 }
 
+func TestWorkflowCompileOnlyLiveHarnessIsUncredentialed(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		if !hasRunCommand(workflow, "go test -tags=live ./integration/live -run '^$'") {
+			t.Fatalf("%s does not compile the guarded live-provider harness", workflow.name)
+		}
+		lower := strings.ToLower(workflow.raw)
+		for _, forbidden := range []string{"llmtw_live_", "secrets."} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("%s combines the compile-only live harness with %q", workflow.name, forbidden)
+			}
+		}
+	}
+}
+
 func TestWorkflowActionsUseImmutablePinsWithVersionComments(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
