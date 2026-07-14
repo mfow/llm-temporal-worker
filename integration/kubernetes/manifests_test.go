@@ -1,0 +1,84 @@
+package kubernetes_test
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+}
+
+func readRepositoryFile(t *testing.T, path ...string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(append([]string{repositoryRoot(t)}, path...)...))
+	if err != nil {
+		t.Fatalf("read %s: %v", filepath.Join(path...), err)
+	}
+	return string(data)
+}
+
+func TestBaseManifestSecurityContract(t *testing.T) {
+	deployment := readRepositoryFile(t, "deploy", "kubernetes", "base", "deployment.yaml")
+	for _, marker := range []string{
+		"runAsNonRoot: true",
+		"readOnlyRootFilesystem: true",
+		"drop: [ALL]",
+		"type: RuntimeDefault",
+		"terminationGracePeriodSeconds: 90",
+		"path: /health/live",
+		"path: /health/ready",
+		"@sha256:",
+	} {
+		if !strings.Contains(deployment, marker) {
+			t.Errorf("base deployment is missing %q", marker)
+		}
+	}
+	if strings.Contains(deployment, "image: ") && regexp.MustCompile(`(?m)^\s*image:\s*[^\s@]+:[^\s@]+\s*$`).MatchString(deployment) {
+		t.Error("base deployment must not use a mutable image tag")
+	}
+
+	serviceAccount := readRepositoryFile(t, "deploy", "kubernetes", "base", "serviceaccount.yaml")
+	if !strings.Contains(serviceAccount, "automountServiceAccountToken: false") {
+		t.Error("base service account must disable token automount")
+	}
+
+	kustomization := readRepositoryFile(t, "deploy", "kubernetes", "base", "kustomization.yaml")
+	for _, resource := range []string{"deployment.yaml", "service.yaml", "networkpolicy.yaml", "poddisruptionbudget.yaml"} {
+		if !strings.Contains(kustomization, resource) {
+			t.Errorf("base kustomization is missing %s", resource)
+		}
+	}
+}
+
+func TestEveryOverlayReferencesBaseAndUsesAReviewablePatch(t *testing.T) {
+	overlays := map[string][]string{
+		"redis-tls":               {"deployment-patch.yaml"},
+		"aws-workload-identity":   {"deployment-patch.yaml", "serviceaccount-patch.yaml"},
+		"azure-workload-identity": {"deployment-patch.yaml", "serviceaccount-patch.yaml"},
+	}
+	for overlay, patches := range overlays {
+		directory := []string{"deploy", "kubernetes", "examples", overlay}
+		kustomization := readRepositoryFile(t, append(directory, "kustomization.yaml")...)
+		if !strings.Contains(kustomization, "../../base") {
+			t.Errorf("%s overlay does not reference ../../base", overlay)
+		}
+		for _, patch := range patches {
+			if !strings.Contains(kustomization, patch) {
+				t.Errorf("%s overlay does not declare patch %s", overlay, patch)
+			}
+			if _, err := os.Stat(filepath.Join(append([]string{repositoryRoot(t)}, append(directory, patch)...)...)); err != nil {
+				t.Errorf("%s overlay patch %s is missing: %v", overlay, patch, err)
+			}
+		}
+	}
+}

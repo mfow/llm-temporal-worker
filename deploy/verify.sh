@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+kubectl_bin=${KUBECTL:-kubectl}
 
 fail() {
   printf 'deploy verification failed: %s\n' "$1" >&2
@@ -15,7 +16,7 @@ grep -Fq 'USER 65532:65532' "$root/Dockerfile" || fail 'worker image must use ui
 grep -Fq 'read_only: true' "$root/compose.yaml" || fail 'Compose worker must use a read-only root filesystem'
 grep -Fq 'cap_drop: [ALL]' "$root/compose.yaml" || fail 'Compose worker must drop all capabilities'
 
-command -v kubectl >/dev/null 2>&1 || fail 'kubectl is required to render Kustomize assets'
+command -v "$kubectl_bin" >/dev/null 2>&1 || fail "kubectl executable '$kubectl_bin' is required to render Kustomize assets"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -27,7 +28,7 @@ for overlay in \
   "$root/deploy/kubernetes/examples/azure-workload-identity"; do
   name=$(basename "$overlay")
   rendered="$tmp/$name.yaml"
-  kubectl kustomize "$overlay" >"$rendered"
+  "$kubectl_bin" kustomize "$overlay" >"$rendered"
   grep -Fq 'runAsNonRoot: true' "$rendered" || fail "$name does not enforce non-root execution"
   grep -Fq 'readOnlyRootFilesystem: true' "$rendered" || fail "$name does not enforce read-only root"
   grep -Fq 'type: RuntimeDefault' "$rendered" || fail "$name does not set the default seccomp profile"
