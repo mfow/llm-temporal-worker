@@ -184,6 +184,7 @@ func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 	for _, expected := range []string{
 		"GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN)",
 		"golang.org/x/vuln/cmd/govulncheck@v1.6.0",
+		"govulncheck.stderr",
 		"$(GO) mod edit -json",
 		"$(GO) run ./tools/supplychainverify",
 		"SECURITY_REPORT",
