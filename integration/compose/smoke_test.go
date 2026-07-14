@@ -161,6 +161,27 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 	}
 }
 
+func TestComposeTemporalHealthcheckUsesBundledSemanticReadiness(t *testing.T) {
+	document, _ := readCompose(t)
+	temporal, ok := document.Services["temporal"]
+	if !ok {
+		t.Fatal("Compose fixture is missing the Temporal service")
+	}
+	healthcheckTest, ok := temporal.Healthcheck["test"]
+	if !ok {
+		t.Fatal("Temporal service is missing a healthcheck test")
+	}
+	if healthcheckTest.Kind != yaml.SequenceNode || len(healthcheckTest.Content) != 2 {
+		t.Fatalf("Temporal healthcheck test = kind %d with %d arguments, want CMD-SHELL command", healthcheckTest.Kind, len(healthcheckTest.Content))
+	}
+	if got, want := healthcheckTest.Content[0].Value, "CMD-SHELL"; got != want {
+		t.Fatalf("Temporal healthcheck mode = %q, want %q", got, want)
+	}
+	if got, want := healthcheckTest.Content[1].Value, "temporal operator cluster health | grep -q SERVING"; got != want {
+		t.Fatalf("Temporal healthcheck command = %q, want %q", got, want)
+	}
+}
+
 func TestLocalFixtureDocumentationPreservesFailClosedProviderEgress(t *testing.T) {
 	root := repositoryRoot(t)
 	for path, required := range map[string][]string{

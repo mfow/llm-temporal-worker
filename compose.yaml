@@ -31,7 +31,8 @@ services:
       - "127.0.0.1:${LLMTW_COMPOSE_TEMPORAL_PORT:-0}:7233"
       - "127.0.0.1:${LLMTW_COMPOSE_TEMPORAL_UI_PORT:-0}:8233"
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7233"]
+      # Match the auto-setup image's own semantic server-readiness predicate.
+      test: ["CMD-SHELL", "temporal operator cluster health | grep -q SERVING"]
       interval: 5s
       timeout: 3s
       retries: 24
