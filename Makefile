@@ -10,7 +10,7 @@ READINESS_REDIS_PORT ?= 16379
 .PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke kustomize-verify adapter-contracts verify
 
 fmt-check:
-	@test -z "$$(gofmt -l .)"
+	@bash scripts/check-go-format.sh
 
 schema-verify:
 	$(GO) test ./llm/schema ./config
