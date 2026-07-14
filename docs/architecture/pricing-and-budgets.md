@@ -140,8 +140,12 @@ budgets:
 Matchers cover tenant, project, actor prefix, environment, logical model,
 endpoint, and service class. All matching policies and all windows within them
 apply; policies are not first-match-wins. Missing context cannot match a
-restricted policy. Configuration can require at least one matching policy per
-tenant, failing closed when none exists.
+restricted policy. With `budgets.require_match: true`, every authorized
+candidate must match at least one policy before it can be priced, admitted, or
+dispatched. This filtering is candidate-specific, so an explicit fallback that
+matches remains eligible even if the requested service class does not. If no
+authorized candidate matches, the request terminates as `no_route` without an
+admission operation or provider request.
 
 Limits must be positive. Bucket size must divide into bounded operational
 resolution and produce no more than the configured maximum buckets per window.
