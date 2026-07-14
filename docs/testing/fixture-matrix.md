@@ -69,8 +69,12 @@ repository-relative fixture path, never its bytes.
 
 ## Common semantic cases
 
-Every profile has either a success fixture or an explicit compile-rejection
-fixture for each row:
+The following is the required case inventory for an `enforced` profile. The
+currently checked-in `bootstrap` profiles may declare only a subset while their
+dedicated coverage work is in progress; bootstrap status must not be read as a
+claim that these cases already exist for every provider. An enforced profile
+has either a success fixture or an explicit compile-rejection fixture for each
+applicable row:
 
 | Area | Cases |
 | --- | --- |
@@ -95,7 +99,9 @@ fixture for each row:
 
 ## Service-class matrix
 
-Each cell has request-lowering, response-lifting, and unsupported fixtures:
+For an enforced profile, each applicable cell has request-lowering,
+response-lifting, and unsupported fixtures. Bootstrap manifests record only the
+service-class facts already verified for that profile:
 
 | Profile | economy | standard | priority |
 | --- | --- | --- | --- |
@@ -133,8 +139,9 @@ request ID, safe Temporal details, and no raw body leakage.
 
 ## Stream event matrix
 
-Each supported event type has a standalone fixture and appears in one compound
-stream:
+For an enforced streaming profile, each supported event type has a standalone
+fixture and appears in one compound stream. Bootstrap profiles can be missing
+these artifacts until their streaming coverage task is complete:
 
 - response/message start;
 - content/output item start and finish;
