@@ -4,18 +4,17 @@
 
 The worker reads one strict YAML document. Unknown fields, duplicate keys,
 unknown enum values, unresolved references, and integer overflow are errors.
-Bootstrap environment variables select the file and process mode; they do not
-silently override arbitrary nested values.
-
-```text
-LLMTW_CONFIG_FILE
-LLMTW_PROCESS_MODE
-LLMTW_LOG_LEVEL
-```
+The command-line binary selects the document with the `--config` flag; the
+default path is `/etc/llmtw/config.yaml`. It does not use a process-wide
+environment-variable override for the configuration path or command mode. See
+the [command-line reference](cli.md) for the validation and startup commands.
 
 Secret values are referenced with typed `env`, `file`, or workload-identity
-configuration. The effective non-secret configuration is canonicalized and
-hashed as `config_version`.
+configuration. Those references are resolved by the production worker during
+runtime construction, while `validate-config` and
+`print-effective-config` only parse and canonicalize the non-secret document.
+The effective non-secret configuration is canonicalized and hashed as
+`config_version`.
 
 ## Complete shape
 

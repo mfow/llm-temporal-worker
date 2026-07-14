@@ -1,15 +1,15 @@
 # LLM Temporal Worker
 
-This repository is the documentation-first design for a reusable Go library and
-Temporal Activity Worker that performs large-language-model inference. The
-worker presents one versioned request contract, selects a configured endpoint,
-enforces cost budgets, invokes the provider through an official SDK, and
-returns a normalized response plus a durable continuation handle.
+This repository contains a reusable Go library and Temporal Activity Worker
+that performs large-language-model inference. The worker presents one versioned
+request contract, selects a configured endpoint, enforces cost budgets, invokes
+the provider through an official SDK, and returns a normalized response plus a
+durable continuation handle.
 
-The repository contains a verified implementation foundation alongside the
-documents and implementation plans. The plans remain the reviewed contract for
-the staged Temporal runtime, shared-state backends, deployment, and release
-work that follows the foundation.
+The implementation foundation and production process composition are checked
+in alongside the architecture and active v1 completion plans. The plans
+identify remaining hardening and release evidence; the current code and its
+tests are the source of truth for behavior that has already been implemented.
 
 ## Non-negotiable v1 decisions
 
@@ -48,6 +48,7 @@ work that follows the foundation.
 
 - [Package layout](architecture/package-layout.md)
 - [Configuration reference](reference/configuration.md)
+- [Command-line reference](reference/cli.md)
 - [Catalog loader contract](reference/catalog-loaders.md)
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)
