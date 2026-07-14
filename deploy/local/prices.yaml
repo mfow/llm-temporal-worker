@@ -6,6 +6,7 @@ entries:
     region: local
     model: demo-model
     service_class: economy
+    provider_tier: flex
     input_per_million: "0"
     output_per_million: "0"
   - endpoint: provider-mock
