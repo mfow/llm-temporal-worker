@@ -25,8 +25,11 @@ func capabilities(version string) provider.CapabilitySet {
 			provider.FeatureStructuredOutput: {State: provider.CapabilityNative},
 			provider.FeatureReasoning:        {State: provider.CapabilityNative},
 			provider.FeatureContinuation:     {State: provider.CapabilityNative},
-			provider.FeatureStreaming:        {State: provider.CapabilityNative},
-			provider.FeatureUsage:            {State: provider.CapabilityNative},
+			provider.FeatureStreaming: {
+				State:  provider.CapabilityUnsupported,
+				Reason: "the adapter has an SSE decoder but no typed stream port or official SDK stream dispatch",
+			},
+			provider.FeatureUsage: {State: provider.CapabilityNative},
 		},
 	}
 }

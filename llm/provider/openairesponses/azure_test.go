@@ -21,7 +21,7 @@ import (
 )
 
 func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
-	responseBody := readFixture(t, "response.completed.json")
+	responseBody := readContractFixture(t, "azure-responses", "response.completed.json")
 	var got *http.Request
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
@@ -112,7 +112,7 @@ func TestAzureResponsesTokenCredentialUsesBearerAndV1Path(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(bytes.NewReader(readFixture(t, "response.completed.json"))),
+				Body:       io.NopCloser(bytes.NewReader(readContractFixture(t, "azure-responses", "response.completed.json"))),
 				Request:    request,
 			}, nil
 		})},

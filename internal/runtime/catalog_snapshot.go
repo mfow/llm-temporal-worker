@@ -74,6 +74,7 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 		Health:                routing.HealthView{},
 		Prices:                pricing.NewResolver(price),
 		BudgetPolicies:        policies,
+		RequireBudgetMatch:    value.Budgets.RequireMatch,
 		Environment:           value.Environment,
 		ReservationLease:      time.Duration(value.State.ReservationLease),
 		OperationRetention:    time.Duration(value.State.OperationTerminalRetention),
@@ -238,7 +239,15 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
 	policies := make([]budget.Policy, 0, len(value.Budgets.Policies))
 	for _, policyValue := range value.Budgets.Policies {
-		policy := budget.Policy{ID: policyValue.ID, Match: budget.Matcher{Tenant: policyValue.Match.Tenant, Environment: policyValue.Match.Environment}}
+		policy := budget.Policy{ID: policyValue.ID, Match: budget.Matcher{
+			Tenant:       policyValue.Match.Tenant,
+			Project:      policyValue.Match.Project,
+			ActorPrefix:  policyValue.Match.ActorPrefix,
+			Environment:  policyValue.Match.Environment,
+			LogicalModel: policyValue.Match.LogicalModel,
+			EndpointID:   policyValue.Match.EndpointID,
+			ServiceClass: policyValue.Match.ServiceClass,
+		}}
 		policy.Windows = make([]budget.Window, 0, len(policyValue.Windows))
 		for index, windowValue := range policyValue.Windows {
 			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), Limit: pricing.MicroUSD(windowValue.LimitMicroUSD)})

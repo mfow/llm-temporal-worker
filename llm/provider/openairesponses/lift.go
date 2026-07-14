@@ -188,7 +188,7 @@ func liftOutput(items []responses.ResponseOutputItemUnion) ([]llm.Item, bool, bo
 }
 
 func continuationForResponse(call provider.Call, response *responses.Response) *llm.Continuation {
-	if response.ID == "" {
+	if response.ID == "" || !statefulContinuationEnabled(call) {
 		return nil
 	}
 	return &llm.Continuation{
@@ -203,6 +203,20 @@ func continuationForResponse(call provider.Call, response *responses.Response) *
 			Opaque:         []byte(response.ID),
 		}},
 	}
+}
+
+func statefulContinuationEnabled(call provider.Call) bool {
+	params, ok := call.SDKParams.(responses.ResponseNewParams)
+	if !ok {
+		if pointer, pointerOK := call.SDKParams.(*responses.ResponseNewParams); pointerOK && pointer != nil {
+			params = *pointer
+			ok = true
+		}
+	}
+	if !ok {
+		return true
+	}
+	return !params.Store.Valid() || params.Store.Value
 }
 
 func invalidResponseError(call provider.Call, requestID, message string) *provider.Error {

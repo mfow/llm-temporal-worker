@@ -223,7 +223,18 @@
       "type": "object", "additionalProperties": false, "required": ["id", "match", "windows"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "match": { "type": "object", "additionalProperties": false, "required": ["tenant", "environment"], "properties": { "tenant": { "type": "string" }, "environment": { "type": "string" } } },
+        "match": {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "properties": {
+            "tenant": { "type": "string" },
+            "project": { "type": "string" },
+            "actor_prefix": { "type": "string" },
+            "environment": { "type": "string" },
+            "logical_model": { "type": "string" },
+            "endpoint": { "type": "string" },
+            "service_class": { "enum": ["economy", "standard", "priority"] }
+          }
+        },
         "windows": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/budget_window" } }
       }
     },

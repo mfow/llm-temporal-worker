@@ -202,6 +202,88 @@ func TestGenerateDefaultsOmittedServiceClassToStandard(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsUnmatchedRequiredBudgetPolicyBeforeAdmission(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
+	snapshot.RequireBudgetMatch = true
+	snapshot.Environment = "production"
+	snapshot.BudgetPolicies = []budget.Policy{{
+		ID:      "other-tenant",
+		Match:   budget.Matcher{Tenant: "other", Environment: "production"},
+		Windows: []budget.Window{{ID: "other-tenant/hour", Duration: time.Hour, Bucket: time.Minute, Limit: 1_000}},
+	}}
+	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+
+	request := baseRequest("unmatched-required-budget")
+	_, err := harness.engine.Generate(context.Background(), request)
+	if err == nil {
+		t.Fatal("unmatched required budget unexpectedly dispatched")
+	}
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("error = %T, want *provider.Error", err)
+	}
+	if mapped.Code != provider.CodeNoRoute || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("budget-policy error = %#v", mapped)
+	}
+	adapter.mu.Lock()
+	invokes := adapter.invokes
+	adapter.mu.Unlock()
+	if invokes != 0 {
+		t.Fatalf("provider invoke count = %d, want zero", invokes)
+	}
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := llm.RequestDigest(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, _ := operationIdentity(normalized, digest)
+	if _, getErr := harness.admission.Get(context.Background(), operationID); !errors.Is(getErr, admission.ErrOperationNotFound) {
+		t.Fatalf("admission Get(%q) error = %v, want ErrOperationNotFound", operationID, getErr)
+	}
+}
+
+func TestGenerateUsesOnlyExplicitFallbackWithMatchingRequiredBudgetPolicy(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
+	snapshot.RequireBudgetMatch = true
+	snapshot.BudgetPolicies = []budget.Policy{{
+		ID:      "standard-only",
+		Match:   budget.Matcher{Tenant: "tenant-1", ServiceClass: llm.ServiceClassStandard},
+		Windows: []budget.Window{{ID: "standard-only/hour", Duration: time.Hour, Bucket: time.Minute, Limit: 1_000}},
+	}}
+	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+
+	request := baseRequest("budgeted-explicit-fallback")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	response, err := harness.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Service.Requested != llm.ServiceClassPriority || response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
+		t.Fatalf("service facts = %#v, want explicit standard fallback", response.Service)
+	}
+	adapter.mu.Lock()
+	calls := append([]provider.Call(nil), adapter.calls...)
+	adapter.mu.Unlock()
+	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
+		t.Fatalf("provider calls = %#v, want only standard fallback", calls)
+	}
+	operation, err := harness.admission.Get(context.Background(), response.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(operation.Reservations) != 1 || operation.Reservations[0].PolicyID != "standard-only" {
+		t.Fatalf("operation reservations = %#v, want standard-only policy", operation.Reservations)
+	}
+}
+
 func TestGenerateFallbackDoesNotReplayRejectedDispatch(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", rejectFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)

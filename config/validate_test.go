@@ -3,6 +3,7 @@ package config_test
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/config"
@@ -88,5 +89,34 @@ func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 	}
 	if err := compiled.Validate(encoded); err == nil {
 		t.Fatal("schema accepted secret auth for an Anthropic AWS gateway endpoint")
+	}
+
+}
+
+func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
+	data := strings.Replace(
+		string(exampleYAML(t)),
+		"match:\n        tenant: acme\n        environment: production",
+		"match:\n        project: critical-workload\n        actor_prefix: service-\n        logical_model: reasoning\n        endpoint: openai-prod\n        service_class: priority",
+		1,
+	)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err != nil {
+		t.Fatal(err)
 	}
 }

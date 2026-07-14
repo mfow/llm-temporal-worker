@@ -1,13 +1,12 @@
 version: 1
-id: openai-responses
-provider: openai
+id: azure-responses
+provider: azure_openai
 family: responses
 coverage: bootstrap
 metadata: metadata.yaml
 service_classes:
   economy:
-    requested_tier: flex
-    actual_tier: flex
+    supported: false
   standard:
     requested_tier: default
     actual_tier: default

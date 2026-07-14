@@ -1,0 +1,14 @@
+{
+  "id": "resp-openai-usage",
+  "model": "gpt-contract",
+  "output": [],
+  "service_tier": "default",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 21,
+    "input_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 2},
+    "output_tokens": 13,
+    "output_tokens_details": {"reasoning_tokens": 3},
+    "total_tokens": 34
+  }
+}

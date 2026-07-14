@@ -427,6 +427,24 @@ Every `emulated` capability names a transform ID that has unit/golden tests.
 Catalog compilation rejects duplicate or overlapping matchers with different
 claims.
 
+## Budget policy matching
+
+`budgets.require_match: true` is an admission-policy switch, not a provider
+default. Before pricing, admission, or a provider request, the worker evaluates
+every authorized route candidate, including explicit service-class fallbacks.
+Candidates that match no budget policy are excluded. If none remains, the
+request terminates as `no_route`; it creates no admission operation and sends
+no provider request. Set `require_match: false` only when an unmatched route is
+intentionally allowed to proceed without a monetary budget reservation.
+
+Each policy `match` must name at least one restriction. The supported keys are
+`tenant`, `project`, `actor_prefix`, `environment`, `logical_model`, `endpoint`,
+and `service_class`. All populated keys must match the request and candidate;
+`service_class` is limited to the public `economy`, `standard`, and `priority`
+enum. `*` is an exact-field wildcard, not a restriction, so a policy with only
+wildcards is rejected. A missing request or candidate fact cannot satisfy an
+exact or prefix restriction.
+
 ## Price catalog shape
 
 ```yaml

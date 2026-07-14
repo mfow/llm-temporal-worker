@@ -1,7 +1,7 @@
 # Verified Upstream Contracts
 
 This design was checked against primary upstream documentation and source on
-2026-07-13. Implementation phases must re-check these contracts before pinning
+2026-07-14. Implementation phases must re-check these contracts before pinning
 dependencies because SDKs, model capabilities, pricing, and service tiers
 change independently.
 
@@ -21,6 +21,18 @@ change independently.
 Design consequence: economy/standard/priority are semantic values mapped per
 capability profile to flex/default/priority; actual response tier is retained.
 
+### Responses streaming implementation boundary
+
+As of 2026-07-14, `llm/provider/openairesponses` has an SSE decoder only.
+The exact Task 6 blocker is: no `StreamingAdapter`/typed stream port and no
+official OpenAI SDK stream dispatch exists in
+`llm/provider/openairesponses`. The direct and Azure Responses fixture
+profiles therefore record `streaming: unsupported`; their decoder fixtures
+prove transport-fragment reconstruction only, not an end-to-end client stream.
+Task 6 must add the typed stream contract, direct and Azure SDK dispatch, and
+deterministic transport coverage before either profile can claim enforced
+streaming coverage.
+
 ## Azure OpenAI
 
 - [Azure priority processing](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/priority-processing)
@@ -30,6 +42,9 @@ capability profile to flex/default/priority; actual response tier is retained.
 
 Design consequence: each Azure deployment has its own capability profile.
 OpenAI compatibility is not evidence that every OpenAI field/tier works.
+The independently owned Azure Responses fixtures validate the configured path
+and auth construction offline, but they do not establish deployment-specific
+model, economy-tier, continuation, or streaming availability.
 
 ## Anthropic and AWS
 
