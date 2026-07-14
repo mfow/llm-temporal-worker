@@ -1,12 +1,13 @@
 -- llmtw_continuation_v1
--- Keys: opaque handle index, tenant-hashed record, operation-key index.
+-- Keys: opaque handle index, tenant-hashed record, and (for child writes)
+-- operation-key index.
 local existing = redis.call('GET', KEYS[1])
 if existing then
     local value = redis.call('GET', existing)
     if not value then
         redis.call('DEL', KEYS[1])
     else
-        if KEYS[3] ~= '' then
+        if #KEYS >= 3 then
             local operation = redis.call('GET', KEYS[3])
             if operation then
                 return {'existing', operation}
@@ -16,7 +17,7 @@ if existing then
     end
 end
 
-if KEYS[3] ~= '' then
+if #KEYS >= 3 then
     local operation = redis.call('GET', KEYS[3])
     if operation then
         return {'existing', operation}
@@ -37,7 +38,7 @@ redis.call('SET', KEYS[1], KEYS[2])
 if ttl and ttl > 0 then
     redis.call('EXPIRE', KEYS[1], tostring(ttl))
 end
-if KEYS[3] ~= '' then
+if #KEYS >= 3 then
     redis.call('SET', KEYS[3], ARGV[3], 'NX')
     local operation = redis.call('GET', KEYS[3])
     if operation ~= ARGV[3] then

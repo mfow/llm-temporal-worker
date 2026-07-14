@@ -35,13 +35,33 @@ type operationWire struct {
 	Reservations []reservationWire        `json:"reservations"`
 	Config       string                   `json:"config_version"`
 	Price        string                   `json:"price_version"`
-	Attempt      admission.AttemptFacts   `json:"attempt"`
+	Attempt      attemptWire              `json:"attempt"`
 	Result       *blobRefWire             `json:"result_ref,omitempty"`
 	Token        string                   `json:"dispatch_token"`
 	Lease        time.Time                `json:"lease_until"`
 	Created      string                   `json:"created_at"`
 	Updated      string                   `json:"updated_at"`
 	Expires      time.Time                `json:"expires_at"`
+}
+
+// attemptWire is deliberately explicit. The public admission structs do not
+// carry JSON tags, while the Redis Function reads these lower-case names
+// directly from cjson tables.
+type attemptWire struct {
+	RouteID           string                      `json:"route_id"`
+	EndpointID        string                      `json:"endpoint_id"`
+	Provider          string                      `json:"provider"`
+	ProviderRequestID string                      `json:"provider_request_id"`
+	ServiceClass      string                      `json:"service_class"`
+	Dispatch          admission.DispatchCertainty `json:"dispatch"`
+	AttemptNumber     int                         `json:"attempt_number"`
+}
+
+type outcomeWire struct {
+	Certainty         admission.DispatchCertainty `json:"certainty"`
+	Incurred          string                      `json:"incurred"`
+	ProviderRequestID string                      `json:"provider_request_id"`
+	Attempt           attemptWire                 `json:"attempt"`
 }
 
 type reservationWire struct {
@@ -78,7 +98,7 @@ func encodeOperation(operation admission.Operation) ([]byte, error) {
 		Final:        strconv.FormatInt(int64(operation.FinalMicroUSD), 10),
 		Reservations: make([]reservationWire, len(operation.Reservations)),
 		Config:       operation.ConfigVersion, Price: operation.PriceVersion,
-		Attempt: operation.Attempt, Token: operation.DispatchToken,
+		Attempt: encodeAttemptWire(operation.Attempt), Token: operation.DispatchToken,
 		Lease: operation.LeaseUntil, Created: formatRedisTime(operation.CreatedAt),
 		Updated: formatRedisTime(operation.UpdatedAt), Expires: operation.ExpiresAt,
 	}
@@ -126,7 +146,7 @@ func decodeOperation(data []byte) (admission.Operation, error) {
 	operation := admission.Operation{
 		ID: wire.ID, ScopeKey: wire.ScopeKey, RequestDigest: digest, State: wire.State,
 		ReservedMicroUSD: reserved, IncurredMicroUSD: incurred, FinalMicroUSD: final,
-		ConfigVersion: wire.Config, PriceVersion: wire.Price, Attempt: wire.Attempt,
+		ConfigVersion: wire.Config, PriceVersion: wire.Price, Attempt: decodeAttemptWire(wire.Attempt),
 		DispatchToken: wire.Token, LeaseUntil: wire.Lease, ExpiresAt: wire.Expires,
 	}
 	operation.CreatedAt, err = parseRedisTime(wire.Created)
@@ -162,7 +182,70 @@ func decodeBlobRef(wire blobRefWire) (state.BlobRef, error) {
 	return state.BlobRef{Digest: digest, Size: wire.Size, Media: wire.Media}, nil
 }
 
-func encodeAttempt(attempt admission.AttemptFacts) ([]byte, error) { return json.Marshal(attempt) }
+func encodeAttemptWire(attempt admission.AttemptFacts) attemptWire {
+	return attemptWire{
+		RouteID:           attempt.RouteID,
+		EndpointID:        attempt.EndpointID,
+		Provider:          attempt.Provider,
+		ProviderRequestID: attempt.ProviderRequestID,
+		ServiceClass:      attempt.ServiceClass,
+		Dispatch:          attempt.Dispatch,
+		AttemptNumber:     attempt.AttemptNumber,
+	}
+}
+
+func decodeAttemptWire(wire attemptWire) admission.AttemptFacts {
+	return admission.AttemptFacts{
+		RouteID:           wire.RouteID,
+		EndpointID:        wire.EndpointID,
+		Provider:          wire.Provider,
+		ProviderRequestID: wire.ProviderRequestID,
+		ServiceClass:      wire.ServiceClass,
+		Dispatch:          wire.Dispatch,
+		AttemptNumber:     wire.AttemptNumber,
+	}
+}
+
+func encodeAttempt(attempt admission.AttemptFacts) ([]byte, error) {
+	return json.Marshal(encodeAttemptWire(attempt))
+}
+
+func decodeAttempt(data []byte) (admission.AttemptFacts, error) {
+	var wire attemptWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return admission.AttemptFacts{}, fmt.Errorf("decode attempt: %w", err)
+	}
+	if wire.AttemptNumber < 0 {
+		return admission.AttemptFacts{}, fmt.Errorf("invalid attempt number")
+	}
+	return decodeAttemptWire(wire), nil
+}
+
+func encodeOutcome(outcome admission.AttemptOutcome) ([]byte, error) {
+	return json.Marshal(outcomeWire{
+		Certainty:         outcome.Certainty,
+		Incurred:          strconv.FormatInt(int64(outcome.Incurred), 10),
+		ProviderRequestID: outcome.ProviderRequestID,
+		Attempt:           encodeAttemptWire(outcome.Attempt),
+	})
+}
+
+func decodeOutcome(data []byte) (admission.AttemptOutcome, error) {
+	var wire outcomeWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return admission.AttemptOutcome{}, fmt.Errorf("decode attempt outcome: %w", err)
+	}
+	incurred, err := parseMicro(wire.Incurred)
+	if err != nil {
+		return admission.AttemptOutcome{}, err
+	}
+	return admission.AttemptOutcome{
+		Certainty:         wire.Certainty,
+		Incurred:          incurred,
+		ProviderRequestID: wire.ProviderRequestID,
+		Attempt:           decodeAttemptWire(wire.Attempt),
+	}, nil
+}
 
 func encodeReservations(reservations []admission.WindowReservation) ([]byte, error) {
 	encoded := make([]reservationWire, len(reservations))

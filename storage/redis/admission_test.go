@@ -91,14 +91,14 @@ func (h *admissionHarness) Run(ctx context.Context, _ string, keys []string, arg
 		}
 		return []any{status, string(encoded)}, nil
 	case "mark_dispatching":
-		var attempt admission.AttemptFacts
-		if err := json.Unmarshal([]byte(args[2]), &attempt); err != nil {
+		attempt, err := decodeAttempt([]byte(args[2]))
+		if err != nil {
 			return []any{"invalid_request", ""}, nil
 		}
 		err = h.store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: current.ID, DispatchToken: args[1], Attempt: attempt})
 	case "continue":
-		var outcome admission.AttemptOutcome
-		if err := json.Unmarshal([]byte(args[2]), &outcome); err != nil {
+		outcome, err := decodeOutcome([]byte(args[2]))
+		if err != nil {
 			return []any{"invalid_request", ""}, nil
 		}
 		var reservations []reservationWire
@@ -124,13 +124,11 @@ func (h *admissionHarness) Run(ctx context.Context, _ string, keys []string, arg
 		return []any{"ok", string(encoded)}, nil
 	case "complete":
 		actual, _ := parseMicro(args[2])
-		var attempt admission.AttemptFacts
-		_ = json.Unmarshal([]byte(args[4]), &attempt)
+		attempt, _ := decodeAttempt([]byte(args[4]))
 		err = h.store.Complete(ctx, admission.CompleteRequest{OperationID: current.ID, DispatchToken: args[1], Actual: actual, Attempt: attempt})
 	case "fail":
 		incurred, _ := parseMicro(args[3])
-		var attempt admission.AttemptFacts
-		_ = json.Unmarshal([]byte(args[4]), &attempt)
+		attempt, _ := decodeAttempt([]byte(args[4]))
 		err = h.store.Fail(ctx, admission.FailRequest{OperationID: current.ID, DispatchToken: args[1], Certainty: admission.DispatchCertainty(args[2]), Incurred: incurred, Attempt: attempt})
 	default:
 		return []any{"invalid_request", ""}, nil
@@ -215,6 +213,61 @@ func TestAdmissionConformanceReplayConflictAndAmbiguity(t *testing.T) {
 	operation, err := store.Get(context.Background(), "op")
 	if err != nil || operation.State != admission.StateAmbiguous || operation.ReservedMicroUSD != 6 {
 		t.Fatalf("ambiguous operation = %#v, %v", operation, err)
+	}
+}
+
+func TestAdmissionContinueWireAndCompletion(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	harness := newAdmissionHarness(now)
+	store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation := admission.WindowReservation{PolicyID: "policy", WindowID: "window", Bucket: 100, Amount: 10, Limit: 100, BucketNanos: int64(time.Second), DurationNanos: int64(time.Minute)}
+	first, err := store.Begin(context.Background(), admission.BeginRequest{
+		ID: "continue-op", ScopeKey: "tenant/continue", RequestDigest: admission.Digest([]byte("continue")),
+		Reservation: 10, Reservations: []admission.WindowReservation{reservation}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
+		OperationID: first.Operation.ID, DispatchToken: first.Operation.DispatchToken,
+		Attempt: admission.AttemptFacts{RouteID: "initial"}, LeaseUntil: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next := reservation
+	next.Amount = 8
+	continued, err := store.Continue(context.Background(), admission.ContinueRequest{
+		OperationID: first.Operation.ID, DispatchToken: first.Operation.DispatchToken,
+		Outcome: admission.AttemptOutcome{
+			Certainty: admission.Rejected, Incurred: 2, ProviderRequestID: "provider-retry",
+			Attempt: admission.AttemptFacts{RouteID: "retry", ProviderRequestID: "provider-retry", AttemptNumber: 1},
+		},
+		Remaining: 8, Reservations: []admission.WindowReservation{next}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil || continued.Operation.State != admission.StateReserved {
+		t.Fatalf("continue = %#v, %v", continued, err)
+	}
+	if continued.Operation.DispatchToken == first.Operation.DispatchToken {
+		t.Fatal("continue did not rotate dispatch token")
+	}
+	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
+		OperationID: first.Operation.ID, DispatchToken: continued.Operation.DispatchToken,
+		Attempt: continued.Operation.Attempt, LeaseUntil: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Complete(context.Background(), admission.CompleteRequest{
+		OperationID: first.Operation.ID, DispatchToken: continued.Operation.DispatchToken,
+		Actual: 8, Attempt: admission.AttemptFacts{RouteID: "retry", ProviderRequestID: "provider-retry"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Get(context.Background(), first.Operation.ID)
+	if err != nil || completed.State != admission.StateCompleted || completed.FinalMicroUSD != 8 || completed.Attempt.Dispatch != admission.Accepted {
+		t.Fatalf("completed continuation = %#v, %v", completed, err)
 	}
 }
 

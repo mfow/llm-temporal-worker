@@ -3,7 +3,40 @@ package redis
 import (
 	"strings"
 	"testing"
+
+	"github.com/mfow/llm-temporal-worker/admission"
 )
+
+func TestAdmissionWireUsesLuaFieldNames(t *testing.T) {
+	attempt := admission.AttemptFacts{RouteID: "route", ProviderRequestID: "request", AttemptNumber: 3}
+	attemptData, err := encodeAttempt(attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptJSON := string(attemptData)
+	if !strings.Contains(attemptJSON, `"route_id":"route"`) || strings.Contains(attemptJSON, `"RouteID"`) {
+		t.Fatalf("attempt wire uses Go field names: %s", attemptJSON)
+	}
+	decodedAttempt, err := decodeAttempt(attemptData)
+	if err != nil || decodedAttempt != attempt {
+		t.Fatalf("attempt round trip = %#v, %v", decodedAttempt, err)
+	}
+
+	outcomeData, err := encodeOutcome(admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 7, Attempt: attempt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcomeJSON := string(outcomeData)
+	for _, field := range []string{`"certainty":"rejected"`, `"incurred":"7"`, `"attempt":{"route_id":"route"`} {
+		if !strings.Contains(outcomeJSON, field) {
+			t.Fatalf("outcome wire missing Lua field %q: %s", field, outcomeJSON)
+		}
+	}
+	decodedOutcome, err := decodeOutcome(outcomeData)
+	if err != nil || decodedOutcome.Certainty != admission.Rejected || decodedOutcome.Incurred != 7 || decodedOutcome.Attempt != attempt {
+		t.Fatalf("outcome round trip = %#v, %v", decodedOutcome, err)
+	}
+}
 
 func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
 	metadata := AdmissionFunctionMetadata()
@@ -45,6 +78,9 @@ func TestAdmissionFunctionPreservesRecordRetentionOnUpdates(t *testing.T) {
 func TestContinuationFunctionUsesCreateIfAbsentAndTTL(t *testing.T) {
 	if !strings.Contains(continuationFunctionSource, "'NX'") || !strings.Contains(continuationFunctionSource, "EXPIRE") {
 		t.Fatal("continuation function is not immutable/expiring")
+	}
+	if !strings.Contains(continuationFunctionSource, "#KEYS >= 3") {
+		t.Fatal("continuation function does not support two-key root writes")
 	}
 	if !strings.Contains(continuationFunctionSource, "DEL', KEYS[1], KEYS[2]") {
 		t.Fatal("continuation function does not clean up provisional conflicts")

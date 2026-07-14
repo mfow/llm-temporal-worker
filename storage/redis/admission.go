@@ -169,7 +169,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err := validateReservations(request.Reservations); err != nil {
 		return admission.ContinueResult{}, err
 	}
-	outcome, err := json.Marshal(request.Outcome)
+	outcome, err := encodeOutcome(request.Outcome)
 	if err != nil {
 		return admission.ContinueResult{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,9 +14,10 @@ import (
 )
 
 type continuationHarness struct {
-	mu      sync.Mutex
-	values  map[string]string
-	indexes map[string]string
+	mu       sync.Mutex
+	values   map[string]string
+	indexes  map[string]string
+	lastKeys []string
 }
 
 func newContinuationHarness() *continuationHarness {
@@ -37,10 +39,12 @@ func (h *continuationHarness) Get(_ context.Context, key string) (string, error)
 func (h *continuationHarness) Put(_ context.Context, keys []string, value, handle, _ string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(keys) != 3 {
+	if len(keys) != 2 && len(keys) != 3 {
 		return "", errors.New("invalid fake continuation keys")
 	}
-	if operationKey := keys[2]; operationKey != "" {
+	h.lastKeys = append(h.lastKeys[:0], keys...)
+	if len(keys) == 3 {
+		operationKey := keys[2]
 		if existing, ok := h.indexes[operationKey]; ok {
 			return "existing\x00" + existing, nil
 		}
@@ -50,10 +54,45 @@ func (h *continuationHarness) Put(_ context.Context, keys []string, value, handl
 	}
 	h.values[keys[1]] = value
 	h.indexes[keys[0]] = keys[1]
-	if keys[2] != "" {
+	if len(keys) == 3 {
 		h.indexes[keys[2]] = handle
 	}
 	return "created", nil
+}
+
+func TestContinuationKeysShareAdmissionHashSlot(t *testing.T) {
+	now := time.Unix(100, 0)
+	harness := newContinuationHarness()
+	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := store.CreateRoot(context.Background(), testContinuation(t, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(harness.lastKeys) != 2 {
+		t.Fatalf("root continuation keys = %d, want 2", len(harness.lastKeys))
+	}
+	for _, key := range harness.lastKeys {
+		if !strings.HasPrefix(key, "test:{admission}") {
+			t.Fatalf("root key is outside admission hash slot: %q", key)
+		}
+	}
+	child := testContinuation(t, now)
+	child.ParentID = root.String()
+	child.Depth = 1
+	if _, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: child, OperationKey: "operation"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(harness.lastKeys) != 3 {
+		t.Fatalf("child continuation keys = %d, want 3", len(harness.lastKeys))
+	}
+	for _, key := range harness.lastKeys {
+		if !strings.HasPrefix(key, "test:{admission}") {
+			t.Fatalf("child key is outside admission hash slot: %q", key)
+		}
+	}
 }
 
 func testKeyring(t *testing.T) *state.Keyring {

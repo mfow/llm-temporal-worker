@@ -223,8 +223,6 @@ func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, co
 	keys := []string{handleIndex, recordKey}
 	if operationKey != "" {
 		keys = append(keys, store.space.admissionKey("continuation-operation", operationKey))
-	} else {
-		keys = append(keys, "")
 	}
 	ttl := ttlSeconds(store.clock(), continuation.ExpiresAt)
 	result, err := store.invoke.Put(ctx, keys, string(data), handle.String(), strconv.FormatInt(ttl, 10))
