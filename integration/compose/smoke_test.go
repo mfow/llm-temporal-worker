@@ -533,6 +533,44 @@ func TestComposeLifecycleFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) 
 	}
 }
 
+func TestComposeTemporalRecoveryFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'`
+	makefile := string(data)
+	start := strings.Index(makefile, "if ! "+temporalRecoveryTest)
+	if start < 0 {
+		t.Fatalf("compose live integration target is missing the Temporal recovery failure wrapper")
+	}
+	end := strings.Index(makefile[start:], "\n\n")
+	if end < 0 {
+		t.Fatal("compose live integration target is missing the end of the Temporal recovery failure wrapper")
+	}
+	failurePath := makefile[start : start+end]
+
+	for _, required := range []string{
+		`if ! ` + temporalRecoveryTest + `; then \`,
+		"compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):",
+		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker",
+		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
+		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD=\"$$postgres_password\"",
+		"LLMTW_LOG_REDACT_MOCK_API_KEY=\"$$mock_api_key\"",
+		"LLMTW_LOG_REDACT_CONTINUATION_HMAC=\"$$continuation_hmac\"",
+		`sh ./scripts/redact-compose-logs.sh >&2 || true; \`,
+		`exit 1; \`,
+	} {
+		if !strings.Contains(failurePath, required) {
+			t.Errorf("Temporal recovery failure diagnostics are missing %q", required)
+		}
+	}
+	if strings.Contains(failurePath, "docker inspect") {
+		t.Error("Temporal recovery failure diagnostics must emit only redacted Compose service logs")
+	}
+}
+
 func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
 	t.Parallel()
 	secrets := map[string]string{
