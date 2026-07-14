@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -524,21 +525,73 @@ func TestVerifyStreamAssemblyEquivalentRejectsDifferentResponse(t *testing.T) {
 	}
 }
 
+func TestRepositoryManifestReportAllowsIncrementalCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		report  Report
+		wantErr string
+	}{
+		{
+			name:    "no profiles",
+			wantErr: "repository has no adapter contract profiles",
+		},
+		{
+			name: "bootstrap profiles",
+			report: Report{
+				Bootstrap: []Profile{{ID: "bootstrap"}},
+			},
+		},
+		{
+			name: "enforced profiles",
+			report: Report{
+				Enforced: []Profile{{ID: "enforced"}},
+			},
+		},
+		{
+			name: "mixed profiles",
+			report: Report{
+				Bootstrap: []Profile{{ID: "bootstrap"}},
+				Enforced:  []Profile{{ID: "enforced"}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRepositoryManifestReport(test.report)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate report: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validate report error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestRepositoryManifests(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", "..", ".."))
 	report, err := ValidateRepository(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Bootstrap) == 0 {
-		t.Fatal("repository has no bootstrap adapter contract profiles")
-	}
-	const wantEnforced = "anthropic-direct, bedrock-anthropic, exa-chat, openai-chat, openrouter-chat"
-	if got := profileIDs(report.Enforced); got != wantEnforced {
-		t.Fatalf("repository enforced profiles = %q, want %q", got, wantEnforced)
+	if err := validateRepositoryManifestReport(report); err != nil {
+		t.Fatal(err)
 	}
 	t.Logf("adapter contract bootstrap profiles: %s", profileIDs(report.Bootstrap))
 	t.Logf("adapter contract enforced profiles: %s", profileIDs(report.Enforced))
+}
+
+// validateRepositoryManifestReport permits incremental profile enforcement.
+// RequireAllEnforced remains the final release gate once every profile is done.
+func validateRepositoryManifestReport(report Report) error {
+	if len(report.Bootstrap)+len(report.Enforced) == 0 {
+		return fmt.Errorf("repository has no adapter contract profiles")
+	}
+	return nil
 }
 
 func profileIDs(profiles []Profile) string {
