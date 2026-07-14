@@ -53,7 +53,7 @@ services:
         printf '%s\n' 'user default off' > /tmp/llmtw-users.acl
         printf 'user %s on >%s ~* +@all\n' "$${REDIS_USERNAME}" "$${REDIS_PASSWORD}" >> /tmp/llmtw-users.acl
         chown redis /tmp/llmtw-users.acl
-        exec /docker-entrypoint.sh redis-server \
+        exec /usr/local/bin/docker-entrypoint.sh redis-server \
           --appendonly yes \
           --save 60 1 \
           --aclfile /tmp/llmtw-users.acl

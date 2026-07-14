@@ -249,11 +249,19 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 	aclScript := redis.Entrypoint.Content[2].Value
 	for _, required := range []string{
 		"chown redis /tmp/llmtw-users.acl",
-		"exec /docker-entrypoint.sh redis-server",
+		"exec /usr/local/bin/docker-entrypoint.sh redis-server",
 	} {
 		if !strings.Contains(aclScript, required) {
 			t.Errorf("Redis ACL wrapper is missing %q", required)
 		}
+	}
+	aclOwnership := strings.Index(aclScript, "chown redis /tmp/llmtw-users.acl")
+	entrypointHandoff := strings.Index(aclScript, "exec /usr/local/bin/docker-entrypoint.sh redis-server")
+	if aclOwnership < 0 || entrypointHandoff < aclOwnership {
+		t.Error("Redis ACL wrapper must prepare the ACL, then hand off as root to the image entrypoint so it can initialize /data and drop to redis")
+	}
+	if strings.Contains(aclScript, "exec /docker-entrypoint.sh") {
+		t.Error("Redis ACL wrapper must use the image's resolved /usr/local/bin/docker-entrypoint.sh path")
 	}
 	for _, required := range []string{
 		"REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}",
