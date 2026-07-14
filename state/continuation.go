@@ -70,8 +70,9 @@ type Continuation struct {
 
 func (continuation Continuation) Clone() Continuation {
 	continuation.Transcript = append([]llm.Item(nil), continuation.Transcript...)
-	continuation.ProviderState = make([]OpaqueStateRef, len(continuation.ProviderState))
-	for index, state := range continuation.ProviderState {
+	providerState := continuation.ProviderState
+	continuation.ProviderState = make([]OpaqueStateRef, len(providerState))
+	for index, state := range providerState {
 		continuation.ProviderState[index] = state.clone()
 	}
 	return continuation
