@@ -51,6 +51,18 @@ security fixtures. The registry is intentionally code-owned so a future
 semantic field or capability cannot silently escape an enforced profile's
 fixture matrix.
 
+### Responses profile boundary
+
+The direct `openai-responses` and `azure-responses` profiles now have separate
+fixture roots, provenance/redaction records, and deterministic conversion
+tests. Their stream artifacts exercise the decoder with full input, every
+split point, an empty read, one-byte fragments, and deterministic random
+fragments. They are deliberately decoder-only facts: both profiles declare
+`streaming: unsupported` and remain `bootstrap` because the package has no
+typed stream adapter or official SDK stream dispatch. The Azure fixture also
+tests its own `/openai/v1/responses` path and authentication shape; it is not
+evidence that a direct OpenAI model/tier is available from an Azure deployment.
+
 Bootstrap metadata can use `pending` while a capability is still being
 researched. An enforced profile must instead declare every registry capability
 as `native`, `emulated`, `supported`, `unsupported`, or `not_applicable`; this
@@ -182,10 +194,10 @@ Fixtures are owned by the adapter package that knows how to interpret them:
 
 ```text
 llm/provider/openaichat/testdata/contracts/common/chat/
-llm/provider/openaichat/testdata/contracts/azure-responses/
 llm/provider/openaichat/testdata/contracts/openrouter-chat/
 llm/provider/openaichat/testdata/contracts/exa-chat/
 llm/provider/openairesponses/testdata/contracts/openai-responses/
+llm/provider/openairesponses/testdata/contracts/azure-responses/
 llm/provider/anthropicmessages/testdata/contracts/anthropic-direct/
 llm/provider/anthropicmessages/testdata/contracts/anthropic-aws/
 llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic/

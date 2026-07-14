@@ -1,0 +1,28 @@
+event: response.created
+data: {"type":"response.created"}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"type":"message"}}
+
+event: response.output_text.delta
+data: {"output_index":0,"delta":"fixture "}
+
+event: response.output_text.delta
+data: {"output_index":0,"delta":"response"}
+
+event: response.output_item.done
+data: {"output_index":0}
+
+event: response.output_item.added
+data: {"output_index":1,"item":{"type":"function_call"}}
+
+event: response.function_call_arguments.delta
+data: {"output_index":1,"delta":"{\"query\":\"fixture\"}","item":{"call_id":"call-stream","name":"lookup"}}
+
+event: response.output_item.done
+data: {"output_index":1}
+
+event: response.completed
+data: {"type":"response.completed"}
+
+: end-of-fixture

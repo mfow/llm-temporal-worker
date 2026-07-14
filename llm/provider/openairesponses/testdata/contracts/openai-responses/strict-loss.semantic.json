@@ -1,0 +1,14 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-openai-strict-loss",
+  "model": "gpt-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "sampling": {"top_k": 4},
+  "extensions": {}
+}

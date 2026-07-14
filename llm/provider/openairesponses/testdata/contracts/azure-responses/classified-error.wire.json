@@ -1,0 +1,1 @@
+{"status":429,"code":"rate_limit_exceeded","request_id":"req-azure-redacted","retry_after":"3","message":"synthetic azure upstream diagnostic"}

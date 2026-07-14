@@ -1,13 +1,22 @@
 {
+  "include": ["reasoning.encrypted_content"],
   "input": [
-    {
-      "content": [{"text": "hello", "type": "input_text"}],
-      "role": "user",
-      "type": "message"
-    }
+    {"content": [{"text": "fixture policy", "type": "input_text"}], "role": "system", "type": "message"},
+    {"content": [{"text": "fixture developer", "type": "input_text"}], "role": "developer", "type": "message"},
+    {"content": [{"text": "describe the fixture", "type": "input_text"}, {"detail": "high", "image_url": "https://example.test/fixture.png", "type": "input_image"}, {"file_data": "data:application/pdf;base64,cGRm", "filename": "fixture.pdf", "type": "input_file"}], "role": "user", "type": "message"},
+    {"arguments": "{\"query\":\"fixture\"}", "call_id": "call-input", "id": "call-input", "name": "lookup", "type": "function_call"},
+    {"call_id": "call-input", "output": "fixture result", "type": "function_call_output"}
   ],
+  "max_output_tokens": 128,
   "model": "gpt-contract",
-  "parallel_tool_calls": false,
-  "service_tier": "flex",
-  "tool_choice": "auto"
+  "parallel_tool_calls": true,
+  "reasoning": {"effort": "high", "mode": "standard", "summary": "detailed"},
+  "service_tier": "priority",
+  "store": false,
+  "temperature": 0.2,
+  "text": {"format": {"description": "fixture answer", "name": "answer", "schema": {"properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "strict": true, "type": "json_schema"}},
+  "tool_choice": {"name": "lookup", "type": "function"},
+  "tools": [{"description": "fixture lookup", "name": "lookup", "output_schema": {"type": "object"}, "parameters": {"properties": {"query": {"type": "string"}}, "required": ["query"], "type": "object"}, "strict": false, "type": "function"}],
+  "top_p": 0.9,
+  "truncation": "auto"
 }

@@ -1,0 +1,13 @@
+{
+  "api_version": "llm.temporal/v1",
+  "continuation": {"endpoint_id": "openai-fixture", "handle": "openai-responses:resp-openai-usage", "model": "gpt-contract", "pinned": true, "provider_state": [{"endpoint_family": "responses", "kind": "provider_state", "media_type": "application/vnd.openai.response+json", "opaque": "cmVzcC1vcGVuYWktdXNhZ2U=", "provider": "openai"}]},
+  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-usage-cost",
+  "output": [],
+  "provider": {"finish_reason": "completed", "request_id": "req-openai-fixture", "response_id": "resp-openai-usage"},
+  "route": {"api_family": "openai_responses", "endpoint_id": "openai-fixture", "requested_model": "gpt-contract", "resolved_model": "gpt-contract"},
+  "service": {"actual": "standard", "attempted": "standard", "fallback_index": 0, "provider_value": "default", "requested": "standard"},
+  "status": "completed",
+  "usage": {"cache_read_tokens": 5, "cache_write_tokens": 2, "input_tokens": 21, "output_tokens": 13, "provider_raw": {"total_tokens": 34}, "reasoning_tokens": 3}
+}

@@ -1,5 +1,0 @@
-{
-  "messages": [{"content": [{"text": "hello", "type": "text"}], "role": "user"}],
-  "model": "deployment-a",
-  "service_tier": "priority"
-}
