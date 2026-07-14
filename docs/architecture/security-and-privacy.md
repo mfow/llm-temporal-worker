@@ -34,9 +34,13 @@ Configuration contains references, not secret values:
 
 ```yaml
 auth:
-  kind: env
+  kind: bearer_env
   name: OPENAI_API_KEY
 ```
+
+`auth.kind` names the authentication mode (`bearer_env`, `header_env`, or a
+provider workload-identity/default chain). Standalone secret references use
+`kind: env`, `file`, or `workload_identity` instead.
 
 V1 resolvers support environment, mounted file, and platform workload identity
 where the official SDK supports it. Secret values:
