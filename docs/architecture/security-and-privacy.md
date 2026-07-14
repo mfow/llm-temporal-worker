@@ -135,8 +135,20 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
 - Go modules and Actions are version-pinned and updated through reviewed PRs.
 - Official provider SDKs are preferred; raw HTTP requires an ADR, scoped package,
   wire fixtures, and a migration/removal condition.
-- CI runs vulnerability scanning, static analysis, race tests, license checks,
-  SBOM generation, and container scanning as implementation phases land.
+- `make security-verify` runs source/fixture/test-output redaction checks,
+  checks every direct `go.mod` requirement against the reviewed license/source
+  inventory, and runs the pinned `govulncheck` release with the reviewed Go
+  1.26.5 toolchain. It scans the reachable program, including transitive
+  dependencies, rather than treating a dependency list as proof of safety.
+- Pull-request CI runs `make security-verify`. Trusted-master failures retain
+  only a redacted JSON report containing component status, direct-module
+  identifiers/count, and vulnerability identifiers; it never contains scanner
+  traces, test output, source paths, request content, or secret-like bytes.
+- License inventory and vulnerability exceptions are explicit, reviewed files;
+  an exception requires an owner, future expiry, remediation reference, and
+  trace scope. A module-only exception cannot suppress a later reachable
+  package/function trace without explicit re-review, nor can any exception
+  suppress an unlisted or newly reported finding.
 - Release artifacts are reproducible where practical, signed, and accompanied
   by provenance.
 - The runtime image is non-root, read-only, capability-dropped, and contains no

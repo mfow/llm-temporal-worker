@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 
 GO ?= go
+SECURITY_GO_TOOLCHAIN ?= go1.26.5
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
@@ -88,11 +89,23 @@ adapter-contracts:
 	$(GO) test -v ./llm/provider/contracttest ./llm/provider/...
 
 security-verify:
-	@output="$$(mktemp)"; \
-	trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+	@workspace="$$(mktemp -d)"; \
+	cleanup() { rm -rf "$$workspace"; }; \
+	trap cleanup EXIT HUP INT TERM; \
 	status=0; \
-	$(GO) test -json ./... >"$$output" 2>&1 || status=$$?; \
-	$(GO) run ./tools/sourceverify -root . -test-output "$$output"; \
-	test "$$status" -eq 0
+	test_status=pass; \
+	source_status=pass; \
+	go_mod_status=pass; \
+	vulnerability_status=pass; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) test -json ./... >"$$workspace/test-output.json" 2>&1 || { status=1; test_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/sourceverify -root . -test-output "$$workspace/test-output.json" || { status=1; source_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) mod edit -json >"$$workspace/go-mod.json" 2>&1 || { status=1; go_mod_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -format json ./... >"$$workspace/govulncheck.json" 2>"$$workspace/govulncheck.stderr" || { status=1; vulnerability_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/supplychainverify -baseline tools/supplychainverify/baseline.json -go-mod "$$workspace/go-mod.json" -vulnerability-output "$$workspace/govulncheck.json" -report "$$workspace/security-verify.json" -test-status "$$test_status" -source-status "$$source_status" -go-mod-status "$$go_mod_status" -vulnerability-status "$$vulnerability_status" || status=1; \
+	if [ -n "$${SECURITY_REPORT:-}" ] && [ -f "$$workspace/security-verify.json" ]; then \
+		mkdir -p "$$(dirname "$$SECURITY_REPORT")"; \
+		cp "$$workspace/security-verify.json" "$$SECURITY_REPORT"; \
+	fi; \
+	exit "$$status"
 
 verify: fmt-check schema-verify docs-verify vet test build

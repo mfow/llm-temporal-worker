@@ -147,7 +147,7 @@ func configure(password string) {
 	}
 }
 
-func TestMakefileDefinesSelfContainedSecurityVerify(t *testing.T) {
+func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 	t.Parallel()
 
 	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
@@ -162,13 +162,16 @@ func TestMakefileDefinesSelfContainedSecurityVerify(t *testing.T) {
 	for _, expected := range []string{
 		"$(GO) test -json ./...",
 		"$(GO) run ./tools/sourceverify",
+		"$(GO) run ./tools/supplychainverify",
+		"golang.org/x/vuln/cmd/govulncheck@v1.6.0",
+		"GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN)",
 		"mktemp",
 	} {
 		if !strings.Contains(target, expected) {
 			t.Fatalf("security-verify target does not contain %q", expected)
 		}
 	}
-	for _, externalTool := range []string{"govulncheck", "gitleaks", "trivy", "curl", "go install"} {
+	for _, externalTool := range []string{"gitleaks", "trivy", "curl", "go install"} {
 		if strings.Contains(target, externalTool) {
 			t.Fatalf("security-verify target invokes external tool %q", externalTool)
 		}

@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "allowed_licenses": [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "MIT"
+  ],
+  "direct_modules": [
+    {
+      "path": "github.com/Azure/azure-sdk-for-go/sdk/azcore",
+      "version": "v1.17.0",
+      "license": "MIT",
+      "source": "https://github.com/Azure/azure-sdk-for-go"
+    },
+    {
+      "path": "github.com/Azure/azure-sdk-for-go/sdk/azidentity",
+      "version": "v1.7.0",
+      "license": "MIT",
+      "source": "https://github.com/Azure/azure-sdk-for-go"
+    },
+    {
+      "path": "github.com/anthropics/anthropic-sdk-go",
+      "version": "v1.57.0",
+      "license": "MIT",
+      "source": "https://github.com/anthropics/anthropic-sdk-go"
+    },
+    {
+      "path": "github.com/aws/aws-sdk-go-v2",
+      "version": "v1.42.1",
+      "license": "Apache-2.0",
+      "source": "https://github.com/aws/aws-sdk-go-v2"
+    },
+    {
+      "path": "github.com/aws/aws-sdk-go-v2/config",
+      "version": "v1.27.27",
+      "license": "Apache-2.0",
+      "source": "https://github.com/aws/aws-sdk-go-v2"
+    },
+    {
+      "path": "github.com/aws/aws-sdk-go-v2/credentials",
+      "version": "v1.17.27",
+      "license": "Apache-2.0",
+      "source": "https://github.com/aws/aws-sdk-go-v2"
+    },
+    {
+      "path": "github.com/aws/aws-sdk-go-v2/service/s3",
+      "version": "v1.105.1",
+      "license": "Apache-2.0",
+      "source": "https://github.com/aws/aws-sdk-go-v2"
+    },
+    {
+      "path": "github.com/aws/smithy-go",
+      "version": "v1.27.3",
+      "license": "Apache-2.0",
+      "source": "https://github.com/aws/smithy-go"
+    },
+    {
+      "path": "github.com/openai/openai-go/v3",
+      "version": "v3.42.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/openai/openai-go"
+    },
+    {
+      "path": "github.com/prometheus/client_golang",
+      "version": "v1.23.2",
+      "license": "Apache-2.0",
+      "source": "https://github.com/prometheus/client_golang"
+    },
+    {
+      "path": "github.com/prometheus/client_model",
+      "version": "v0.6.2",
+      "license": "Apache-2.0",
+      "source": "https://github.com/prometheus/client_model"
+    },
+    {
+      "path": "github.com/prometheus/common",
+      "version": "v0.70.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/prometheus/common"
+    },
+    {
+      "path": "github.com/redis/go-redis/v9",
+      "version": "v9.21.0",
+      "license": "BSD-2-Clause",
+      "source": "https://github.com/redis/go-redis"
+    },
+    {
+      "path": "github.com/santhosh-tekuri/jsonschema/v6",
+      "version": "v6.0.2",
+      "license": "MIT",
+      "source": "https://github.com/santhosh-tekuri/jsonschema-go"
+    },
+    {
+      "path": "go.opentelemetry.io/otel",
+      "version": "v1.43.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/open-telemetry/opentelemetry-go"
+    },
+    {
+      "path": "go.opentelemetry.io/otel/sdk",
+      "version": "v1.43.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/open-telemetry/opentelemetry-go"
+    },
+    {
+      "path": "go.opentelemetry.io/otel/trace",
+      "version": "v1.43.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/open-telemetry/opentelemetry-go"
+    },
+    {
+      "path": "go.temporal.io/sdk",
+      "version": "v1.44.1",
+      "license": "MIT",
+      "source": "https://github.com/temporalio/sdk-go"
+    },
+    {
+      "path": "go.yaml.in/yaml/v4",
+      "version": "v4.0.0-rc.6",
+      "license": "MIT",
+      "source": "https://github.com/yaml/go-yaml"
+    }
+  ],
+  "vulnerability_exceptions": [
+    {
+      "id": "GO-2026-5932",
+      "owner": "platform-security",
+      "expires": "2026-08-14T00:00:00Z",
+      "remediation": "https://pkg.go.dev/vuln/GO-2026-5932",
+      "scope": "module_only"
+    }
+  ]
+}
