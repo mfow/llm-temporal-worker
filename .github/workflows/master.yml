@@ -152,6 +152,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: make readiness-integration
 
+      - name: Run authorized Compose lifecycle
+        if: steps.go.outputs.present == 'true'
+        run: LLMTW_COMPOSE_LIVE=1 make compose-live-integration
+
       - name: Build worker
         if: steps.go.outputs.present == 'true'
         run: go build ./...

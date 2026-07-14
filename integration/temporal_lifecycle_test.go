@@ -380,9 +380,9 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 	if registry.name != activity.GenerateActivityName {
 		t.Fatalf("registered Activity = %q, want %q", registry.name, activity.GenerateActivityName)
 	}
-	generate, ok := registry.function.(func(context.Context, activity.GenerateRequest) (activity.GenerateResponse, error))
+	generate, ok := registry.function.(func(context.Context, activity.GenerateRequest) (*activity.GenerateResponse, error))
 	if !ok {
-		t.Fatalf("captured Activity has type %T", registry.function)
+		t.Fatalf("captured Activity has type %T, want pointer response handler", registry.function)
 	}
 	if health.Ready() || metricsPolling(t, metrics) {
 		t.Fatal("worker became ready or started polling before Start")
@@ -410,6 +410,9 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 	second, err := generate(context.Background(), decoded)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if first == nil || second == nil {
+		t.Fatalf("registered Activity responses = %#v and %#v, want success responses", first, second)
 	}
 	if first.Response.OperationID == "" || first.Response.OperationID != second.Response.OperationID {
 		t.Fatalf("replay operation IDs = %q and %q", first.Response.OperationID, second.Response.OperationID)

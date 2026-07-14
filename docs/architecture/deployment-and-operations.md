@@ -91,7 +91,9 @@ The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. S3 readiness uses `HeadBucket`
 against the configured bucket only, never a tenant key. A failed state check
 keeps liveness `200`, sets readiness `503`, and pauses Temporal polling;
-periodic checks resume polling only after every dependency has recovered.
+periodic checks resume polling only after every dependency has recovered. The
+monitor keeps checking while a paused poller drains, but does not start its
+replacement until that prior poller has stopped.
 
 On termination, readiness fails immediately, polling stops, in-flight Activities
 receive the Temporal worker grace period, and telemetry flushes. Deployment
@@ -193,24 +195,32 @@ Release dashboards and runbooks cover:
 
 ## Local stack
 
-`compose.yaml` starts pinned Temporal development services, Redis with
-persistence, and a deterministic provider mock. The `worker` profile is
-opt-in because it requires a locally generated continuation HMAC key. Profiles
-add the worker without introducing a live provider credential. Local smoke
-checks are parser/configuration/readiness-only because the provider mock
-resolves to a Docker-private address and the worker deliberately denies it:
+`compose.yaml` starts pinned Postgres-backed Temporal development services,
+Redis with persistence, a development-only durable file-blob volume, and a
+deterministic provider mock. The `worker` profile is opt-in because it requires
+a local continuation HMAC key. Profiles add the worker without introducing a
+live provider credential. Local smoke checks remain
+parser/configuration/readiness checks because the provider mock resolves to a
+Docker-private address and the worker deliberately denies it:
 
 1. validate the Compose model, generated configuration, and fixture invariants
    without creating containers;
-2. allow an operator to boot the worker and verify Temporal/Redis startup and
-   readiness behavior only;
-3. exercise deterministic provider requests through injected adapter/runtime
-   tests rather than a Compose-network request.
+2. use `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` in an authorized
+   local Docker environment to boot the worker, verify the exact live/ready
+   endpoints, and stop/restore its shared Redis dependency;
+3. exercise a real Temporal Activity through a content-free injected adapter
+   in the Go test process rather than a Compose-network provider request.
 
-The current stack does not execute a fixture Activity against `provider-mock`
-and cannot perform provider egress. Task 17's planned self-contained mock
-Activity/recovery workflow therefore requires a separately reviewed future
-design; Task 2 must not create a Docker-private-address bypass to satisfy it.
+`make compose-live-integration` is explicitly opt-in and fails closed unless
+`LLMTW_COMPOSE_LIVE=1`. It creates a unique Compose project and temporary
+continuation key, starts the worker only after Redis Function and blob-volume
+provisioning complete, and removes those project resources, temporary key, Go
+cache, and generated image tags on exit. The live Temporal test uses two
+worker replicas and the shared Redis admission store: after the mock accepts,
+the first worker stops and the replacement must observe a completed replay or
+the conservative `llm_ambiguous_dispatch` result without another dispatch or
+budget reservation. It never calls `provider-mock` and must not create a
+Docker-private-address bypass to satisfy this proof.
 
 Live provider tests are opt-in, require explicit environment flags and tiny cost
 ceilings, and never run on pull requests from untrusted forks.
@@ -228,11 +238,11 @@ The readiness integration target starts one digest-pinned local Redis instance,
 explicitly provisions the test Function, then stops and restores Redis while a
 worker is running. It proves liveness remains `200`, readiness transitions
 `200` to `503` to `200`, polling resumes only after recovery, and no provider
-call is made. The Compose check only validates the model and local fixture invariants. It
-does not create containers; `LLMTW_COMPOSE_LIVE=1` is a fail-closed guard for
-operators who need the separately authorized live runbook. The Kubernetes
-check renders every overlay with `kubectl kustomize` and never contacts a
-cluster. Both checks use only checked-in fixtures and redacted configuration.
+call is made. The Compose smoke check only validates the model and local
+fixture invariants; `compose-live-integration` is the separately authorized
+Docker gate. The Kubernetes check renders every overlay with `kubectl
+kustomize` and never contacts a cluster. Both checks use only checked-in
+fixtures and redacted configuration.
 
 ## GitHub Actions split
 

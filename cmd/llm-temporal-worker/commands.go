@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -58,6 +59,8 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return executeWorkerCommand(ctx, args[1:], options)
 	case "reconcile":
 		return executeReconcileCommand(ctx, args[1:], options)
+	case "healthcheck":
+		return executeHealthcheckCommand(ctx, args[1:], options)
 	case "help", "-h", "--help":
 		writeUsage(options.Out)
 		return 0
@@ -110,6 +113,58 @@ func executeHealthServerCommand(ctx context.Context, args []string, options Comm
 		writeCommandError(options.ErrOut, errors.New("shutdown health listener"))
 		return 1
 	}
+	return 0
+}
+
+type healthcheckURLs []string
+
+func (urls *healthcheckURLs) String() string { return strings.Join(*urls, ",") }
+
+func (urls *healthcheckURLs) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("healthcheck URL is required")
+	}
+	*urls = append(*urls, value)
+	return nil
+}
+
+func executeHealthcheckCommand(ctx context.Context, args []string, options CommandOptions) int {
+	flags := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
+	flags.SetOutput(options.ErrOut)
+	var endpoints healthcheckURLs
+	flags.Var(&endpoints, "url", "HTTP(S) URL to require healthy; may be repeated")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if len(endpoints) == 0 || flags.NArg() != 0 {
+		writeCommandError(options.ErrOut, errors.New("at least one healthcheck URL is required"))
+		return 2
+	}
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	for _, endpoint := range endpoints {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil || request.URL.Scheme == "" || request.URL.Host == "" || (request.URL.Scheme != "http" && request.URL.Scheme != "https") {
+			writeCommandError(options.ErrOut, errors.New("healthcheck URL must be an absolute HTTP(S) URL"))
+			return 2
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			writeCommandError(options.ErrOut, errors.New("healthcheck failed"))
+			return 1
+		}
+		_ = response.Body.Close()
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			writeCommandError(options.ErrOut, errors.New("healthcheck failed"))
+			return 1
+		}
+	}
+	_, _ = io.WriteString(options.Out, "healthcheck passed\n")
 	return 0
 }
 
@@ -234,5 +289,5 @@ func writeCommandError(output io.Writer, err error) {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|validate-config|print-effective-config|reconcile>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|validate-config|print-effective-config|reconcile|healthcheck>\n")
 }

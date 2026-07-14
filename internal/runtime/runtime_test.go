@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -230,10 +231,77 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	}
 }
 
+func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
+	probe := &countingRuntimeProbe{}
+	probe.healthy.Store(true)
+	releaseStop := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseStop) }) }
+	first := &drainingMonitoringWorker{
+		stopEntered: make(chan struct{}, 1),
+		releaseStop: releaseStop,
+		stopExited:  make(chan struct{}, 1),
+	}
+	replacement := &monitoringWorker{}
+	var built atomic.Int32
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, &testWorker{}, &closed)
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		if built.Add(1) == 1 {
+			return first, testRegistry{}, nil
+		}
+		return replacement, testRegistry{}, nil
+	}
+	options.DependencyProbes = []DependencyProbe{probe}
+	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	t.Cleanup(release)
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if !runtime.Health.Ready() || first.starts.Load() != 1 {
+		t.Fatalf("initial monitor state ready=%v starts=%d", runtime.Health.Ready(), first.starts.Load())
+	}
+
+	probe.healthy.Store(false)
+	waitForRuntimeEvent(t, first.stopEntered, "first worker pause drain")
+	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && first.stops.Load() == 1 })
+
+	healthyChecks := probe.healthyChecks.Load()
+	probe.healthy.Store(true)
+	waitForRuntime(t, func() bool { return probe.healthyChecks.Load() > healthyChecks })
+	if runtime.Health.Ready() || replacement.starts.Load() != 0 || built.Load() != 1 {
+		t.Fatalf("replacement started before pause drain completed: ready=%v replacement-starts=%d built=%d", runtime.Health.Ready(), replacement.starts.Load(), built.Load())
+	}
+
+	release()
+	waitForRuntimeEvent(t, first.stopExited, "first worker pause drain completion")
+	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() == 1 && built.Load() == 2 })
+}
+
 type mutableRuntimeProbe struct{ healthy atomic.Bool }
 
 func (probe *mutableRuntimeProbe) Probe(context.Context) ProbeResult {
 	if probe.healthy.Load() {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	}
+	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
+}
+
+type countingRuntimeProbe struct {
+	healthy       atomic.Bool
+	healthyChecks atomic.Int32
+}
+
+func (probe *countingRuntimeProbe) Probe(context.Context) ProbeResult {
+	if probe.healthy.Load() {
+		probe.healthyChecks.Add(1)
 		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
 	}
 	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
@@ -250,6 +318,41 @@ func (worker *monitoringWorker) Start() error {
 }
 
 func (worker *monitoringWorker) Stop() { worker.stops.Add(1) }
+
+type drainingMonitoringWorker struct {
+	starts      atomic.Int32
+	stops       atomic.Int32
+	stopEntered chan struct{}
+	releaseStop <-chan struct{}
+	stopExited  chan struct{}
+}
+
+func (worker *drainingMonitoringWorker) Start() error {
+	worker.starts.Add(1)
+	return nil
+}
+
+func (worker *drainingMonitoringWorker) Stop() {
+	worker.stops.Add(1)
+	select {
+	case worker.stopEntered <- struct{}{}:
+	default:
+	}
+	<-worker.releaseStop
+	select {
+	case worker.stopExited <- struct{}{}:
+	default:
+	}
+}
+
+func waitForRuntimeEvent(t *testing.T, event <-chan struct{}, description string) {
+	t.Helper()
+	select {
+	case <-event:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+	}
+}
 
 func runtimeMonitorConfig(t *testing.T) []byte {
 	t.Helper()

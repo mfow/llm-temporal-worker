@@ -1,27 +1,43 @@
 # Local Compose fixture
 
-The default Compose profile starts pinned Temporal, Redis, and a deterministic
-OpenAI-compatible provider fixture. No provider credential is used. The worker
-profile is deliberately opt-in because it needs a locally generated
-continuation HMAC key:
+The default Compose profile starts pinned Postgres-backed Temporal, Redis, and
+a deterministic OpenAI-compatible provider fixture. No provider credential is
+used. Postgres and Temporal share the development-only
+`${LLMTW_POSTGRES_PASSWORD:-local-only}` fixture variable; override it for any
+non-local use. Redis disables its default user and gives the worker and
+provisioner the development-only `${LLMTW_REDIS_USERNAME:-local}` /
+`${LLMTW_REDIS_PASSWORD:-local-only}` ACL; override both for any non-local use.
+The worker profile is deliberately opt-in because it needs a continuation
+HMAC key. The supported lifecycle gate creates that key with restrictive
+permissions, uses a development-only durable file-blob volume, and removes its
+own containers, volumes, images, temporary Go cache, and key when it finishes:
 
 ```sh
-mkdir -p .local
-openssl rand -hex 32 > .local/continuation-hmac
-docker compose up -d temporal redis provider-mock
-docker compose --profile worker up worker
+LLMTW_COMPOSE_LIVE=1 make compose-live-integration
 ```
+
+The target is intentionally distinct from `make compose-smoke`: the latter
+only validates the Compose model and never starts Docker services. The live
+gate starts a uniquely named local project, checks the worker's exact
+`/health/live` and `/health/ready` endpoints through its distroless binary,
+then stops and restores Redis to verify the same liveness/readiness recovery
+contract. It also runs a real Temporal SDK recovery test against that Temporal
+and Redis pair.
 
 The fixture is for development only. It uses a local-only bearer value and a
 zero-cost catalog; production deployments must use external secret delivery,
 real catalog digests, and the release image digest. The worker exposes the
 same probes as Kubernetes: `/health/live`, `/health/ready`, and `/metrics`.
 
-The checked-in worker profile is a parser/configuration/readiness fixture, not
-an end-to-end provider invocation path. Provider egress is deliberately
-fail-closed in every environment, so provider egress is not available to the
-private Docker-network address resolved for `provider-mock`. Use the adapter
-and runtime tests for deterministic mock traffic. To make real provider
-requests from a local worker, use a private local configuration with a reviewed
-public HTTPS provider hostname and its matching `outbound_hosts` entry; do not
-weaken the policy for a Docker-private destination.
+The checked-in worker profile remains a
+parser/configuration/readiness fixture, not an end-to-end provider invocation
+path. Provider egress is deliberately fail-closed in every environment, so
+provider egress is not available to the private Docker-network address resolved
+for `provider-mock`. The recovery gate injects a content-free adapter in the Go
+test process instead of requesting that address; it records an accepted write,
+stops one Temporal worker, starts a replacement, and requires conservative
+ambiguity with no second provider dispatch or shared-budget reservation. To
+make real provider requests from a local worker, use a private local
+configuration with a reviewed public HTTPS provider hostname and its matching
+`outbound_hosts` entry; do not weaken the policy for a Docker-private
+destination.

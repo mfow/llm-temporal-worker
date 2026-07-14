@@ -51,6 +51,55 @@ func New(options Options) (*Store, error) {
 	return &Store{root: root, maxBytes: options.MaxBytes, clock: options.Clock}, nil
 }
 
+// ProbeBucket implements the runtime's common blob readiness contract. The
+// file store has no bucket API, so it verifies that the pre-provisioned root
+// remains a writable directory without creating a tenant-visible object.
+func (store *Store) ProbeBucket(ctx context.Context) error {
+	if store == nil || store.root == "" {
+		return fmt.Errorf("file blob store is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	info, err := os.Stat(store.root)
+	if err != nil {
+		return fmt.Errorf("inspect file blob root: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("file blob root is not a directory")
+	}
+	temporary, err := os.CreateTemp(store.root, ".probe-*")
+	if err != nil {
+		return fmt.Errorf("create file blob probe: %w", err)
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if err := temporary.Chmod(0600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure file blob probe: %w", err)
+	}
+	if _, err := temporary.Write([]byte{0}); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write file blob probe: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync file blob probe: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close file blob probe: %w", err)
+	}
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("remove file blob probe: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (store *Store) Put(ctx context.Context, request blob.PutRequest) (blob.Ref, error) {
 	if store == nil {
 		return blob.Ref{}, fmt.Errorf("file blob store is nil")

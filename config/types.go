@@ -145,9 +145,17 @@ type RedisConfig struct {
 }
 
 type BlobStoreConfig struct {
-	Kind        string   `yaml:"kind" json:"kind"`
-	InlineBytes int      `yaml:"inline_bytes" json:"inline_bytes"`
-	S3          S3Config `yaml:"s3" json:"s3"`
+	Kind        string         `yaml:"kind" json:"kind"`
+	InlineBytes int            `yaml:"inline_bytes" json:"inline_bytes"`
+	File        FileBlobConfig `yaml:"file" json:"file"`
+	S3          S3Config       `yaml:"s3" json:"s3"`
+}
+
+// FileBlobConfig is the development-only durable file-store configuration.
+// Production deployments must use a remote object store so results survive a
+// pod replacement without relying on a node-local volume.
+type FileBlobConfig struct {
+	Root string `yaml:"root" json:"root"`
 }
 
 type S3Config struct {

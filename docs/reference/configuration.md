@@ -375,7 +375,9 @@ cannot exceed the interval. The worker checks its required state dependencies
 at initial construction, before a reload is published, and periodically while
 running. A failed check makes `/health/ready` return `503` and stops Temporal
 polling, while `/health/live` remains available for the process supervisor.
-Polling resumes only after every required dependency passes again.
+Polling resumes only after every required dependency passes again. During a
+transient worker drain the monitor keeps checking dependencies, but it never
+starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
 `noeviction` policy, plus the configured admission code identity. It checks

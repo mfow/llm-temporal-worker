@@ -111,3 +111,36 @@ func TestStoreRejectsSymlinkObjects(t *testing.T) {
 		t.Fatalf("symlink get error = %v", err)
 	}
 }
+
+func TestStoreProbeBucketChecksWritableRoot(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(Options{Root: root, MaxBytes: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prober, ok := any(store).(interface {
+		ProbeBucket(context.Context) error
+	})
+	if !ok {
+		t.Fatal("file blob store does not expose a readiness probe")
+	}
+	if err := prober.ProbeBucket(context.Background()); err != nil {
+		t.Fatalf("ProbeBucket() error = %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("readiness probe left files behind: %#v", entries)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prober.ProbeBucket(context.Background()); err == nil {
+		t.Fatal("ProbeBucket() accepted an unusable root")
+	}
+}

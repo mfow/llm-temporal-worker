@@ -37,6 +37,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/routing"
 	"github.com/mfow/llm-temporal-worker/state"
 	"github.com/mfow/llm-temporal-worker/storage/blob"
+	"github.com/mfow/llm-temporal-worker/storage/fileblob"
 	redisstore "github.com/mfow/llm-temporal-worker/storage/redis"
 	"github.com/mfow/llm-temporal-worker/storage/s3blob"
 )
@@ -243,8 +244,15 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, fmt.Errorf("construct blob readiness probe: %w", err)
 	}
 	refResolver := factory.options.BlobRefResolver
-	if refResolver == nil && value.BlobStore.Kind == "s3" {
-		refResolver, err = NewContentAddressedBlobRefResolver("s3", value.BlobStore.S3.Prefix)
+	if refResolver == nil {
+		switch value.BlobStore.Kind {
+		case "s3":
+			refResolver, err = NewContentAddressedBlobRefResolver("s3", value.BlobStore.S3.Prefix)
+		case "file":
+			refResolver, err = NewContentAddressedBlobRefResolver("file", "")
+		default:
+			err = fmt.Errorf("unsupported blob store kind %q", value.BlobStore.Kind)
+		}
 		if err != nil {
 			closeAll()
 			return nil, nil, fmt.Errorf("construct blob reference resolver: %w", err)
@@ -757,6 +765,16 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 }
 
 func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, io.Closer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if value.BlobStore.Kind == "file" {
+		store, err := fileblob.New(fileblob.Options{Root: value.BlobStore.File.Root, MaxBytes: int64(value.Limits.RequestBytes)})
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, nil, nil
+	}
 	if value.BlobStore.S3.Auth.Kind != "aws_default_chain" {
 		return nil, nil, fmt.Errorf("%w: S3 auth %q", ErrUnsupportedProviderAuth, value.BlobStore.S3.Auth.Kind)
 	}

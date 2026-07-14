@@ -11,7 +11,10 @@ import (
 	"github.com/mfow/llm-temporal-worker/engine"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
+	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/worker"
 )
 
 type fakeEngine struct {
@@ -100,6 +103,25 @@ func (heartbeater *fakeHeartbeater) Beat(_ context.Context, progress engine.Prog
 	return nil
 }
 
+type temporalActivityCaptureRegistry struct {
+	name     string
+	function any
+}
+
+func (registry *temporalActivityCaptureRegistry) RegisterActivity(function any) {
+	registry.function = function
+}
+
+func (registry *temporalActivityCaptureRegistry) RegisterActivityWithOptions(function any, options sdkactivity.RegisterOptions) {
+	registry.name = options.Name
+	registry.function = function
+}
+
+func (*temporalActivityCaptureRegistry) RegisterDynamicActivity(any, sdkactivity.DynamicRegisterOptions) {
+}
+
+var _ worker.ActivityRegistry = (*temporalActivityCaptureRegistry)(nil)
+
 func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	heartbeater := &fakeHeartbeater{}
 	activities := Activities{Engine: fakeEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}, Heartbeater: heartbeater}
@@ -150,6 +172,70 @@ func TestGenerateActivityMapsEngineError(t *testing.T) {
 	}
 	if applicationErr.Type() != ErrorTypeAmbiguous || !applicationErr.NonRetryable() {
 		t.Fatalf("error type = %q non_retryable=%v", applicationErr.Type(), applicationErr.NonRetryable())
+	}
+}
+
+func TestGenerateTemporalReturnsPointerOnlyOnSuccess(t *testing.T) {
+	want := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
+	activities := Activities{Engine: fakeEngine{response: want}}
+
+	response, err := activities.generateTemporal(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response == nil {
+		t.Fatal("Temporal Activity response = nil, want success response")
+	}
+	if response.Response.OperationKey != want.OperationKey || response.Response.OperationID != want.OperationID || response.Response.Status != want.Status {
+		t.Fatalf("Temporal Activity response = %#v, want %#v", response.Response, want)
+	}
+}
+
+func TestGenerateTemporalReturnsNilResultForAmbiguousError(t *testing.T) {
+	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
+	activities := Activities{Engine: fakeEngine{err: err}}
+
+	response, got := activities.generateTemporal(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
+	if response != nil {
+		t.Fatalf("Temporal Activity response = %#v, want nil with error", response)
+	}
+	assertAmbiguousActivityError(t, got)
+}
+
+func TestRegisteredTemporalGeneratePreservesAmbiguousApplicationError(t *testing.T) {
+	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
+	activities := Activities{Engine: fakeEngine{err: err}}
+	registry := &temporalActivityCaptureRegistry{}
+	activities.Register(registry)
+	if registry.name != GenerateActivityName {
+		t.Fatalf("registered Activity = %q, want %q", registry.name, GenerateActivityName)
+	}
+	generate, ok := registry.function.(func(context.Context, GenerateRequest) (*GenerateResponse, error))
+	if !ok {
+		t.Fatalf("registered Activity has type %T, want pointer response handler", registry.function)
+	}
+
+	var suite testsuite.WorkflowTestSuite
+	environment := suite.NewTestActivityEnvironment()
+	environment.RegisterActivityWithOptions(generate, sdkactivity.RegisterOptions{Name: registry.name})
+	_, got := environment.ExecuteActivity(generate, GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
+	if got == nil {
+		t.Fatal("registered Temporal Activity unexpectedly succeeded")
+	}
+	if strings.Contains(got.Error(), "response requires operation_key") {
+		t.Fatalf("registered Temporal Activity serialized a zero response instead of returning ambiguity: %v", got)
+	}
+	assertAmbiguousActivityError(t, got)
+}
+
+func assertAmbiguousActivityError(t *testing.T, got error) {
+	t.Helper()
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(got, &applicationErr) {
+		t.Fatalf("error = %T %v, want Temporal application error", got, got)
+	}
+	if applicationErr.Type() != ErrorTypeAmbiguous || !applicationErr.NonRetryable() {
+		t.Fatalf("error type = %q non_retryable=%v, want %q true", applicationErr.Type(), applicationErr.NonRetryable(), ErrorTypeAmbiguous)
 	}
 }
 

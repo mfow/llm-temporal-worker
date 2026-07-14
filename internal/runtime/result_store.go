@@ -172,12 +172,14 @@ func stateBlobRef(ref blob.Ref) (state.BlobRef, error) {
 
 // NewContentAddressedBlobRefResolver returns a resolver for stores whose
 // locator is <prefix>/<sha256(tenant)>/<sha256(content)>, including the S3
-// implementation in storage/s3blob. Prefix is normalized once and never
+// implementation in storage/s3blob. The development-only file store is the
+// one exception: it uses a tenant-relative locator and therefore permits an
+// empty prefix only when storeName is file. Prefix is normalized once and never
 // accepts path traversal.
 func NewContentAddressedBlobRefResolver(storeName, prefix string) (BlobRefResolver, error) {
 	storeName = strings.TrimSpace(storeName)
 	prefix = strings.Trim(prefix, "/")
-	if storeName == "" || prefix == "" || strings.ContainsAny(prefix, "\\\r\n") || strings.Contains(prefix, "..") {
+	if storeName == "" || strings.ContainsAny(prefix, "\\\r\n") || strings.Contains(prefix, "..") || (prefix == "" && storeName != "file") {
 		return nil, fmt.Errorf("content-addressed blob store and safe prefix are required")
 	}
 	return func(ctx context.Context, tenant string, value state.BlobRef, expiresAt time.Time) (blob.Ref, error) {
@@ -191,7 +193,11 @@ func NewContentAddressedBlobRefResolver(storeName, prefix string) (BlobRefResolv
 		if err != nil {
 			return blob.Ref{}, err
 		}
-		ref := blob.Ref{Store: storeName, Locator: prefix + "/" + tenantPrefix + "/" + value.DigestHex(), Digest: value.DigestHex(), ByteLength: value.Size, MediaType: value.Media, ExpiresAt: expiresAt}
+		locator := tenantPrefix + "/" + value.DigestHex()
+		if prefix != "" {
+			locator = prefix + "/" + locator
+		}
+		ref := blob.Ref{Store: storeName, Locator: locator, Digest: value.DigestHex(), ByteLength: value.Size, MediaType: value.Media, ExpiresAt: expiresAt}
 		if err := ref.Validate(time.Now()); err != nil && !errors.Is(err, blob.ErrExpired) {
 			return blob.Ref{}, err
 		}

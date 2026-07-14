@@ -32,6 +32,22 @@
     "continuation": { "$ref": "#/$defs/continuation" },
     "telemetry": { "$ref": "#/$defs/telemetry" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "blob_store": {
+            "properties": { "kind": { "const": "file" } },
+            "required": ["kind"]
+          }
+        },
+        "required": ["blob_store"]
+      },
+      "then": {
+        "properties": { "environment": { "const": "development" } }
+      }
+    }
+  ],
   "$defs": {
     "duration": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)([0-9]+(ns|us|µs|ms|s|m|h|d))*$" },
     "secret": {
@@ -119,11 +135,47 @@
     },
     "blob_store": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "inline_bytes", "s3"],
+      "required": ["kind", "inline_bytes"],
       "properties": {
-        "kind": { "const": "s3" }, "inline_bytes": { "type": "integer", "minimum": 1 },
-        "s3": { "$ref": "#/$defs/s3" }
+        "kind": { "enum": ["s3", "file"] }, "inline_bytes": { "type": "integer", "minimum": 1 },
+        "s3": {}, "file": {}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "kind": { "const": "s3" },
+            "s3": { "$ref": "#/$defs/s3" },
+            "file": { "$ref": "#/$defs/inactive_file_blob" }
+          },
+          "required": ["s3"]
+        },
+        {
+          "properties": {
+            "kind": { "const": "file" },
+            "file": { "$ref": "#/$defs/file_blob" },
+            "s3": { "$ref": "#/$defs/inactive_s3" }
+          },
+          "required": ["file"]
+        }
+      ]
+    },
+    "file_blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root"],
+      "properties": {
+        "root": {
+          "type": "string", "minLength": 2, "pattern": "^/[^\\r\\n]*$",
+          "allOf": [
+            { "not": { "pattern": "(^|/)\\.(/|$)" } },
+            { "not": { "pattern": "(^|/)\\.\\.(/|$)" } }
+          ]
+        }
       }
+    },
+    "inactive_file_blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root"],
+      "properties": { "root": { "const": "" } }
     },
     "s3": {
       "type": "object", "additionalProperties": false,
@@ -131,6 +183,21 @@
       "properties": {
         "bucket": { "type": "string", "minLength": 1 }, "region": { "type": "string", "minLength": 1 },
         "prefix": { "type": "string", "minLength": 1 }, "auth": { "$ref": "#/$defs/auth" }
+      }
+    },
+    "inactive_s3": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bucket", "region", "prefix", "auth"],
+      "properties": {
+        "bucket": { "const": "" }, "region": { "const": "" }, "prefix": { "const": "" },
+        "auth": { "$ref": "#/$defs/inactive_auth" }
+      }
+    },
+    "inactive_auth": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "path", "audience"],
+      "properties": {
+        "kind": { "const": "" }, "name": { "const": "" }, "path": { "const": "" }, "audience": { "const": "" }
       }
     },
     "limits": {
