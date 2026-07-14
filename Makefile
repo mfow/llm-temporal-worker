@@ -8,7 +8,7 @@ READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e8
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 READINESS_REDIS_PORT ?= 16379
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -107,5 +107,15 @@ security-verify:
 		cp "$$workspace/security-verify.json" "$$SECURITY_REPORT"; \
 	fi; \
 	exit "$$status"
+
+# Replays every checked-in fuzz seed without nondeterministic mutation. The
+# longer, bounded fuzz shards run only in the trusted master workflow.
+fuzz-smoke:
+	bash scripts/run-fuzz.sh smoke
+
+# Compiles reviewed semantic mutants through Go overlays; it never changes the
+# checked-out source tree.
+mutation-verify:
+	bash scripts/run-mutation.sh
 
 verify: fmt-check schema-verify docs-verify vet test build

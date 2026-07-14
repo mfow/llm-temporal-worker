@@ -102,6 +102,12 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -race ./...
 
+      - name: Replay semantic fuzz seeds and mutation invariants
+        if: steps.go.outputs.present == 'true'
+        run: |
+          make fuzz-smoke
+          make mutation-verify
+
       - name: Verify source safety and supply chain
         if: steps.go.outputs.present == 'true'
         run: make security-verify

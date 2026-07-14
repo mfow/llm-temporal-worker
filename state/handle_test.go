@@ -119,12 +119,29 @@ func (errorReader) Read([]byte) (int, error) {
 }
 
 func FuzzVerifyHandleNeverPanics(f *testing.F) {
+	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{2}, 16)))
+	if err != nil {
+		f.Fatal(err)
+	}
+	valid, err := keyring.Issue("tenant")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
 	f.Add("ctn_v1.k1.AAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	f.Fuzz(func(t *testing.T, value string) {
 		keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, _ = keyring.Verify("tenant", value)
+		identifier, err := keyring.Verify("tenant", value)
+		if err == nil && len(identifier) != 16 {
+			t.Fatalf("accepted handle has identifier length %d, want 16", len(identifier))
+		}
+		if err == nil {
+			if _, crossTenantErr := keyring.Verify("other-tenant", value); crossTenantErr != ErrInvalidHandle {
+				t.Fatalf("accepted handle crossed tenant boundary: %v", crossTenantErr)
+			}
+		}
 	})
 }

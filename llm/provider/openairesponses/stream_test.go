@@ -43,6 +43,13 @@ func TestDecodeStreamRejectsUnknownEvent(t *testing.T) {
 	}
 }
 
+func TestDecodeStreamRejectsTerminalWithUnfinishedOutput(t *testing.T) {
+	wire := "event: response.output_item.added\ndata: {}\n\nevent: response.completed\ndata: {}\n\n"
+	if _, err := DecodeStream(strings.NewReader(wire)); err == nil {
+		t.Fatal("terminal stream with unfinished output unexpectedly succeeded")
+	}
+}
+
 type responseChunkReader struct {
 	chunks [][]byte
 	index  int
