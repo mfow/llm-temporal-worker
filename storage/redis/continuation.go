@@ -128,7 +128,8 @@ func (store *ContinuationStore) Get(ctx context.Context, handle state.Handle) (s
 	if handle == "" || len(handle) > 512 {
 		return state.Continuation{}, state.ErrInvalidHandle
 	}
-	index, err := store.reader.Get(ctx, store.space.continuationIndexKey(handle.String()))
+	indexKey := store.space.continuationIndexKey(handle.String())
+	index, err := store.reader.Get(ctx, indexKey)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return state.Continuation{}, state.ErrNotFound
@@ -141,10 +142,16 @@ func (store *ContinuationStore) Get(ctx context.Context, handle state.Handle) (s
 	data, err := store.reader.Get(ctx, index)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			// A handle index without its immutable record is not a normal miss:
-			// the index and record share one expiry and must disappear together.
-			// Treat this as unavailable persisted state rather than allowing a
-			// caller to mistake corruption or partial retention for expiration.
+			// Redis can expire the record after the first index read. Recheck the
+			// index before failing closed: if it also disappeared, this was a
+			// normal expiration race; if it remains, persisted state is dangling.
+			_, recheckErr := store.reader.Get(ctx, indexKey)
+			if errors.Is(recheckErr, redis.Nil) {
+				return state.Continuation{}, state.ErrNotFound
+			}
+			if recheckErr != nil {
+				return state.Continuation{}, resolveStateError(ctx, recheckErr)
+			}
 			return state.Continuation{}, ErrUnavailable
 		}
 		return state.Continuation{}, resolveStateError(ctx, err)

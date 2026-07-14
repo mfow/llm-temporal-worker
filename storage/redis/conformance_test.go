@@ -173,12 +173,49 @@ func TestContinuationStoreFailsClosedForUnavailableRedisState(t *testing.T) {
 	}
 }
 
+func TestContinuationStoreTreatsExpiryRaceAsNotFound(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	fixture := newContinuationRuntimeFixture(func() time.Time { return now })
+	store, err := NewContinuationStore(ContinuationOptions{
+		Invoker: fixture,
+		Reader:  fixture,
+		Keys:    testKeyOptions(),
+		Keyring: testKeyring(t),
+		Clock:   func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := store.CreateRoot(context.Background(), testContinuation(t, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := newKeySpace(testKeyOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexKey := space.continuationIndexKey(handle.String())
+	recordKey := space.continuationKey("tenant-a", handle.String())
+	fixture.mu.Lock()
+	delete(fixture.values, recordKey)
+	fixture.afterMissing = func(key string) {
+		if key == recordKey {
+			delete(fixture.values, indexKey)
+		}
+	}
+	fixture.mu.Unlock()
+	if _, err := store.Get(context.Background(), handle); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("expiration race read = %v, want not found", err)
+	}
+}
+
 type continuationRuntimeFixture struct {
-	mu     sync.Mutex
-	now    func() time.Time
-	values map[string]fixtureValue
-	getErr error
-	putErr error
+	mu           sync.Mutex
+	now          func() time.Time
+	values       map[string]fixtureValue
+	getErr       error
+	putErr       error
+	afterMissing func(string)
 }
 
 type fixtureValue struct {
@@ -201,6 +238,9 @@ func (fixture *continuationRuntimeFixture) Get(ctx context.Context, key string) 
 	}
 	value, ok := fixture.get(key)
 	if !ok {
+		if fixture.afterMissing != nil {
+			fixture.afterMissing(key)
+		}
 		return "", redis.Nil
 	}
 	return value, nil

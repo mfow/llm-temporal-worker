@@ -112,13 +112,13 @@ the record's `ExpiresAt` value.
 Deletion is retention-driven. Deleting a parent does not mutate children.
 Redis derives one TTL from each continuation's `ExpiresAt` and applies it to
 the immutable record, opaque-handle index, and child operation-idempotency
-index. Those three keys must disappear together: a missing handle index is a
-normal expired/not-found result, while an index pointing at a missing record is
-a persistence inconsistency and fails closed as unavailable state. Redis
-transport failures and malformed persisted values also fail closed; callers do
-not treat them as an expired continuation. The memory store exposes an explicit
-sweep for the same policy. Immutable result blobs are retained until no live
-operation or other record references them.
+index. Redis expires keys independently, so a read that finds the record gone
+rechecks the handle index: if it also disappeared, that is a normal
+expired/not-found result; if it remains, the persisted state is dangling and
+fails closed as unavailable. Redis transport failures and malformed persisted
+values also fail closed; callers do not treat them as an expired continuation.
+The memory store exposes an explicit sweep for the same policy. Immutable result
+blobs are retained until no live operation or other record references them.
 
 ## Redis key layout
 
