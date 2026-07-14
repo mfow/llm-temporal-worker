@@ -2,6 +2,7 @@ package openairesponses
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -46,11 +47,10 @@ func TestClientValidatesResolvedConfig(t *testing.T) {
 
 func TestClientHonorsInjectedRedirectPolicy(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newLoopbackTLSServer(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
 		http.Redirect(response, request, "/provider-redirect-target", http.StatusFound)
 	}))
-	t.Cleanup(server.Close)
 
 	httpClient := server.Client()
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -65,4 +65,16 @@ func TestClientHonorsInjectedRedirectPolicy(t *testing.T) {
 	if got, want := requests.Load(), int32(1); got != want {
 		t.Fatalf("provider requests = %d, want %d without redirect follow", got, want)
 	}
+}
+
+func newLoopbackTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("test environment does not allow a loopback listener: %v", err)
+	}
+	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server
 }

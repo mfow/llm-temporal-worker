@@ -36,6 +36,16 @@ func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 	}
 }
 
+func TestMapAPIErrorTreatsRedirectResponseAsAmbiguous(t *testing.T) {
+	mapped := mapAPIError(&openai.Error{
+		StatusCode: http.StatusTemporaryRedirect,
+		Response:   &http.Response{Header: http.Header{"Location": []string{"https://redirect.example/secret"}}},
+	})
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+}
+
 func TestMapErrorClassifiesContextAndTransportFailures(t *testing.T) {
 	for _, test := range []struct {
 		err  error
@@ -59,6 +69,16 @@ func TestMapErrorClassifiesEgressDenialBeforeDispatch(t *testing.T) {
 	}
 	if !errors.Is(mapped, provider.ErrProviderEgressDenied) {
 		t.Fatal("mapped error did not preserve the egress marker")
+	}
+}
+
+func TestMapErrorClassifiesCertifiedPreDispatchAvailability(t *testing.T) {
+	mapped := mapError(provider.ErrProviderPreDispatch)
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped = %#v", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) {
+		t.Fatal("mapped error did not preserve the pre-dispatch marker")
 	}
 }
 

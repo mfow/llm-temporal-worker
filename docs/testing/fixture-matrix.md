@@ -126,13 +126,13 @@ Every profile covers:
 | Stage | Cases | Required dispatch fact |
 | --- | --- | --- |
 | Client compile | invalid model/control/schema/extension | not dispatched |
-| DNS/connect/TLS before write | refusal, cert, deadline | not dispatched |
+| DNS/connect/TLS before write | refusal, cert, client-local deadline | certified not dispatched; provider-unavailable/next-route |
 | Write | zero bytes, partial/unknown bytes | not dispatched or ambiguous from observer evidence |
 | HTTP/provider rejection | auth, permission, invalid, rate, capacity | profile-specific rejected/cost fact |
 | Headers then disconnect | with/without request ID | accepted or ambiguous |
 | Body | malformed JSON, unknown block, usage overflow | accepted; cost reconciled conservatively |
 | Stream | malformed event, truncated terminal, error after delta | accepted/ambiguous as profile specifies |
-| Cancellation | before write, during body, after terminal before finalize | canceled, ambiguous, or accepted |
+| Cancellation | caller cancel/deadline before writable connection; during body; after terminal before finalize | not dispatched/never; ambiguous, or accepted |
 
 Assertions include common code, phase, retry disposition, reservation treatment,
 request ID, safe Temporal details, and no raw body leakage.

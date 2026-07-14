@@ -8,15 +8,26 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/netip"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/config"
+	"github.com/mfow/llm-temporal-worker/llm/provider"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (roundTrip roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
 
 func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
 	t.Parallel()
@@ -49,6 +60,24 @@ func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), address) {
 				t.Fatalf("DialContext() leaked blocked address: %q", err)
+			}
+		})
+	}
+}
+
+func TestBlockedProviderAddressRejectsIPv6SiteLocalRange(t *testing.T) {
+	cases := map[string]struct {
+		address string
+		blocked bool
+	}{
+		"first site local": {address: "fec0::1", blocked: true},
+		"last site local":  {address: "feff:ffff::1", blocked: true},
+		"public IPv6":      {address: "2001:4860:4860::8888", blocked: false},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := blockedProviderAddress(netip.MustParseAddr(test.address)); got != test.blocked {
+				t.Fatalf("blockedProviderAddress(%s) = %t, want %t", test.address, got, test.blocked)
 			}
 		})
 	}
@@ -130,8 +159,8 @@ func TestProviderEgressPolicyBoundsDNSResolution(t *testing.T) {
 	}
 	start := time.Now()
 	_, err = policy.DialContext(context.Background(), "tcp", "provider.example:443")
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("DialContext() error = %v, want ErrProviderEgressDenied", err)
+	if !errors.Is(err, provider.ErrProviderPreDispatch) {
+		t.Fatalf("DialContext() error = %v, want ErrProviderPreDispatch", err)
 	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("DNS resolution exceeded the bounded connect timeout: %s", elapsed)
@@ -141,6 +170,417 @@ func TestProviderEgressPolicyBoundsDNSResolution(t *testing.T) {
 	default:
 		t.Fatal("resolver was not called")
 	}
+}
+
+func TestProviderEgressTransportRecordsCallerDeadlineBeforeDispatch(t *testing.T) {
+	resolver := &blockingEgressResolver{started: make(chan struct{})}
+	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), resolver, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadlineContext, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	ctx, outcome := provider.WithEgressOutcome(deadlineContext)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", strings.NewReader("prompt-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Transport.RoundTrip(request)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RoundTrip() error = %v, want context.DeadlineExceeded", err)
+	}
+	if denial := outcome.Denial(); denial != nil {
+		t.Fatalf("recorded policy denial = %v, want nil for caller deadline", denial)
+	}
+	mapped := provider.ClassifyEgressOutcome(outcome, err)
+	if mapped == nil || mapped.Code != provider.CodeDeadlineExceeded || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("classified caller deadline = %#v, want non-retryable not-dispatched deadline", mapped)
+	}
+	select {
+	case <-resolver.started:
+	default:
+		t.Fatal("resolver was not called")
+	}
+}
+
+func TestProviderEgressRoundTripperClassifiesCallerCancellationBeforeGotConn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx, outcome := provider.WithEgressOutcome(ctx)
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			cancel()
+			return nil, request.Context().Err()
+		}),
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
+	}
+	mapped := provider.ClassifyEgressOutcome(outcome, err)
+	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("classified caller cancellation = %#v, want non-retryable not-dispatched cancellation", mapped)
+	}
+}
+
+func TestProviderEgressRoundTripperClassifiesClientDeadlineBeforeGotConnAsAvailability(t *testing.T) {
+	ctx, outcome := provider.WithEgressOutcome(context.Background())
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return nil, context.DeadlineExceeded
+		}),
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RoundTrip() error = %v, want context.DeadlineExceeded", err)
+	}
+	mapped := provider.ClassifyEgressOutcome(outcome, err)
+	if mapped == nil || mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("classified client deadline = %#v, want retryable not-dispatched availability", mapped)
+	}
+}
+
+func TestProviderEgressRoundTripperClassifiesTLSFailureBeforeGotConnAsAvailability(t *testing.T) {
+	ctx, outcome := provider.WithEgressOutcome(context.Background())
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("tls handshake failed")
+		}),
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if !errors.Is(err, provider.ErrProviderPreDispatch) {
+		t.Fatalf("RoundTrip() error = %v, want ErrProviderPreDispatch", err)
+	}
+	mapped := provider.ClassifyEgressOutcome(outcome, err)
+	if mapped == nil || mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("classified TLS failure = %#v, want retryable not-dispatched availability", mapped)
+	}
+}
+
+func TestProviderEgressRoundTripperDoesNotLetLatePreflightPolicyOverwriteCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx, outcome := provider.WithEgressOutcome(ctx)
+	var finish func(error)
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			state := providerEgressCallStateFromContext(request.Context())
+			if state == nil {
+				t.Fatal("RoundTrip request is missing egress call state")
+			}
+			finish = state.beginPreflight()
+			cancel()
+			return nil, request.Context().Err()
+		}),
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
+	}
+	if finish == nil {
+		t.Fatal("RoundTrip did not start a preflight")
+	}
+	finish(deniedProviderEgress("unsafe_address"))
+	mapped := provider.ClassifyEgressOutcome(outcome, err)
+	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("late preflight overwrote caller cancellation: %#v", mapped)
+	}
+	if errors.Is(mapped, provider.ErrProviderEgressDenied) {
+		t.Fatalf("late preflight policy leaked into caller cancellation: %v", mapped)
+	}
+}
+
+func TestProviderEgressRoundTripperDoesNotClassifyCanceledRequestAfterConnectionAcquired(t *testing.T) {
+	ctx, outcome := provider.WithEgressOutcome(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
+			"provider.example": {"443": {}},
+		}},
+		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			state := providerEgressCallStateFromContext(request.Context())
+			if state == nil {
+				t.Fatal("RoundTrip request is missing egress call state")
+			}
+			finish := state.beginPreflight()
+			defer func() { finish(request.Context().Err()) }()
+			trace := httptrace.ContextClientTrace(request.Context())
+			if trace == nil || trace.GotConn == nil {
+				t.Fatal("RoundTrip request is missing GotConn trace")
+			}
+			trace.GotConn(httptrace.GotConnInfo{Reused: true})
+			cancel()
+			return nil, request.Context().Err()
+		}),
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
+	}
+	if denial := outcome.Denial(); denial != nil {
+		t.Fatalf("recorded denial = %v, want nil after a connection was acquired", denial)
+	}
+}
+
+func TestProviderEgressRoundTripperRecordsCompletedPreflightDenialAfterCancellation(t *testing.T) {
+	ctx, outcome := provider.WithEgressOutcome(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
+			"provider.example": {"443": {}},
+		}},
+		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			state := providerEgressCallStateFromContext(request.Context())
+			if state == nil {
+				t.Fatal("RoundTrip request is missing egress call state")
+			}
+			finish := state.beginPreflight()
+			cancel()
+		finish(deniedProviderEgress("unsafe_address"))
+			return nil, request.Context().Err()
+		}),
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
+	}
+	if !errors.Is(outcome.Denial(), provider.ErrProviderEgressDenied) {
+		t.Fatalf("recorded denial = %v, want ErrProviderEgressDenied", outcome.Denial())
+	}
+}
+
+func TestProviderEgressRoundTripperDoesNotReturnEgressDenialAfterConnectionAcquired(t *testing.T) {
+	ctx, outcome := provider.WithEgressOutcome(context.Background())
+	guard := &providerEgressRoundTripper{
+		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
+			"provider.example": {"443": {}},
+		}},
+		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			state := providerEgressCallStateFromContext(request.Context())
+			if state == nil {
+				t.Fatal("RoundTrip request is missing egress call state")
+			}
+			finish := state.beginPreflight()
+			trace := httptrace.ContextClientTrace(request.Context())
+			if trace == nil || trace.GotConn == nil {
+				t.Fatal("RoundTrip request is missing GotConn trace")
+			}
+			trace.GotConn(httptrace.GotConnInfo{Reused: true})
+			denial := deniedProviderEgress("connection_failed")
+			finish(denial)
+			return nil, denial
+		}),
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = guard.RoundTrip(request)
+	if errors.Is(err, provider.ErrProviderEgressDenied) {
+		t.Fatalf("RoundTrip() error = %v, want an ambiguous error without ErrProviderEgressDenied", err)
+	}
+	if denial := outcome.Denial(); denial != nil {
+		t.Fatalf("recorded denial = %v, want nil after a connection was acquired", denial)
+	}
+}
+
+func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionWins(t *testing.T) {
+	firstPartial := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondObserved := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var firstOnce, secondOnce, releaseFirstOnce, releaseSecondOnce sync.Once
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("test environment does not allow a loopback listener: %v", err)
+	}
+	server := &httptest.Server{
+		Listener:    listener,
+		EnableHTTP2: false,
+		Config: &http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			if request.ProtoMajor != 1 {
+				t.Errorf("request protocol = HTTP/%d, want HTTP/1", request.ProtoMajor)
+			}
+			switch request.URL.Path {
+			case "/first":
+				response.Header().Set("Content-Length", "2")
+				_, _ = io.WriteString(response, "a")
+				if flusher, ok := response.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				firstOnce.Do(func() { close(firstPartial) })
+				<-releaseFirst
+				_, _ = io.WriteString(response, "b")
+			case "/second":
+				secondOnce.Do(func() { close(secondObserved) })
+				<-releaseSecond
+				response.WriteHeader(http.StatusNoContent)
+			default:
+				http.NotFound(response, request)
+			}
+		})},
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { releaseFirstOnce.Do(func() { close(releaseFirst) }) })
+	t.Cleanup(func() { releaseSecondOnce.Do(func() { close(releaseSecond) }) })
+
+	base := server.Client()
+	baseTransport, ok := base.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("TLS mock transport = %T, want *http.Transport", base.Transport)
+	}
+	trustedTransport := baseTransport.Clone()
+	trustedTransport.ForceAttemptHTTP2 = false
+	trustedTransport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	base = &http.Client{Transport: trustedTransport}
+
+	endpoint := providerEgressEndpoint()
+	endpoint.BaseURL = "https://example.com/v1"
+	endpoint.OutboundHosts = []string{"example.com"}
+	const publicAddress = "8.8.8.8"
+	secondDialStarted := make(chan struct{})
+	secondDialDone := make(chan struct{})
+	var dialCount atomic.Int32
+	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
+		switch dialCount.Add(1) {
+		case 1:
+			connection, dialErr := (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			return egressTestConn{Conn: connection, remote: &net.TCPAddr{IP: net.ParseIP(publicAddress), Port: 443}}, nil
+		case 2:
+			close(secondDialStarted)
+			defer close(secondDialDone)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		default:
+			return nil, errors.New("unexpected extra egress dial")
+		}
+	}
+	client, err := newProviderEgressHTTPClient(base, endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP(publicAddress)}}}, dial)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstRequest, err := http.NewRequest(http.MethodGet, "https://example.com/first", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstResponse, err := client.Transport.RoundTrip(firstRequest)
+	if err != nil {
+		t.Fatalf("first RoundTrip() error = %v", err)
+	}
+	t.Cleanup(func() { _ = firstResponse.Body.Close() })
+	select {
+	case <-firstPartial:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not start the first response")
+	}
+	firstRead := make(chan error, 1)
+	go func() {
+		_, readErr := io.ReadAll(firstResponse.Body)
+		firstRead <- readErr
+	}()
+
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	secondContext, outcome := provider.WithEgressOutcome(secondContext)
+	secondRequest, err := http.NewRequestWithContext(secondContext, http.MethodPost, "https://example.com/second", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResult := make(chan error, 1)
+	go func() {
+		response, roundTripErr := client.Transport.RoundTrip(secondRequest)
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		secondResult <- roundTripErr
+	}()
+	select {
+	case <-secondDialStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second request did not begin its detached dial")
+	}
+
+	releaseFirstOnce.Do(func() { close(releaseFirst) })
+	select {
+	case readErr := <-firstRead:
+		if readErr != nil {
+			t.Fatalf("read first response body: %v", readErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first response did not complete")
+	}
+	if err := firstResponse.Body.Close(); err != nil {
+		t.Fatalf("close first response body: %v", err)
+	}
+	select {
+	case <-secondObserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle connection did not satisfy the second request")
+	}
+
+	cancelSecond()
+	select {
+	case roundTripErr := <-secondResult:
+		if !errors.Is(roundTripErr, context.Canceled) {
+			t.Fatalf("second RoundTrip() error = %v, want context.Canceled", roundTripErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled second request did not return")
+	}
+	if denial := outcome.Denial(); denial != nil {
+		t.Fatalf("outcome before detached dial exits = %v, want nil", denial)
+	}
+
+	select {
+	case <-secondDialDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached dial did not finish after request cancellation")
+	}
+	if denial := outcome.Denial(); denial != nil {
+		t.Fatalf("outcome after detached dial exits = %v, want nil", denial)
+	}
+	releaseSecondOnce.Do(func() { close(releaseSecond) })
 }
 
 func TestLocalProviderMockPolicyRemainsFailClosed(t *testing.T) {
@@ -207,7 +647,7 @@ func TestProviderEgressTransportDisablesRedirectsAndKeepsTLS(t *testing.T) {
 	t.Parallel()
 
 	redirects := 0
-	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newLoopbackTLSServer(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		redirects++
 		if request.URL.Path == "/redirect" {
 			http.Redirect(response, request, "https://provider.example/final", http.StatusFound)
@@ -215,7 +655,6 @@ func TestProviderEgressTransportDisablesRedirectsAndKeepsTLS(t *testing.T) {
 		}
 		_, _ = io.WriteString(response, "ok")
 	}))
-	t.Cleanup(server.Close)
 
 	base := server.Client()
 	transport, ok := base.Transport.(*http.Transport)
@@ -265,6 +704,24 @@ func TestProviderEgressTransportRejectsInsecureTLSVerification(t *testing.T) {
 	}
 	if got, want := err.Error(), "provider egress blocked: invalid_transport"; got != want {
 		t.Fatalf("newProviderEgressHTTPClient() error = %q, want %q", got, want)
+	}
+}
+
+func TestCloneProviderTransportClearsCallerAlternateProtocol(t *testing.T) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{
+		"caller-protocol": func(string, *tls.Conn) http.RoundTripper {
+			return roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, errors.New("caller alternate protocol should not run")
+			})
+		},
+	}
+	cloned, err := cloneProviderTransport(&http.Client{Transport: transport})
+	if err != nil {
+		t.Fatalf("cloneProviderTransport() error = %v", err)
+	}
+	if cloned.TLSNextProto != nil {
+		t.Fatalf("cloneProviderTransport() retained caller alternate protocols: %#v", cloned.TLSNextProto)
 	}
 }
 
@@ -358,6 +815,18 @@ func newEgressTestConn(remote net.IP) net.Conn {
 	client, server := net.Pipe()
 	go func() { _ = server.Close() }()
 	return egressTestConn{Conn: client, remote: &net.TCPAddr{IP: remote, Port: 443}}
+}
+
+func newLoopbackTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("test environment does not allow a loopback listener: %v", err)
+	}
+	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server
 }
 
 func localProviderMockEndpoint(t *testing.T) config.EndpointConfig {

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3/responses"
 
@@ -118,6 +120,135 @@ func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {
 	}
 }
 
+func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
+	var calls, redirects int
+	client, err := NewClient(ClientConfig{
+		BaseURL: "https://provider.example/v1",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusTemporaryRedirect,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+						"Location":     []string{"https://redirect.example/continuation-secret"},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"redirect"}}`)),
+					Request: request,
+				}, nil
+			}),
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				redirects++
+				return http.ErrUseLastResponse
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "openai-prod", "cap-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "op-redirect", Model: "gpt-contract"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingObserver{}
+	_, err = adapter.Invoke(context.Background(), call, observer)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+	if calls != 1 || redirects != 1 {
+		t.Fatalf("transport/redirect calls = %d/%d, want 1/1", calls, redirects)
+	}
+	if observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("observer = %#v, want one pre-write mark and no headers", observer)
+	}
+	encoded, marshalErr := json.Marshal(mapped)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(encoded), "redirect.example") || strings.Contains(mapped.Error(), "continuation-secret") {
+		t.Fatalf("safe adapter error leaked redirect target: %s", encoded)
+	}
+}
+
+func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
+	deadline := newPreDialDeadlineContext()
+	transport := &preDialDeadlineTransport{started: make(chan struct{})}
+	client, err := NewClient(ClientConfig{
+		BaseURL: "https://provider.example/v1",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: transport,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "openai-prod", "cap-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "op-pre-dial-deadline", Model: "gpt-contract"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingObserver{}
+	result := make(chan error, 1)
+	go func() {
+		_, invokeErr := adapter.Invoke(deadline, call, observer)
+		result <- invokeErr
+	}()
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider transport was not reached")
+	}
+	deadline.expire()
+	var invokeErr error
+	select {
+	case invokeErr = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Invoke() did not return after the pre-dial deadline")
+	}
+	var mapped *provider.Error
+	if !errors.As(invokeErr, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
+	}
+	if got, want := mapped.Code, provider.CodeDeadlineExceeded; got != want {
+		t.Fatalf("error code = %q, want %q", got, want)
+	}
+	if got, want := mapped.Phase, provider.PhaseDispatch; got != want {
+		t.Fatalf("error phase = %q, want %q", got, want)
+	}
+	if got, want := mapped.Dispatch, provider.DispatchNotDispatched; got != want {
+		t.Fatalf("dispatch certainty = %q, want %q", got, want)
+	}
+	if got, want := mapped.Retry, provider.RetryNever; got != want {
+		t.Fatalf("retry disposition = %q, want %q", got, want)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
+		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
+	}
+	if transport.calls != 1 || transport.bodyReads != 0 {
+		t.Fatalf("pre-dial transport calls/body reads = %d/%d, want 1/0", transport.calls, transport.bodyReads)
+	}
+	if observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("observer = %#v, want exactly one pre-write mark and no headers", observer)
+	}
+}
+
 type recordingObserver struct {
 	before   int
 	headers  int
@@ -175,4 +306,62 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type preDialDeadlineContext struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newPreDialDeadlineContext() *preDialDeadlineContext {
+	return &preDialDeadlineContext{done: make(chan struct{})}
+}
+
+func (ctx *preDialDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Now().Add(time.Hour), true
+}
+
+func (ctx *preDialDeadlineContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *preDialDeadlineContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (*preDialDeadlineContext) Value(any) any { return nil }
+
+func (ctx *preDialDeadlineContext) expire() {
+	ctx.once.Do(func() { close(ctx.done) })
+}
+
+type preDialDeadlineTransport struct {
+	started   chan struct{}
+	once      sync.Once
+	calls     int
+	bodyReads int
+}
+
+func (transport *preDialDeadlineTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.calls++
+	if request.Body != nil {
+		request.Body = &countingReadCloser{ReadCloser: request.Body, reads: &transport.bodyReads}
+	}
+	transport.once.Do(func() { close(transport.started) })
+	<-request.Context().Done()
+	provider.RecordPreDispatchContext(request.Context(), request.Context().Err())
+	return nil, request.Context().Err()
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	reads *int
+}
+
+func (reader *countingReadCloser) Read(data []byte) (int, error) {
+	*reader.reads++
+	return reader.ReadCloser.Read(data)
 }

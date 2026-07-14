@@ -20,6 +20,11 @@ func mapError(err error) *provider.Error {
 		mapped.SafeDetails = map[string]string{"provider": adapterName}
 		return mapped
 	}
+	if errors.Is(err, provider.ErrProviderPreDispatch) {
+		mapped := provider.NewPreDispatchUnavailableError(err)
+		mapped.SafeDetails = map[string]string{"provider": adapterName}
+		return mapped
+	}
 	if errors.Is(err, context.Canceled) {
 		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "provider request canceled")
 		mapped.Cause = err
@@ -55,6 +60,8 @@ func mapAPIError(apiErr *openai.Error) *provider.Error {
 	dispatch := provider.DispatchRejected
 	safe := "provider rejected the request"
 	switch {
+	case status >= http.StatusMultipleChoices && status < http.StatusBadRequest:
+		dispatch, retry, safe = provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
 	case status == http.StatusForbidden:

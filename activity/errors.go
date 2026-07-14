@@ -34,52 +34,62 @@ func ToTemporalError(err error) error {
 	if err == nil {
 		return nil
 	}
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		// A normal provider cancellation represents Temporal activity cancellation.
+		// A pre-dispatch marker instead certifies that the caller canceled before
+		// any provider connection was writable; serialize that as a definite,
+		// non-retryable provider failure so the SDK cannot erase RetryNever.
+		if providerErr.Code == provider.CodeCanceled && !errors.Is(providerErr, provider.ErrProviderPreDispatch) {
+			return context.Canceled
+		}
+		typeName, nonRetryable := classify(providerErr)
+		details := SafeErrorDetails{OperationID: providerErr.OperationID, Code: string(providerErr.Code), Phase: string(providerErr.Phase), Dispatch: string(providerErr.Dispatch), RetryAfterMillis: providerErr.RetryAfter.Milliseconds(), ProviderRequestID: providerErr.Provider.RequestID}
+		message := stableMessage(typeName)
+		options := temporal.ApplicationErrorOptions{NonRetryable: nonRetryable, Details: []interface{}{details}}
+		if !nonRetryable && providerErr.RetryAfter > 0 {
+			options.NextRetryDelay = providerErr.RetryAfter
+		}
+		return temporal.NewApplicationErrorWithOptions(message, typeName, options)
+	}
 	if temporal.IsCanceledError(err) || errors.Is(err, context.Canceled) {
 		return err
 	}
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) {
-		return temporal.NewNonRetryableApplicationError("invalid Activity error", ErrorTypeInvalidArgument, nil, SafeErrorDetails{Code: string(provider.CodeInvalidArgument), Phase: string(provider.PhaseDecode), Dispatch: string(provider.DispatchNotDispatched)})
-	}
-	if providerErr.Code == provider.CodeCanceled {
-		return context.Canceled
-	}
-	typeName, nonRetryable := classify(providerErr)
-	details := SafeErrorDetails{OperationID: providerErr.OperationID, Code: string(providerErr.Code), Phase: string(providerErr.Phase), Dispatch: string(providerErr.Dispatch), RetryAfterMillis: providerErr.RetryAfter.Milliseconds(), ProviderRequestID: providerErr.Provider.RequestID}
-	message := stableMessage(typeName)
-	options := temporal.ApplicationErrorOptions{NonRetryable: nonRetryable, Details: []interface{}{details}}
-	if !nonRetryable && providerErr.RetryAfter > 0 {
-		options.NextRetryDelay = providerErr.RetryAfter
-	}
-	return temporal.NewApplicationErrorWithOptions(message, typeName, options)
+	return temporal.NewNonRetryableApplicationError("invalid Activity error", ErrorTypeInvalidArgument, nil, SafeErrorDetails{Code: string(provider.CodeInvalidArgument), Phase: string(provider.PhaseDecode), Dispatch: string(provider.DispatchNotDispatched)})
 }
 
 func classify(err *provider.Error) (string, bool) {
 	if err == nil {
 		return ErrorTypeInternal, true
 	}
+	var typeName string
+	var nonRetryable bool
 	switch err.Code {
 	case provider.CodeInvalidArgument, provider.CodeUnsupportedCapability, provider.CodeNoRoute, provider.CodeConfiguration:
-		return ErrorTypeInvalidArgument, true
+		typeName, nonRetryable = ErrorTypeInvalidArgument, true
 	case provider.CodeAuthentication, provider.CodePermissionDenied:
-		return ErrorTypeAuthentication, true
+		typeName, nonRetryable = ErrorTypeAuthentication, true
 	case provider.CodeBudgetDenied:
-		return ErrorTypeBudgetWait, false
+		typeName, nonRetryable = ErrorTypeBudgetWait, false
 	case provider.CodeOperationConflict:
-		return ErrorTypeOperationConflict, true
+		typeName, nonRetryable = ErrorTypeOperationConflict, true
 	case provider.CodeAmbiguousDispatch:
-		return ErrorTypeAmbiguous, true
+		typeName, nonRetryable = ErrorTypeAmbiguous, true
 	case provider.CodeStateCorrupt:
-		return ErrorTypeStateCorrupt, true
+		typeName, nonRetryable = ErrorTypeStateCorrupt, true
 	case provider.CodeCanceled:
-		return ErrorTypeInvalidArgument, true
+		typeName, nonRetryable = ErrorTypeInvalidArgument, true
 	case provider.CodeProviderRateLimited, provider.CodeProviderUnavailable, provider.CodeStateUnavailable, provider.CodeDeadlineExceeded:
-		return ErrorTypeProviderTransient, false
+		typeName, nonRetryable = ErrorTypeProviderTransient, false
 	case provider.CodeProviderInvalidResponse:
-		return ErrorTypeProviderTransient, err.Dispatch == provider.DispatchAccepted || err.Dispatch == provider.DispatchAmbiguous
+		typeName, nonRetryable = ErrorTypeProviderTransient, err.Dispatch == provider.DispatchAccepted || err.Dispatch == provider.DispatchAmbiguous
 	default:
-		return ErrorTypeInternal, err.Dispatch == provider.DispatchAccepted || err.Dispatch == provider.DispatchAmbiguous
+		typeName, nonRetryable = ErrorTypeInternal, err.Dispatch == provider.DispatchAccepted || err.Dispatch == provider.DispatchAmbiguous
 	}
+	if err.Retry == provider.RetryNever {
+		nonRetryable = true
+	}
+	return typeName, nonRetryable
 }
 
 func stableMessage(typeName string) string {

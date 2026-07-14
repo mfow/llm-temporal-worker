@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/llm"
@@ -14,6 +16,13 @@ import (
 // errors must wrap this marker without exposing the rejected destination or
 // request data.
 var ErrProviderEgressDenied = errors.New("provider egress denied")
+
+// ErrProviderPreDispatch marks a transport failure for which the guarded
+// provider transport proved that no writable connection was acquired. It is
+// deliberately distinct from ErrProviderEgressDenied: this marker describes
+// endpoint availability, while the egress marker describes an explicit policy
+// rejection.
+var ErrProviderPreDispatch = errors.New("provider request failed before dispatch")
 
 type Code string
 
@@ -138,6 +147,58 @@ func NewError(code Code, phase Phase, dispatch DispatchCertainty, retry RetryDis
 func NewEgressDeniedError(cause error) *Error {
 	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider egress policy denied request")
 	mapped.Cause = cause
+	return mapped
+}
+
+// NewPreDispatchUnavailableError converts a guarded transport failure that
+// occurred before a writable provider connection was acquired into a safe,
+// retryable next-route result. It must only be used with
+// ErrProviderPreDispatch evidence.
+func NewPreDispatchUnavailableError(cause error) *Error {
+	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider connection failed before dispatch")
+	mapped.Cause = withPreDispatchMarker(cause)
+	return mapped
+}
+
+// NewPreDispatchContextError preserves a caller cancellation or deadline that
+// the guarded transport proved happened before a writable provider connection
+// was acquired. Caller intent must never become a route fallback.
+func NewPreDispatchContextError(cause error) *Error {
+	code := CodeCanceled
+	message := "provider request canceled before dispatch"
+	if errors.Is(cause, context.DeadlineExceeded) {
+		code = CodeDeadlineExceeded
+		message = "provider request deadline exceeded before dispatch"
+	}
+	mapped := NewError(code, PhaseDispatch, DispatchNotDispatched, RetryNever, message)
+	mapped.Cause = withPreDispatchMarker(cause)
+	return mapped
+}
+
+func withPreDispatchMarker(cause error) error {
+	if cause == nil || errors.Is(cause, ErrProviderPreDispatch) {
+		if cause == nil {
+			return ErrProviderPreDispatch
+		}
+		return cause
+	}
+	return errors.Join(ErrProviderPreDispatch, cause)
+}
+
+// IsRedirectStatus reports whether a response status means the provider
+// received a redirect response. A request may already have reached the
+// provider before this status is returned, so it must never be retried.
+func IsRedirectStatus(status int) bool {
+	return status >= 300 && status < 400
+}
+
+// NewRedirectResponseError classifies a received redirect response
+// conservatively. The status is safe to expose; response headers (including
+// Location) are deliberately omitted because they may contain credentials or
+// request-specific data.
+func NewRedirectResponseError(status int) *Error {
+	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchAmbiguous, RetryNever, "provider redirect response is ambiguous")
+	mapped.SafeDetails = map[string]string{"status": strconv.Itoa(status)}
 	return mapped
 }
 

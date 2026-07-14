@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/config"
@@ -50,6 +52,125 @@ type providerEgressRoundTripper struct {
 	next   http.RoundTripper
 }
 
+type providerEgressCallStateKey struct{}
+
+// providerEgressCallState follows a request through net/http's detached dial
+// context. GotConn is the one-way proof boundary: before it fires, the guarded
+// standard transport has not acquired a writable connection for this request;
+// after it fires, dispatch is conservatively ambiguous.
+type providerEgressCallState struct {
+	requestContext context.Context
+	callerContext  context.Context
+
+	mu                         sync.Mutex
+	settledPolicyDenial        error
+	settledPreDispatchFailure  error
+	writableConnectionAcquired bool
+}
+
+func newProviderEgressCallState(ctx context.Context) *providerEgressCallState {
+	return &providerEgressCallState{
+		requestContext: ctx,
+		callerContext:  provider.CallerContextForEgressOutcome(ctx),
+	}
+}
+
+func providerEgressCallStateFromContext(ctx context.Context) *providerEgressCallState {
+	if ctx == nil {
+		return nil
+	}
+	state, _ := ctx.Value(providerEgressCallStateKey{}).(*providerEgressCallState)
+	return state
+}
+
+func (state *providerEgressCallState) beginPreflight() func(error) {
+	if state == nil {
+		return func(error) {}
+	}
+	var once sync.Once
+	return func(err error) {
+		once.Do(func() {
+			if err == nil {
+				return
+			}
+			state.mu.Lock()
+			switch {
+			case errors.Is(err, ErrProviderEgressDenied):
+				if state.settledPolicyDenial == nil {
+					state.settledPolicyDenial = err
+				}
+			case errors.Is(err, provider.ErrProviderPreDispatch):
+				if state.settledPreDispatchFailure == nil {
+					state.settledPreDispatchFailure = err
+				}
+			}
+			state.mu.Unlock()
+		})
+	}
+}
+
+func (state *providerEgressCallState) recordPreDispatchOutcome(returnedErr error) {
+	if state == nil || state.requestContext == nil {
+		return
+	}
+	state.mu.Lock()
+	if state.writableConnectionAcquired {
+		state.mu.Unlock()
+		return
+	}
+	policyDenial := state.settledPolicyDenial
+	preDispatchFailure := state.settledPreDispatchFailure
+	callerContext := state.callerContext
+	state.mu.Unlock()
+
+	// A completed policy decision wins because it is deterministic and was
+	// established before the SDK could replace the transport result with ctx.Err.
+	if policyDenial != nil {
+		provider.RecordEgressDenied(state.requestContext, policyDenial)
+		return
+	}
+	// A still-active detached dial cannot be allowed to overwrite caller intent.
+	// Seal cancellation before a later DNS/TCP result returns.
+	if callerContext != nil && callerContext.Err() != nil {
+		provider.RecordPreDispatchContext(state.requestContext, callerContext.Err())
+		return
+	}
+	if preDispatchFailure != nil {
+		provider.RecordPreDispatchFailure(state.requestContext, preDispatchFailure)
+		return
+	}
+	switch {
+	case errors.Is(returnedErr, ErrProviderEgressDenied):
+		provider.RecordEgressDenied(state.requestContext, returnedErr)
+	case errors.Is(returnedErr, provider.ErrProviderPreDispatch):
+		provider.RecordPreDispatchFailure(state.requestContext, returnedErr)
+	case errors.Is(returnedErr, context.Canceled), errors.Is(returnedErr, context.DeadlineExceeded):
+		// The outer caller is still live, so this context result came from the
+		// bounded client/transport path rather than caller intent.
+		provider.RecordPreDispatchFailure(state.requestContext, preDispatchProviderFailure("transport_timeout"))
+	case returnedErr != nil:
+		provider.RecordPreDispatchFailure(state.requestContext, preDispatchProviderFailure("transport_failed"))
+	}
+}
+
+func (state *providerEgressCallState) markWritableConnectionAcquired() {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.writableConnectionAcquired = true
+	state.mu.Unlock()
+}
+
+func (state *providerEgressCallState) writableConnectionWasAcquired() bool {
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.writableConnectionAcquired
+}
+
 type providerEgressError struct {
 	classification string
 }
@@ -62,6 +183,20 @@ func (err providerEgressError) Unwrap() error { return ErrProviderEgressDenied }
 
 func deniedProviderEgress(classification string) error {
 	return providerEgressError{classification: classification}
+}
+
+type providerPreDispatchError struct {
+	classification string
+}
+
+func (err providerPreDispatchError) Error() string {
+	return "provider connection failed before dispatch: " + err.classification
+}
+
+func (err providerPreDispatchError) Unwrap() error { return provider.ErrProviderPreDispatch }
+
+func preDispatchProviderFailure(classification string) error {
+	return providerPreDispatchError{classification: classification}
 }
 
 func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, resolver ProviderEgressResolver, dial ProviderEgressDialContext) (*http.Client, error) {
@@ -183,17 +318,61 @@ func cloneProviderTransport(base *http.Client) (*http.Transport, error) {
 	if tlsConfig := transport.TLSClientConfig; tlsConfig != nil && (tlsConfig.InsecureSkipVerify || tlsConfig.ServerName != "") {
 		return nil, deniedProviderEgress("invalid_transport")
 	}
+	// A caller-supplied alternate protocol RoundTripper can bypass the standard
+	// transport's guarded DialContext and GotConn proof boundary. Keep only the
+	// standard transport protocol path for provider egress.
+	transport.TLSNextProto = nil
 	return transport, nil
 }
 
 func (guard *providerEgressRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
 	if guard == nil || guard.policy == nil || guard.next == nil {
-		return nil, deniedProviderEgress("invalid_transport")
-	}
-	if err := guard.policy.authorizeRequest(request); err != nil {
+		err := deniedProviderEgress("invalid_transport")
+		recordProviderEgressDenied(request, err)
 		return nil, err
 	}
-	return guard.next.RoundTrip(request)
+	if request == nil {
+		err := deniedProviderEgress("invalid_request")
+		return nil, err
+	}
+	state := newProviderEgressCallState(request.Context())
+	tracedContext := httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) {
+			state.markWritableConnectionAcquired()
+		},
+	})
+	guardedRequest := request.WithContext(context.WithValue(tracedContext, providerEgressCallStateKey{}, state))
+	if err := guard.policy.authorizeRequest(guardedRequest); err != nil {
+		recordProviderEgressDenied(guardedRequest, err)
+		return nil, err
+	}
+	response, err := guard.next.RoundTrip(guardedRequest)
+	if response == nil {
+		if state.writableConnectionWasAcquired() {
+			if errors.Is(err, ErrProviderEgressDenied) || errors.Is(err, provider.ErrProviderPreDispatch) {
+				// A transport retry can see a later guard result after this request
+				// acquired a connection. Never expose a definitive no-dispatch
+				// marker after that one-way boundary.
+				err = errors.New("provider request outcome is ambiguous after connection acquisition")
+			}
+		} else {
+			state.recordPreDispatchOutcome(err)
+			// A non-context transport failure before GotConn is certified
+			// pre-dispatch. Replace arbitrary diagnostic text with a safe marker
+			// so adapters do not need to infer this from untrusted errors.
+			if err != nil && !errors.Is(err, ErrProviderEgressDenied) && !errors.Is(err, provider.ErrProviderPreDispatch) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				err = preDispatchProviderFailure("transport_failed")
+			}
+		}
+	}
+	return response, err
+}
+
+func recordProviderEgressDenied(request *http.Request, err error) {
+	if request == nil {
+		return
+	}
+	provider.RecordEgressDenied(request.Context(), err)
 }
 
 func (policy *providerEgressPolicy) authorizeRequest(request *http.Request) error {
@@ -225,7 +404,10 @@ func (policy *providerEgressPolicy) authorizeRequest(request *http.Request) erro
 	return nil
 }
 
-func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, address string) (connection net.Conn, err error) {
+	state := providerEgressCallStateFromContext(ctx)
+	endPreflight := state.beginPreflight()
+	defer func() { endPreflight(err) }()
 	if policy == nil || policy.resolver == nil || policy.dial == nil {
 		return nil, deniedProviderEgress("invalid_policy")
 	}
@@ -240,14 +422,21 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	// Bound DNS resolution and every subsequent TCP attempt by the same
 	// connection deadline. net.Resolver honors this context, so a slow DNS
 	// answer cannot outlive the provider connect budget.
-	connectionContext, cancel := context.WithTimeout(ctx, policy.connectTimeout)
+	connectionParent := ctx
+	if state != nil && state.requestContext != nil {
+		connectionParent = state.requestContext
+	}
+	connectionContext, cancel := context.WithTimeout(connectionParent, policy.connectTimeout)
 	defer cancel()
 	addresses, err := policy.resolver.LookupIPAddr(connectionContext, host)
 	if err != nil || len(addresses) == 0 {
-		if connectionContext.Err() != nil {
-			return nil, deniedProviderEgress("connection_timeout")
+		if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+			return nil, callerErr
 		}
-		return nil, deniedProviderEgress("dns_resolution_failed")
+		if connectionContext.Err() != nil {
+			return nil, preDispatchProviderFailure("connection_timeout")
+		}
+		return nil, preDispatchProviderFailure("dns_resolution_failed")
 	}
 	resolved := make([]netip.Addr, 0, len(addresses))
 	seen := make(map[netip.Addr]struct{}, len(addresses))
@@ -266,10 +455,17 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	for _, target := range resolved {
 		connection, dialErr := policy.dial(connectionContext, network, net.JoinHostPort(target.String(), port))
 		if dialErr != nil {
+			if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+				return nil, callerErr
+			}
 			if connectionContext.Err() != nil {
-				return nil, deniedProviderEgress("connection_timeout")
+				return nil, preDispatchProviderFailure("connection_timeout")
 			}
 			continue
+		}
+		if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+			_ = connection.Close()
+			return nil, callerErr
 		}
 		if !policy.connectedToResolvedPublicAddress(connection, target) {
 			_ = connection.Close()
@@ -277,10 +473,23 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 		}
 		return connection, nil
 	}
-	if connectionContext.Err() != nil {
-		return nil, deniedProviderEgress("connection_timeout")
+	if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+		return nil, callerErr
 	}
-	return nil, deniedProviderEgress("connection_failed")
+	if connectionContext.Err() != nil {
+		return nil, preDispatchProviderFailure("connection_timeout")
+	}
+	return nil, preDispatchProviderFailure("connection_failed")
+}
+
+func providerEgressCallerContextError(state *providerEgressCallState, fallback context.Context) error {
+	if state != nil && state.callerContext != nil {
+		return state.callerContext.Err()
+	}
+	if fallback == nil {
+		return nil
+	}
+	return fallback.Err()
 }
 
 func (policy *providerEgressPolicy) allows(host, port string) bool {
@@ -371,6 +580,13 @@ var providerBlockedIPv4Prefixes = []netip.Prefix{
 	netip.MustParsePrefix("240.0.0.0/4"),
 }
 
+var providerBlockedIPv6Prefixes = []netip.Prefix{
+	// Deprecated IPv6 site-local addresses are neither global-unicast nor
+	// private according to netip, but must never be reachable by a provider
+	// egress transport.
+	netip.MustParsePrefix("fec0::/10"),
+}
+
 func blockedProviderAddress(address netip.Addr) bool {
 	if !address.IsValid() || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsMulticast() {
 		return true
@@ -380,6 +596,13 @@ func blockedProviderAddress(address netip.Addr) bool {
 	}
 	if address.Is4() {
 		for _, prefix := range providerBlockedIPv4Prefixes {
+			if prefix.Contains(address) {
+				return true
+			}
+		}
+	}
+	if address.Is6() {
+		for _, prefix := range providerBlockedIPv6Prefixes {
 			if prefix.Contains(address) {
 				return true
 			}

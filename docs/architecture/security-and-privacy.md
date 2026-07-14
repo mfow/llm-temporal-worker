@@ -71,8 +71,13 @@ Endpoints are operator-configured and validated:
   documented as redirecting, so a future exception must revalidate every hop;
 - DNS is resolved at dial time, every returned address is rejected if it is
   loopback, private, link-local, multicast, unspecified, carrier-grade NAT,
-  benchmarking, or a known cloud metadata address, and the connected address
-  is checked again before use;
+  benchmarking, deprecated IPv6 site-local (`fec0::/10`), or a known cloud
+  metadata address, and the connected address is checked again before use;
+- only an explicit policy/configuration rejection is an egress denial. Before
+  a writable connection is acquired, guarded DNS/TCP/TLS and client-local
+  timeout failures are certified `not_dispatched` availability failures, while
+  caller cancellation/deadline remains non-retryable and `not_dispatched`;
+  after that boundary the result is ambiguous rather than re-routed;
 - provider transport errors are classified with a configured endpoint ID and
   never include URLs, credentials, authorization headers, request content,
   continuation handles, or raw provider bodies;

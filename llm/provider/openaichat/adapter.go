@@ -182,14 +182,21 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
-	if err := observer.BeforePossibleWrite(ctx); err != nil {
+	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
+	if err := observer.BeforePossibleWrite(callContext); err != nil {
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
 	requestOptions := adapter.client.options()
 	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
-	response, err := adapter.client.sdk.Chat.Completions.New(ctx, params, requestOptions...)
+	response, err := adapter.client.sdk.Chat.Completions.New(callContext, params, requestOptions...)
+	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
+		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
+	}
 	if err != nil {
+		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
+			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
+		}
 		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
@@ -200,13 +207,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		metadata.Status = rawResponse.StatusCode
 		metadata.RequestID = rawResponse.Header.Get("x-request-id")
 	}
-	if err := observer.AfterResponseHeaders(ctx, metadata); err != nil {
+	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
 		mapped := dispatchObserverError(err, provider.DispatchAccepted)
 		mapped.Provider.ResponseID = response.ID
 		mapped.Provider.RequestID = metadata.RequestID
 		return provider.Result{}, mapped
 	}
-	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Choices)})
+	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Choices)})
 	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err

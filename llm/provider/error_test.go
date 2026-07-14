@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -125,6 +126,33 @@ func TestNewEgressDeniedErrorKeepsDiagnosticCauseLocal(t *testing.T) {
 	for _, raw := range []string{"provider-secret", "private-content"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe egress error leaked %q: %s", raw, encoded)
+		}
+	}
+}
+
+func TestRedirectResponseErrorIsAmbiguousForEveryRedirectStatus(t *testing.T) {
+	for _, status := range []int{
+		http.StatusMultipleChoices,
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusSeeOther,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+	} {
+		if !provider.IsRedirectStatus(status) {
+			t.Fatalf("status %d was not recognized as a redirect", status)
+		}
+		mapped := provider.NewRedirectResponseError(status)
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+			t.Fatalf("status %d mapped = %#v, want ambiguous non-retriable dispatch error", status, mapped)
+		}
+		if got, want := mapped.SafeDetails["status"], fmt.Sprintf("%d", status); got != want {
+			t.Fatalf("status detail = %q, want %q", got, want)
+		}
+	}
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+		if provider.IsRedirectStatus(status) {
+			t.Fatalf("status %d was incorrectly recognized as a redirect", status)
 		}
 	}
 }

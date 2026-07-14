@@ -3,10 +3,13 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
@@ -112,10 +115,181 @@ func TestInvokeSubmitsExactlyOnceAndLiftsResponse(t *testing.T) {
 	}
 }
 
+func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
+	var calls int
+	client, err := NewClient(ClientConfig{
+		BaseURL: "https://provider.example/v1",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusTemporaryRedirect,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+						"Location":     []string{"https://redirect.example/continuation-secret"},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"redirect"}}`)),
+					Request: request,
+				}, nil
+			}),
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "chat-prod", testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "chat-redirect", Model: "chat-model"},
+		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &chatObserver{}
+	_, err = adapter.Invoke(context.Background(), call, observer)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+	if calls != 1 || observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("transport/observer = calls=%d observer=%#v, want one request, one pre-write mark, and no headers", calls, observer)
+	}
+	encoded, marshalErr := json.Marshal(mapped)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(encoded), "redirect.example") || strings.Contains(mapped.Error(), "continuation-secret") {
+		t.Fatalf("safe adapter error leaked redirect target: %s", encoded)
+	}
+}
+
+func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
+	deadline := newPreDialDeadlineContext()
+	transport := &preDialDeadlineTransport{started: make(chan struct{})}
+	client, err := NewClient(ClientConfig{
+		BaseURL:    "https://provider.example/v1",
+		APIKey:     "test-key",
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "chat-prod", testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "chat-pre-dial-deadline", Model: "chat-model"},
+		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &chatObserver{}
+	result := make(chan error, 1)
+	go func() {
+		_, invokeErr := adapter.Invoke(deadline, call, observer)
+		result <- invokeErr
+	}()
+	select {
+	case <-transport.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider transport was not reached")
+	}
+	deadline.expire()
+	var invokeErr error
+	select {
+	case invokeErr = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Invoke() did not return after the pre-dial deadline")
+	}
+	var mapped *provider.Error
+	if !errors.As(invokeErr, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
+	}
+	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped error = %#v, want non-retryable pre-dispatch caller deadline", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
+		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
+	}
+	if transport.calls != 1 || transport.bodyReads != 0 || observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("transport/observer = calls=%d bodyReads=%d observer=%#v", transport.calls, transport.bodyReads, observer)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type preDialDeadlineContext struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newPreDialDeadlineContext() *preDialDeadlineContext {
+	return &preDialDeadlineContext{done: make(chan struct{})}
+}
+
+func (ctx *preDialDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Now().Add(time.Hour), true
+}
+
+func (ctx *preDialDeadlineContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *preDialDeadlineContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (*preDialDeadlineContext) Value(any) any { return nil }
+
+func (ctx *preDialDeadlineContext) expire() {
+	ctx.once.Do(func() { close(ctx.done) })
+}
+
+type preDialDeadlineTransport struct {
+	started   chan struct{}
+	once      sync.Once
+	calls     int
+	bodyReads int
+}
+
+func (transport *preDialDeadlineTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.calls++
+	if request.Body != nil {
+		request.Body = &countingReadCloser{ReadCloser: request.Body, reads: &transport.bodyReads}
+	}
+	transport.once.Do(func() { close(transport.started) })
+	<-request.Context().Done()
+	provider.RecordPreDispatchContext(request.Context(), request.Context().Err())
+	return nil, request.Context().Err()
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	reads *int
+}
+
+func (reader *countingReadCloser) Read(data []byte) (int, error) {
+	(*reader.reads)++
+	return reader.ReadCloser.Read(data)
 }
 
 type chatObserver struct {
