@@ -131,6 +131,10 @@ endpoints:
         provider_value: priority
     capability_profile: azure-responses-au-v2
     price_catalog: catalog-2026-07-13
+    extensions:
+      azure:
+        # Azure API versions are deployment-specific and must be declared.
+        api_version: 2024-10-21
 
   openrouter-pinned:
     family: openai_chat
@@ -164,6 +168,9 @@ endpoints:
         provider_value: standard
     capability_profile: exa-chat-v1
     price_catalog: catalog-2026-07-13
+    extensions:
+      # The marker selects Exa's profile and wire contract explicitly.
+      exa: {}
 
   anthropic-direct:
     family: anthropic_messages
