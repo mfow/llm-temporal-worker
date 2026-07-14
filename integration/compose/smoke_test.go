@@ -478,6 +478,45 @@ func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing
 	}
 }
 
+func TestComposeLifecycleFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const lifecycleTest = `GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'`
+	const nextTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address"`
+	makefile := string(data)
+	start := strings.Index(makefile, "if ! "+lifecycleTest)
+	if start < 0 {
+		t.Fatalf("compose live integration target is missing the Redis lifecycle failure wrapper")
+	}
+	end := strings.Index(makefile[start:], nextTest)
+	if end < 0 {
+		t.Fatalf("compose live integration target is missing the subsequent Temporal recovery test")
+	}
+	failurePath := makefile[start : start+end]
+
+	for _, required := range []string{
+		`if ! ` + lifecycleTest + `; then \`,
+		"compose-live-integration Redis lifecycle test service logs (redacted; service output only; no environment inspection):",
+		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker",
+		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
+		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD=\"$$postgres_password\"",
+		"LLMTW_LOG_REDACT_MOCK_API_KEY=\"$$mock_api_key\"",
+		"LLMTW_LOG_REDACT_CONTINUATION_HMAC=\"$$continuation_hmac\"",
+		`sh ./scripts/redact-compose-logs.sh >&2 || true; \`,
+		`exit 1; \`,
+	} {
+		if !strings.Contains(failurePath, required) {
+			t.Errorf("Redis lifecycle failure diagnostics are missing %q", required)
+		}
+	}
+	if strings.Contains(failurePath, "docker inspect") {
+		t.Error("Redis lifecycle failure diagnostics must emit only redacted Compose service logs")
+	}
+}
+
 func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
 	t.Parallel()
 	secrets := map[string]string{

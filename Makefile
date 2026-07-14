@@ -217,7 +217,16 @@ compose-live-integration:
 		echo "compose-live-integration could not find the isolated Redis container" >&2; \
 		exit 1; \
 	fi; \
-	GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'; \
+	if ! GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'; then \
+		echo "compose-live-integration Redis lifecycle test service logs (redacted; service output only; no environment inspection):" >&2; \
+		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
+			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
+			LLMTW_LOG_REDACT_POSTGRES_PASSWORD="$$postgres_password" \
+			LLMTW_LOG_REDACT_MOCK_API_KEY="$$mock_api_key" \
+			LLMTW_LOG_REDACT_CONTINUATION_HMAC="$$continuation_hmac" \
+			sh ./scripts/redact-compose-logs.sh >&2 || true; \
+		exit 1; \
+	fi; \
 	GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'
 
 deployment-policy-verify:
