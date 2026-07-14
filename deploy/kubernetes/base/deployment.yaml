@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmtw-worker
+  labels:
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  minReadySeconds: 10
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-temporal-worker
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-temporal-worker
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: llmtw-worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          # Release automation replaces this marker with the signed image
+          # digest. A mutable tag is intentionally not accepted here.
+          image: ghcr.io/mfow/llm-temporal-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/llm-temporal-worker"]
+          args: ["worker", "--config", "/etc/llmtw/config.yaml"]
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: GOMEMLIMIT
+              value: 1800MiB
+            - name: GOMAXPROCS
+              value: "2"
+          envFrom:
+            - secretRef:
+                name: llmtw-provider-credentials
+                optional: false
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+            successThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
+          volumeMounts:
+            - name: config
+              mountPath: /etc/llmtw
+              readOnly: true
+            - name: runtime-secrets
+              mountPath: /var/run/secrets/llmtw
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: llmtw-config
+            defaultMode: 0444
+        - name: runtime-secrets
+          secret:
+            secretName: llmtw-worker-secrets
+            optional: false
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi

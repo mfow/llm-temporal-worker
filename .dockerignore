@@ -1,0 +1,23 @@
+.git
+.github
+.worktrees
+.codex
+.agents
+
+# Local credentials and runtime state must never enter a build context.
+.env
+.env.*
+*.pem
+*.key
+*.crt
+secrets/
+tmp/
+
+# Build/test output.
+bin/
+dist/
+coverage/
+vendor/
+_build/
+*.test
+*.out

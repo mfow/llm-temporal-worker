@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/name: llm-temporal-worker
+      app.kubernetes.io/part-of: llmtw
+    includeSelectors: true
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - poddisruptionbudget.yaml
+  - networkpolicy.yaml
+configMapGenerator:
+  - name: llmtw-config
+    files:
+      - config.yaml
+      - capabilities.yaml
+      - prices.yaml
+    options:
+      disableNameSuffixHash: true
+      immutable: true

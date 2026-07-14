@@ -1,0 +1,7 @@
+version: production-openai-responses
+profiles:
+  production-openai-responses:
+    family: openai_responses
+    input: [text, image, reference]
+    output: [text, tool_call]
+    service_classes: [economy, standard, priority]
