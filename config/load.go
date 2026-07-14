@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -25,10 +26,21 @@ func Load(data []byte) (Config, error) {
 		return Config{}, fmt.Errorf("configuration YAML: %w", err)
 	}
 	applyDefaults(&config)
+	canonicalize(&config)
 	if err := config.Validate(); err != nil {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+// canonicalize makes equivalent external spellings produce one effective
+// configuration. SHA-256 hex values are case-insensitive in YAML input but
+// are compared as canonical lowercase strings by runtime readiness checks.
+func canonicalize(config *Config) {
+	if config == nil {
+		return
+	}
+	config.State.Redis.AdmissionDigest = strings.ToLower(config.State.Redis.AdmissionDigest)
 }
 
 // Parse is an explicit alias for Load for callers that use parse/compile

@@ -79,6 +79,22 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 	}
 }
 
+func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
+	data := strings.Replace(
+		string(exampleYAML(t)),
+		"admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b",
+		"admission_digest: C09E24D73750BEBEE4AAD8CD9B1F05ABAA22001528CEF0FF6842F2241BB8C20B",
+		1,
+	)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loaded.State.Redis.AdmissionDigest, "c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b"; got != want {
+		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
+	}
+}
+
 func TestLoadRejectsUnknownDuplicateAndFourthClass(t *testing.T) {
 	unknown := append(exampleYAML(t), []byte("\nunknown_field: true\n")...)
 	if _, err := config.Load(unknown); err == nil {
