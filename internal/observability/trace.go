@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -148,6 +149,10 @@ func safeTraceAttr(attr attribute.KeyValue) (attribute.KeyValue, bool) {
 		return attribute.KeyValue{}, false
 	}
 	switch key {
+	case "service_class":
+		if !llm.ServiceClass(value).Valid() {
+			return attribute.KeyValue{}, false
+		}
 	case "error_code":
 		if !provider.Code(value).Valid() {
 			return attribute.KeyValue{}, false

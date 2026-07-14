@@ -42,6 +42,51 @@ func TestGenerateEmitsSafeLifecycleSpans(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsInvalidServiceClassWithoutExportingIt(t *testing.T) {
+	harness := newHarness(t, &fakeAdapter{name: "telemetry-invalid-class", response: successfulResponse()})
+	exporter := &observability.MemoryExporter{}
+	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	ctx := observability.WithTracer(context.Background(), tracer)
+	request := baseRequest("telemetry-invalid-generate")
+	request.ServiceClass = llm.ServiceClass("secret-token-value")
+
+	if _, err := harness.engine.Generate(ctx, request); err == nil {
+		t.Fatal("Generate accepted an invalid service class")
+	}
+	if err := tracer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoServiceClassTraceAttribute(t, exporter)
+}
+
+func TestStreamRejectsInvalidServiceClassWithoutExportingIt(t *testing.T) {
+	harness := newHarness(t, &fakeAdapter{name: "telemetry-invalid-stream", response: successfulResponse()})
+	exporter := &observability.MemoryExporter{}
+	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	ctx := observability.WithTracer(context.Background(), tracer)
+	request := baseRequest("telemetry-invalid-stream")
+	request.ServiceClass = llm.ServiceClass("secret-token-value")
+
+	if stream, err := harness.engine.Stream(ctx, request); err == nil || stream != nil {
+		t.Fatalf("Stream invalid service class = stream:%v err:%v, want nil stream and error", stream, err)
+	}
+	if err := tracer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoServiceClassTraceAttribute(t, exporter)
+}
+
+func assertNoServiceClassTraceAttribute(t *testing.T, exporter *observability.MemoryExporter) {
+	t.Helper()
+	for _, span := range exporter.Spans() {
+		for _, attr := range span.Attributes() {
+			if string(attr.Key) == "service_class" {
+				t.Fatalf("trace exported rejected service class: span=%s attr=%#v", span.Name(), attr)
+			}
+		}
+	}
+}
+
 func TestGenerateEmitsContinuationWriteSpan(t *testing.T) {
 	response := successfulResponse()
 	response.Continuation = &llm.Continuation{Handle: "provider-opaque-handle"}

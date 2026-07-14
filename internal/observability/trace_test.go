@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/internal/observability"
+	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -35,6 +36,45 @@ func TestTracerDropsUnsafeAttributesAndHashesTenant(t *testing.T) {
 	}
 	if !foundTenant {
 		t.Fatal("tenant was not hashed")
+	}
+}
+
+func TestTracerAllowsOnlyPublicServiceClasses(t *testing.T) {
+	exporter := &observability.MemoryExporter{}
+	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	ctx := context.Background()
+	classes := []llm.ServiceClass{
+		llm.ServiceClassEconomy,
+		llm.ServiceClassStandard,
+		llm.ServiceClassPriority,
+	}
+	for _, class := range classes {
+		_, span := tracer.Start(ctx, "provider.attempt", attribute.String("service_class", string(class)))
+		span.End()
+	}
+	_, rejected := tracer.Start(ctx, "provider.attempt", attribute.String("service_class", "secret-token-value"))
+	rejected.End()
+	if err := tracer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	spans := exporter.Spans()
+	if got, want := len(spans), len(classes)+1; got != want {
+		t.Fatalf("span count = %d, want %d", got, want)
+	}
+	for index, class := range classes {
+		attrs := spans[index].Attributes()
+		if got, want := len(attrs), 1; got != want {
+			t.Fatalf("class %q attribute count = %d, want %d", class, got, want)
+		}
+		if got := attrs[0].Value.AsString(); got != string(class) {
+			t.Fatalf("class %q exported %q", class, got)
+		}
+	}
+	for _, attr := range spans[len(classes)].Attributes() {
+		if string(attr.Key) == "service_class" {
+			t.Fatalf("rejected service class exported: %#v", attr)
+		}
 	}
 }
 
