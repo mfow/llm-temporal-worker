@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -83,6 +84,40 @@ func FuzzReal(f *testing.F) {}
 	targets := repositoryFuzzTargets(t, root)
 	if len(targets) != 1 || targets[0].packagePath != "." || targets[0].name != "FuzzReal" {
 		t.Fatalf("fuzz targets = %#v, want only FuzzReal", targets)
+	}
+}
+
+func TestRepositoryFuzzTargetsRecognizesStandardTestingAliasesOnly(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"alias_fuzz_test.go": `package fixture
+
+import testingalias "testing"
+
+func FuzzAlias(f *testingalias.F) {}
+`,
+		"dot_fuzz_test.go": `package fixture
+
+import . "testing"
+
+func FuzzDot(f *F) {}
+`,
+		"foreign_fuzz_test.go": `package fixture
+
+import testing "example.com/not-the-standard-library/testing"
+
+func FuzzForeign(f *testing.F) {}
+`,
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	targets := repositoryFuzzTargets(t, root)
+	if len(targets) != 2 || targets[0] != (fuzzEntry{packagePath: ".", name: "FuzzAlias"}) || targets[1] != (fuzzEntry{packagePath: ".", name: "FuzzDot"}) {
+		t.Fatalf("fuzz targets = %#v, want aliased and dot-imported testing.F targets only", targets)
 	}
 }
 
@@ -192,10 +227,11 @@ func fuzzTargetsInFile(path string, data []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	testingNames, dotTesting := standardTestingImports(parsed)
 	var names []string
 	for _, declaration := range parsed.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || !isFuzzTarget(function) {
+		if !ok || !isFuzzTarget(function, testingNames, dotTesting) {
 			continue
 		}
 		names = append(names, function.Name.Name)
@@ -203,7 +239,34 @@ func fuzzTargetsInFile(path string, data []byte) ([]string, error) {
 	return names, nil
 }
 
-func isFuzzTarget(function *ast.FuncDecl) bool {
+// standardTestingImports resolves only direct imports of the standard-library
+// testing package. Fuzz targets may use its default name, an explicit alias,
+// or a dot import; imports with a lookalike local path must not become gates.
+func standardTestingImports(file *ast.File) (map[string]bool, bool) {
+	names := make(map[string]bool)
+	dotImported := false
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || path != "testing" {
+			continue
+		}
+		if spec.Name == nil {
+			names["testing"] = true
+			continue
+		}
+		switch spec.Name.Name {
+		case ".":
+			dotImported = true
+		case "_":
+			// A blank import cannot name testing.F.
+		default:
+			names[spec.Name.Name] = true
+		}
+	}
+	return names, dotImported
+}
+
+func isFuzzTarget(function *ast.FuncDecl, testingNames map[string]bool, dotTesting bool) bool {
 	if function.Recv != nil || !fuzzTargetName.MatchString(function.Name.Name) || function.Type.Params == nil || len(function.Type.Params.List) != 1 {
 		return false
 	}
@@ -218,12 +281,15 @@ func isFuzzTarget(function *ast.FuncDecl) bool {
 	if !ok {
 		return false
 	}
-	selector, ok := pointer.X.(*ast.SelectorExpr)
-	if !ok {
+	switch value := pointer.X.(type) {
+	case *ast.SelectorExpr:
+		pkg, ok := value.X.(*ast.Ident)
+		return ok && testingNames[pkg.Name] && value.Sel.Name == "F"
+	case *ast.Ident:
+		return dotTesting && value.Name == "F"
+	default:
 		return false
 	}
-	pkg, ok := selector.X.(*ast.Ident)
-	return ok && pkg.Name == "testing" && selector.Sel.Name == "F"
 }
 
 // excludedFromFuzzTargetScan deliberately mirrors directories that Go does not

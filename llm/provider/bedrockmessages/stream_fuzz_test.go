@@ -27,6 +27,14 @@ func FuzzDecodeStream(f *testing.F) {
 	})
 }
 
+func TestDecodedProviderTerminalErrorIsValidFuzzOutcome(t *testing.T) {
+	events, err := DecodeStream(bytes.NewReader([]byte("event: error\ndata: {}\n\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDecodedEventsAssemble(t, events)
+}
+
 func assertDecodedEventsAssemble(t *testing.T, events []provider.Event) {
 	t.Helper()
 	assembler := provider.NewAssembler("bedrock-fuzz")
@@ -36,10 +44,24 @@ func assertDecodedEventsAssemble(t *testing.T, events []provider.Event) {
 		}
 	}
 	response, err := assembler.Result()
+	if hasProviderTerminalError(events) {
+		if err == nil {
+			t.Fatal("decoded provider terminal error unexpectedly assembled a response")
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("decoded terminal stream did not assemble: %v", err)
 	}
 	if response.OperationKey != "bedrock-fuzz" || !response.Status.Valid() {
 		t.Fatalf("assembled response is not semantic: %#v", response)
 	}
+}
+
+func hasProviderTerminalError(events []provider.Event) bool {
+	if len(events) == 0 {
+		return false
+	}
+	_, ok := events[len(events)-1].(provider.StreamErrored)
+	return ok
 }
