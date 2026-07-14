@@ -175,16 +175,21 @@ Startup order:
 1. parse and validate configuration;
 2. resolve secret references;
 3. create provider/Redis/blob/telemetry clients and compile the immutable
-   snapshot;
+   snapshot, including bounded checks of every required Redis and bucket
+   dependency before the snapshot is published;
 4. construct the Temporal client and register Activities on the configured
    task queue;
 5. bind the health and metrics listeners;
-6. start the Temporal worker;
-7. mark readiness true.
+6. recheck required dependencies and start the Temporal worker only when all
+   checks pass;
+7. mark readiness true and keep periodically checking dependencies, pausing
+   and resuming polling as their combined state changes.
 
-Client construction and configuration validation can fail before the worker
-starts, but the current runtime does not perform a separate startup ping of
-Redis, blob storage, or Redis Function/persistence state.
+Redis readiness verifies connectivity, the configured persistence and eviction
+policy, and the configured preloaded Function or Lua digest without loading or
+replacing server-side code. Blob readiness performs a bucket-only check without
+reading a tenant object. An initial failed check rejects the unpublished
+snapshot; a reload failure leaves the old snapshot in place.
 
 On `SIGTERM`/`SIGINT`, readiness turns false first. The process stops polling,
 allows the Temporal worker's configured graceful stop timeout, flushes telemetry
@@ -197,13 +202,13 @@ drains the captured snapshot clients, and closes the Temporal SDK client after
 polling has stopped. Runtime errors are bounded, actionable messages and never
 include resolved secret bytes or provider payloads.
 
-Liveness proves only that the process event loop is responsive. In the current
-implementation, readiness proves that a valid snapshot was composed and the
-Temporal worker controller started; it does not prove that required Redis or
-blob operations remain reachable after startup. Provider availability is a
-route-health concern and is evaluated by request planning rather than by this
-probe. Dependency-aware readiness is a v1 completion item, not a current
-runtime guarantee.
+Liveness proves only that the process event loop is responsive. Readiness
+requires a valid snapshot, a polling Temporal worker, and healthy required
+Redis and blob dependencies. A later dependency failure keeps liveness
+responsive, makes readiness false, and stops polling; the bounded monitor
+resumes polling only after every required check recovers. Provider availability
+is a route-health concern and is evaluated by request planning rather than by
+this probe.
 
 ## Temporal tests
 
