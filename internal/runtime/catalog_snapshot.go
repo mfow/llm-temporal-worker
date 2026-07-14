@@ -255,6 +255,9 @@ func endpointFamily(value string) provider.Family {
 	if value == "azure_openai_responses" {
 		return provider.FamilyOpenAIResponses
 	}
+	if value == "anthropic_aws_messages" {
+		return provider.FamilyAnthropicMessages
+	}
 	if value == "bedrock_anthropic_messages" {
 		return provider.FamilyBedrockMessages
 	}

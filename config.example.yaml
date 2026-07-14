@@ -176,6 +176,28 @@ endpoints:
     capability_profile: anthropic-messages-v4
     price_catalog: catalog-2026-07-13
 
+  anthropic-aws-us-east-1:
+    # This is Anthropic's AWS gateway, not Amazon Bedrock. Keep both endpoint
+    # families and their pinned continuations separate.
+    family: anthropic_aws_messages
+    base_url: https://aws-external-anthropic.us-east-1.api.aws
+    outbound_hosts: [aws-external-anthropic.us-east-1.api.aws]
+    region: us-east-1
+    aws_workspace_id: ws-example-123
+    auth:
+      kind: aws_default_chain
+    timeout: 115s
+    service_classes:
+      standard:
+        provider_value: standard_only
+      priority:
+        provider_value: auto
+        requires_capability: priority_capacity
+    capability_profile: anthropic-aws-us-east-1-v1
+    price_catalog: catalog-2026-07-13
+    provider_storage:
+      permitted: false
+
   bedrock-us-east-1:
     family: bedrock_anthropic_messages
     outbound_hosts: [bedrock-runtime.us-east-1.amazonaws.com]
@@ -208,6 +230,10 @@ models:
         classes: [standard, priority]
       - id: anthropic-secondary
         endpoint: anthropic-direct
+        model: claude-example-2026-06-01
+        classes: [standard, priority]
+      - id: anthropic-aws-secondary
+        endpoint: anthropic-aws-us-east-1
         model: claude-example-2026-06-01
         classes: [standard, priority]
       - id: bedrock-economy

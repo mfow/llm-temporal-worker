@@ -202,6 +202,60 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	}
 }
 
+func TestCompileRoutesKeepsAnthropicAWSAndBedrockCatalogStateSeparate(t *testing.T) {
+	value, bundle := anthropicAWSRouteInputs(t)
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := routes.Models["claude-aws"].Routes[0]
+	if route.Family != string(provider.FamilyAnthropicMessages) || route.EndpointID != "anthropic-aws" {
+		t.Fatalf("AWS route identity = %#v", route)
+	}
+
+	value, bundle = anthropicAWSRouteInputs(t)
+	profile := bundle.Capabilities["anthropic-aws-v1"]
+	profile.Family = provider.FamilyBedrockMessages
+	bundle.Capabilities["anthropic-aws-v1"] = profile
+	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "capability family") {
+		t.Fatalf("Bedrock capability profile accepted for Anthropic AWS route: %v", err)
+	}
+
+	value, bundle = anthropicAWSRouteInputs(t)
+	entry := bundle.Pricing["prices"].Catalog.Entries[0]
+	entry.Family = string(provider.FamilyBedrockMessages)
+	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{entry})
+	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "no active price entry") {
+		t.Fatalf("Bedrock price entry accepted for Anthropic AWS route: %v", err)
+	}
+}
+
+func anthropicAWSRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
+	t.Helper()
+	value := config.Config{
+		Version: "config-v1",
+		Limits:  config.LimitsConfig{MaxBudgetBucketsPerWindow: 64},
+		Endpoints: map[string]config.EndpointConfig{
+			"anthropic-aws": {
+				Family: "anthropic_aws_messages", Region: "us-east-1", AccountRegion: "us-east-1", CapabilityProfile: "anthropic-aws-v1", PriceCatalog: "prices",
+				ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "standard_only"}},
+			},
+		},
+		Models: map[string]config.ModelConfig{
+			"claude-aws": {AllowedTenants: []string{"tenant-a"}, DataRegions: []string{"us-east-1"}, Routes: []config.RouteConfig{{ID: "aws-primary", Endpoint: "anthropic-aws", Model: "claude-contract", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}},
+		},
+	}
+	profile := catalog.CapabilityProfile{ID: "anthropic-aws-v1", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", Set: provider.CapabilitySet{Version: "anthropic-aws/v1", Features: map[provider.Feature]provider.Capability{provider.FeatureText: {State: provider.CapabilityNative}}}}
+	entry := pricing.Entry{
+		Provider: "anthropic", Family: string(provider.FamilyAnthropicMessages), EndpointID: "anthropic-aws", Region: "us-east-1", Model: "claude-contract", ProviderTier: "standard_only",
+		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1"), OutputPerMillion: pricing.MustDecimalUSD("2")},
+	}
+	return value, catalog.Bundle{
+		Capabilities: map[string]catalog.CapabilityProfile{"anthropic-aws-v1": profile},
+		Pricing:      map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{entry})},
+	}
+}
+
 func TestCompileRoutesRejectsBrokenReferencesAndIdentity(t *testing.T) {
 	tests := []struct {
 		name   string

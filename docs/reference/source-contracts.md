@@ -41,12 +41,22 @@ OpenAI compatibility is not evidence that every OpenAI field/tier works.
 - [Anthropic Go SDK](https://github.com/anthropics/anthropic-sdk-go) contains
   direct Messages support, configurable retry count, and AWS/Bedrock client
   support; retries are disabled here.
+- [Anthropic Go SDK AWS gateway source](https://github.com/anthropics/anthropic-sdk-go/blob/v1.57.0/aws/aws.go)
+  documents that API-key inputs and `ANTHROPIC_AWS_API_KEY` take precedence
+  over SigV4, while unset credentials use the default AWS credential chain.
+  It also gives configured values precedence over environment defaults for the
+  region, workspace ID, and base URL.
 - [Amazon Bedrock service tiers](https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html)
   define flex, default, priority, and reserved behavior and availability.
 
 Design consequence: direct synchronous Anthropic has no assumed economy mapping.
-AWS profiles declare exact offering/model mappings; reserved capacity is not a
-fourth public request class.
+`anthropic_aws_messages` supplies the AWS gateway base URL, region, and
+workspace ID explicitly and permits only `aws_default_chain`; its constructor
+rejects API-key/static modes and `ANTHROPIC_AWS_API_KEY` so the SDK cannot
+silently choose a different auth mode. AWS gateway and Bedrock have separate
+endpoint families, catalog state, and pinned continuations. AWS profiles
+declare exact offering/model mappings; reserved capacity is not a fourth public
+request class.
 
 ## OpenAI-compatible endpoints
 

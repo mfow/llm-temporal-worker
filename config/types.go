@@ -177,6 +177,7 @@ type EndpointConfig struct {
 	BaseURL           string                          `yaml:"base_url" json:"base_url"`
 	OutboundHosts     []string                        `yaml:"outbound_hosts" json:"outbound_hosts"`
 	Region            string                          `yaml:"region" json:"region"`
+	AWSWorkspaceID    string                          `yaml:"aws_workspace_id" json:"aws_workspace_id"`
 	Auth              AuthConfig                      `yaml:"auth" json:"auth"`
 	AccountRegion     string                          `yaml:"account_region" json:"account_region"`
 	Timeout           Duration                        `yaml:"timeout" json:"timeout"`

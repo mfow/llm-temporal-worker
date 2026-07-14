@@ -46,7 +46,9 @@ controller:
 - A configurable OpenAI-compatible endpoint profile with capabilities declared
   by configuration rather than guessed.
 - Anthropic direct.
-- Claude Platform on AWS through the Anthropic AWS gateway client.
+- Claude Platform on AWS through a closed `anthropic_aws_messages` endpoint
+  family using the Anthropic AWS gateway client and the AWS default credential
+  chain; it is distinct from Bedrock.
 - Amazon Bedrock Anthropic through the current Messages-compatible Mantle path,
   with the legacy Bedrock runtime path isolated behind a separate endpoint
   profile when required by a region or model.

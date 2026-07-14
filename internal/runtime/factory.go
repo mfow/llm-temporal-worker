@@ -17,6 +17,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -73,6 +74,7 @@ type RedisFactory func(context.Context, config.RedisConfig, string, string) (red
 type BlobFactory func(context.Context, config.Config) (blob.Store, io.Closer, error)
 type AWSConfigFactory func(context.Context, string) (aws.Config, error)
 type AzureCredentialFactory func(context.Context, config.EndpointConfig) (azcore.TokenCredential, error)
+type AnthropicAWSClientFactory func(context.Context, anthropicmessages.AWSClientConfig) (*anthropicmessages.Client, error)
 
 // ProductionFactoryOptions provides explicit seams for tests and deployment
 // composition. If a client/factory is omitted, the official SDK defaults are
@@ -95,9 +97,10 @@ type ProductionFactoryOptions struct {
 	BlobFactory     BlobFactory
 	BlobRefResolver BlobRefResolver
 
-	AWSConfigFactory       AWSConfigFactory
-	AzureCredentialFactory AzureCredentialFactory
-	AzureAPIVersions       map[string]string
+	AWSConfigFactory          AWSConfigFactory
+	AzureCredentialFactory    AzureCredentialFactory
+	AnthropicAWSClientFactory AnthropicAWSClientFactory
+	AzureAPIVersions          map[string]string
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -153,6 +156,9 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	}
 	if options.AzureCredentialFactory == nil {
 		options.AzureCredentialFactory = defaultAzureCredentialFactory
+	}
+	if options.AnthropicAWSClientFactory == nil {
+		options.AnthropicAWSClientFactory = anthropicmessages.NewAWSGatewayClient
 	}
 	return &ProductionEngineFactory{options: options}, nil
 }
@@ -469,6 +475,29 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			return nil, err
 		}
 		anthropicClient, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+		}
+		return anthropicmessages.NewAdapter(anthropicClient, endpointID, *anthropicProfile)
+	case "anthropic_aws_messages":
+		if endpoint.Auth.Kind != "aws_default_chain" {
+			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
+		}
+		anthropicProfile, err := factory.anthropicProfile(endpointID, endpoint, capabilities, profile)
+		if err != nil {
+			return nil, err
+		}
+		if factory.options.AnthropicAWSClientFactory == nil {
+			return nil, fmt.Errorf("%w: Anthropic AWS client factory is unavailable", ErrDependencyUnavailable)
+		}
+		anthropicClient, err := factory.options.AnthropicAWSClientFactory(ctx, anthropicmessages.AWSClientConfig{
+			BaseURL:    endpoint.BaseURL,
+			HTTPClient: client,
+			AWSConfig: anthropicaws.ClientConfig{
+				AWSRegion:   endpoint.Region,
+				WorkspaceID: endpoint.AWSWorkspaceID,
+			},
+		})
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
