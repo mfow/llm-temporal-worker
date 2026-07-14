@@ -5,8 +5,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+)
+
+const (
+	sourceVerifierTestSourceLimit = 1 << 20
+	sourceVerifierTestOutputLimit = 8 << 20
 )
 
 func TestScanContentDetectsRawAndDecodedCredentialFields(t *testing.T) {
@@ -130,6 +136,114 @@ func TestVerifyScansSourceFixturesAndTestOutputWithoutLeakingPayload(t *testing.
 			}
 		})
 	}
+}
+
+func TestVerifyAllowsTestOutputAboveTheRepositoryFileLimit(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
+	outputPath := filepath.Join(root, "test-output.json")
+	writeTestFile(t, root, "test-output.json", safeTestOutputAboveRepositoryFileLimit(t, ""))
+
+	if err := verify(root, outputPath); err != nil {
+		t.Fatalf("verify rejected benign bounded test output: %v", err)
+	}
+}
+
+func TestVerifyDetectsLeaksNearTheTailOfLargeTestOutput(t *testing.T) {
+	secret := "Bearer " + strings.Repeat("z", 24)
+	rawCredential := `{"authorization":"` + secret + `"}`
+	tests := []struct {
+		name     string
+		tail     string
+		wantPart string
+	}{
+		{name: "raw credential field", tail: rawCredential, wantPart: "credential-like denied field"},
+		{name: "URL encoded credential field", tail: url.QueryEscape(rawCredential), wantPart: "credential-like denied field"},
+		{name: "base64 encoded credential field", tail: base64.StdEncoding.EncodeToString([]byte(rawCredential)), wantPart: "credential-like denied field"},
+		{name: "denied field leak", tail: "raw provider body leaked: " + strings.Repeat("opaque-", 4), wantPart: "denied-field leak"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
+			outputPath := filepath.Join(root, "test-output.json")
+			writeTestFile(t, root, "test-output.json", safeTestOutputAboveRepositoryFileLimit(t, "\n"+test.tail))
+
+			err := verify(root, outputPath)
+			if err == nil {
+				t.Fatal("verify accepted a denied value at the tail of large test output")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("verify leaked credential bytes: %v", err)
+			}
+			if !strings.Contains(err.Error(), "test output") || !strings.Contains(err.Error(), test.wantPart) {
+				t.Fatalf("verify error %q does not identify the tail leak %q", err, test.wantPart)
+			}
+		})
+	}
+}
+
+func TestVerifyDetectsBase64LeakAtTheTailOfGoTestJSONOutput(t *testing.T) {
+	secret := "Bearer " + strings.Repeat("q", 24)
+	rawCredential := `{"authorization":"` + secret + `"}`
+	root := t.TempDir()
+	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
+	outputPath := filepath.Join(root, "test-output.json")
+	writeTestFile(t, root, "test-output.json", goTestJSONOutputAboveRepositoryFileLimit(t, base64.StdEncoding.EncodeToString([]byte(rawCredential))))
+
+	err := verify(root, outputPath)
+	if err == nil {
+		t.Fatal("verify accepted a base64 credential at the tail of Go JSON test output")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("verify leaked credential bytes: %v", err)
+	}
+	if !strings.Contains(err.Error(), "test output") || !strings.Contains(err.Error(), "credential-like denied field") {
+		t.Fatalf("verify error %q does not identify the base64 tail leak", err)
+	}
+}
+
+func TestVerifyFailsClosedWhenTestOutputExceedsItsBound(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
+	outputPath := filepath.Join(root, "test-output.json")
+	writeTestFile(t, root, "test-output.json", []byte(strings.Repeat("safe test output\n", sourceVerifierTestOutputLimit/len("safe test output\n")+1)))
+
+	err := verify(root, outputPath)
+	if err == nil {
+		t.Fatal("verify accepted test output above its explicit bound")
+	}
+	if !strings.Contains(err.Error(), "test output") || !strings.Contains(err.Error(), "file exceeds the verification size limit") {
+		t.Fatalf("test output cap failure = %q", err)
+	}
+}
+
+func safeTestOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte {
+	t.Helper()
+	output := []byte(strings.Repeat("safe test output\n", sourceVerifierTestSourceLimit/len("safe test output\n")+1) + tail)
+	if len(output) <= sourceVerifierTestSourceLimit || len(output) > sourceVerifierTestOutputLimit {
+		t.Fatalf("test output length = %d, want (%d, %d]", len(output), sourceVerifierTestSourceLimit, sourceVerifierTestOutputLimit)
+	}
+	return output
+}
+
+func goTestJSONOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte {
+	t.Helper()
+	var output strings.Builder
+	for record := 0; output.Len() <= sourceVerifierTestSourceLimit; record++ {
+		output.WriteString(`{"Time":"2026-07-15T00:00:00Z","Action":"output","Package":"example.test","Test":"TestSafe`)
+		output.WriteString(strconv.Itoa(record))
+		output.WriteString(`","Output":"safe test output\\n"}` + "\n")
+	}
+	output.WriteString(`{"Time":"2026-07-15T00:00:01Z","Action":"output","Package":"example.test","Output":`)
+	output.WriteString(strconv.Quote(tail))
+	output.WriteString("}\n")
+	bytes := []byte(output.String())
+	if len(bytes) <= sourceVerifierTestSourceLimit || len(bytes) > sourceVerifierTestOutputLimit {
+		t.Fatalf("Go JSON test output length = %d, want (%d, %d]", len(bytes), sourceVerifierTestSourceLimit, sourceVerifierTestOutputLimit)
+	}
+	return bytes
 }
 
 func TestVerifyAllowsCredentialVariableWiringInSource(t *testing.T) {

@@ -73,3 +73,39 @@ func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
 		}
 	}
 }
+
+func TestImageVerifyOCIExportUsesOneSupportedBuildxSolve(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makefile := string(data)
+
+	start := strings.Index(makefile, `if [ -n "$(IMAGE_VERIFY_OCI_LAYOUT)" ]; then`)
+	if start < 0 {
+		t.Fatal("Makefile is missing the OCI layout image-verify branch")
+	}
+	end := strings.Index(makefile[start:], "\t\telse \\")
+	if end < 0 {
+		t.Fatal("Makefile OCI layout image-verify branch is missing its fallback boundary")
+	}
+	branch := makefile[start : start+end]
+
+	for _, want := range []string{
+		"docker buildx build --platform linux/amd64 --provenance=false --sbom=false",
+		`--output "type=oci,dest=$$layout,tar=false,name=$(IMAGE_VERIFY_TAG)"`,
+		"--load \\",
+		`docker image inspect "$(IMAGE_VERIFY_TAG)"`,
+	} {
+		if !strings.Contains(branch, want) {
+			t.Fatalf("OCI layout image-verify branch is missing %q", want)
+		}
+	}
+	if strings.Count(branch, "docker buildx build") != 1 {
+		t.Fatalf("OCI layout image-verify branch must use exactly one Buildx solve: %q", branch)
+	}
+	if strings.Contains(branch, "docker load --input") {
+		t.Fatal("OCI layout image-verify branch must not load an OCI directory through docker load")
+	}
+}
