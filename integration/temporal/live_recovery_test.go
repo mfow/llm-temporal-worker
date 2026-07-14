@@ -31,9 +31,27 @@ import (
 )
 
 const (
-	liveRecoveryWorkflowName = "llmtw.integration.temporal-recovery.v1"
-	liveSharedBudgetLimit    = pricing.MicroUSD(100)
+	liveRecoveryWorkflowName              = "llmtw.integration.temporal-recovery.v1"
+	liveRecoveryWorkflowTaskExecutionSize = 2
+	liveSharedBudgetLimit                 = pricing.MicroUSD(100)
 )
+
+func TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum(t *testing.T) {
+	options := liveRecoveryWorkerOptions("construction")
+	// One panics in the Temporal SDK and zero silently selects its large default.
+	if got, want := options.MaxConcurrentWorkflowTaskExecutionSize, 2; got != want {
+		t.Fatalf("workflow task execution size = %d, want Temporal-supported bounded value %d", got, want)
+	}
+
+	workflowClient, err := client.NewLazyClient(client.Options{HostPort: "127.0.0.1:1", Namespace: "default"})
+	if err != nil {
+		t.Fatalf("create lazy Temporal client: %v", err)
+	}
+	t.Cleanup(workflowClient.Close)
+	if valueWorker := worker.New(workflowClient, "llmtw-live-recovery-construction", options); valueWorker == nil {
+		t.Fatal("construct live recovery worker: got nil")
+	}
+}
 
 // TestTemporalRecoveryWithSharedRedis uses the real Temporal development
 // server and the Redis instance from the worker Compose profile. The adapter
@@ -187,15 +205,20 @@ func liveRecoveryWorkflow(ctx workflow.Context, payload activity.GenerateRequest
 
 func newLiveRecoveryWorker(t *testing.T, workflowClient client.Client, queue, identity string, value *engine.Engine) worker.Worker {
 	t.Helper()
-	valueWorker := worker.New(workflowClient, queue, worker.Options{
-		Identity:                               "llmtw-live-recovery-" + identity,
-		MaxConcurrentActivityExecutionSize:     1,
-		MaxConcurrentWorkflowTaskExecutionSize: 1,
-		WorkerStopTimeout:                      5 * time.Second,
-	})
+	valueWorker := worker.New(workflowClient, queue, liveRecoveryWorkerOptions(identity))
 	valueWorker.RegisterWorkflowWithOptions(liveRecoveryWorkflow, workflow.RegisterOptions{Name: liveRecoveryWorkflowName})
 	(&activity.Activities{Engine: value, Heartbeater: &activity.TemporalHeartbeater{}}).Register(valueWorker)
 	return valueWorker
+}
+
+func liveRecoveryWorkerOptions(identity string) worker.Options {
+	return worker.Options{
+		Identity:                           "llmtw-live-recovery-" + identity,
+		MaxConcurrentActivityExecutionSize: 1,
+		// Temporal needs two slots to alternate sticky and regular queue polling.
+		MaxConcurrentWorkflowTaskExecutionSize: liveRecoveryWorkflowTaskExecutionSize,
+		WorkerStopTimeout:                      5 * time.Second,
+	}
 }
 
 func newLiveRecoveryEngine(t *testing.T, admissions admission.AdmissionStore, results engine.ResultStore, adapter provider.Adapter) *engine.Engine {
