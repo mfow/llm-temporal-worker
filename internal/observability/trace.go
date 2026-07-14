@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace"
@@ -69,7 +70,9 @@ func (tracer *Tracer) RecordError(span oteltrace.Span, err error) {
 	}
 	attrs := errorAttrs(err)
 	for _, attr := range attrs {
-		span.SetAttributes(attribute.String(attr.Key, attr.Value.String()))
+		if safe, ok := safeTraceAttr(attribute.String(attr.Key, attr.Value.String())); ok {
+			span.SetAttributes(safe)
+		}
 	}
 	span.SetStatus(codes.Error, "operation failed")
 }
@@ -143,6 +146,16 @@ func safeTraceAttr(attr attribute.KeyValue) (attribute.KeyValue, bool) {
 	value := attr.Value.AsString()
 	if value == "" || len(value) > 96 || strings.ContainsAny(value, "\r\n") {
 		return attribute.KeyValue{}, false
+	}
+	switch key {
+	case "error_code":
+		if !provider.Code(value).Valid() {
+			return attribute.KeyValue{}, false
+		}
+	case "phase":
+		if !provider.Phase(value).Valid() {
+			return attribute.KeyValue{}, false
+		}
 	}
 	return attr, true
 }
