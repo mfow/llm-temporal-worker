@@ -365,6 +365,9 @@ uses a returned real stream internally for liveness and bounded progress, and
 returns the final normalized response. If the engine reports the specific
 pre-admission streaming-unavailable error, the Activity uses native `Generate`
 instead; it does not turn that response into an `EventStream`, and it never
-falls back after an `EventStream` has been returned. Raw deltas, tool
+falls back after an `EventStream` has been returned. That match requires
+`unsupported_capability`, stream phase, `not_dispatched` certainty, and no
+operation ID; unsupported compile/planning or operation-bearing errors remain
+ordinary Activity failures. Raw deltas, tool
 arguments, and opaque provider state never enter workflow history as heartbeat
 details.

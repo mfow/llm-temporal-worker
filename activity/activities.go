@@ -78,7 +78,7 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 // finalized or ambiguous.
 func preAdmissionStreamingUnavailable(err error) bool {
 	var providerErr *provider.Error
-	return errors.As(err, &providerErr) && providerErr.Code == provider.CodeUnsupportedCapability && providerErr.Dispatch == provider.DispatchNotDispatched
+	return errors.As(err, &providerErr) && providerErr.Code == provider.CodeUnsupportedCapability && providerErr.Phase == provider.PhaseStream && providerErr.Dispatch == provider.DispatchNotDispatched && providerErr.OperationID == ""
 }
 
 func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response) (GenerateResponse, error) {

@@ -117,8 +117,11 @@ streaming progress, then returns the sole `response_completed` value.
 `not_dispatched` certainty when its pre-admission route/capability preflight
 finds no real `StreamingAdapter`. Only in that narrow case, before an
 `EventStream` or durable operation exists, the Activity invokes native
-`Engine.Generate` and returns its final semantic response. It never falls back
-after a stream has been returned or after a stream terminal event. Text/JSON
+`Engine.Generate` and returns its final semantic response. The fallback match
+also requires stream phase and an empty operation ID, so an unsupported
+compile/planning error or any operation-bearing error cannot enter the native
+path. It never falls back after a stream has been returned or after a stream
+terminal event. Text/JSON
 deltas, tool arguments, and opaque provider-state events are deliberately
 drained without being copied as live event payloads into a Temporal heartbeat;
 only the final normalized response crosses the Activity return boundary. A

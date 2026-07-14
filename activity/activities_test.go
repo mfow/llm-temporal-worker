@@ -40,6 +40,7 @@ func (engine fakeEngine) Stream(_ context.Context, _ llm.Request) (llm.EventStre
 
 type nativeFallbackEngine struct {
 	response      llm.Response
+	streamErr     error
 	generateCalls int
 	streamCalls   int
 }
@@ -51,6 +52,9 @@ func (engine *nativeFallbackEngine) Generate(context.Context, llm.Request) (llm.
 
 func (engine *nativeFallbackEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
 	engine.streamCalls++
+	if engine.streamErr != nil {
+		return nil, engine.streamErr
+	}
 	return nil, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming")
 }
 
@@ -174,6 +178,33 @@ func TestGenerateActivityNeverFallsBackAfterReturnedStreamTerminal(t *testing.T)
 	}
 	if streaming.generateCalls != 0 {
 		t.Fatalf("Activity called Generate %d times after Stream returned a terminal event", streaming.generateCalls)
+	}
+}
+
+func TestGenerateActivityDoesNotFallBackForOtherUnsupportedErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  *provider.Error
+	}{
+		{name: "compile", err: provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "stream compile capability is unsupported")},
+		{name: "planning", err: provider.NewError(provider.CodeUnsupportedCapability, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "stream planning capability is unsupported")},
+		{name: "operation", err: func() *provider.Error {
+			err := provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "stream operation has already been created")
+			err.OperationID = "operation-id"
+			return err
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native := &nativeFallbackEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}, streamErr: test.err}
+			activities := Activities{Engine: native}
+			_, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
+			if err == nil {
+				t.Fatal("Activity accepted an unsupported stream error outside the pre-admission fallback contract")
+			}
+			if native.generateCalls != 0 {
+				t.Fatalf("Activity called Generate %d times for %#v", native.generateCalls, test.err)
+			}
+		})
 	}
 }
 
