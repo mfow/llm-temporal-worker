@@ -16,6 +16,7 @@ current-layout reference.
 ├── llm/                            Provider-neutral public domain API
 │   ├── schema/                     JSON Schema normalization and local validation
 │   └── provider/                   Adapter interfaces and provider-neutral calls
+│       ├── contracttest/           Fixture manifest and coverage contract harness
 │       ├── internal/               Shared adapter configuration and test helpers
 │       │   ├── clientconfig/       Provider endpoint and URL configuration helpers
 │       │   ├── contract/           Shared adapter contract-test helpers
