@@ -17,6 +17,29 @@ go build ./cmd/llm-temporal-worker
 docker build .
 ```
 
+## Local release gates
+
+The repository also exposes bounded release-gate targets. They are safe to run
+from a clean checkout without provider credentials, a Temporal server, a Redis
+server, or a Kubernetes cluster:
+
+```sh
+make integration
+make compose-smoke
+KUBECTL=/path/to/pinned/kubectl make kustomize-verify
+```
+
+`make integration` runs the offline integration packages with the race
+detector. `make compose-smoke` parses the checked-in fixture and runs
+`docker compose config --quiet`; it does not start containers. The Compose
+worker remains a separate, explicitly authorized live operation because it
+requires a continuation key and a provider/state runtime. Setting
+`LLMTW_COMPOSE_LIVE=1` makes this boundary fail closed with instructions rather
+than silently starting services. `make kustomize-verify` runs static manifest
+tests and `deploy/verify.sh`, which renders each overlay locally through
+`kubectl kustomize` and never applies anything to a cluster. Set `KUBECTL` to a
+reviewed, pinned executable when `kubectl` is not on `PATH`.
+
 Plans introduce these commands incrementally. CI checks formatting with
 `gofmt -l` rather than modifying files.
 

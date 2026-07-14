@@ -169,6 +169,20 @@ tests:
 Live provider tests are opt-in, require explicit environment flags and tiny cost
 ceilings, and never run on pull requests from untrusted forks.
 
+The offline release checks are available without starting this stack:
+
+```sh
+make integration
+make compose-smoke
+KUBECTL=/path/to/pinned/kubectl make kustomize-verify
+```
+
+The Compose check only validates the model and local fixture invariants. It
+does not create containers; `LLMTW_COMPOSE_LIVE=1` is a fail-closed guard for
+operators who need the separately authorized live runbook. The Kubernetes
+check renders every overlay with `kubectl kustomize` and never contacts a
+cluster. Both checks use only checked-in fixtures and redacted configuration.
+
 ## GitHub Actions split
 
 `pull-request.yml` validates documentation and, once Go exists, formatting,
