@@ -15,6 +15,7 @@ var supportedFamilies = map[string]struct{}{
 	"azure_openai_responses":     {},
 	"openai_chat":                {},
 	"anthropic_messages":         {},
+	"anthropic_aws_messages":     {},
 	"bedrock_anthropic_messages": {},
 }
 
@@ -259,8 +260,31 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 		if err != nil {
 			return err
 		}
+	} else if endpoint.Family == "anthropic_aws_messages" {
+		if endpoint.Region == "" {
+			return fmt.Errorf("%s.region is required for Anthropic AWS gateway", path)
+		}
+		if err := validateIdentifier(endpoint.Region, path+".region"); err != nil {
+			return err
+		}
+		if endpoint.AWSWorkspaceID == "" {
+			return fmt.Errorf("%s.aws_workspace_id is required for Anthropic AWS gateway", path)
+		}
+		if err := validateIdentifier(endpoint.AWSWorkspaceID, path+".aws_workspace_id"); err != nil {
+			return err
+		}
+		if endpoint.Auth.Kind != "aws_default_chain" {
+			return fmt.Errorf("%s.auth.kind must be aws_default_chain for Anthropic AWS gateway", path)
+		}
+		baseHost, err = normalizedHTTPSURLHost(endpoint.BaseURL, path+".base_url", false)
+		if err != nil {
+			return err
+		}
 	} else if baseHost, err = normalizedHTTPSURLHost(endpoint.BaseURL, path+".base_url", false); err != nil {
 		return err
+	}
+	if endpoint.Family != "anthropic_aws_messages" && endpoint.AWSWorkspaceID != "" {
+		return fmt.Errorf("%s.aws_workspace_id is only valid for Anthropic AWS gateway endpoints", path)
 	}
 	if err := endpoint.validateOutboundHosts(path, baseHost); err != nil {
 		return err

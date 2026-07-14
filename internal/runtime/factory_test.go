@@ -12,6 +12,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
+	"github.com/mfow/llm-temporal-worker/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/routing"
 )
 
@@ -63,6 +64,69 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 	}
 }
 
+func TestProductionFactoryBuildsAnthropicAWSGatewayAdapterWithoutSecretResolution(t *testing.T) {
+	resolvedSecret := false
+	var constructed anthropicmessages.AWSClientConfig
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			resolvedSecret = true
+			return nil, errors.New("AWS gateway must not resolve a provider secret")
+		}),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+			return engine.Snapshot{}, nil
+		}),
+		HTTPClient: &http.Client{},
+		AnthropicAWSClientFactory: func(ctx context.Context, value anthropicmessages.AWSClientConfig) (*anthropicmessages.Client, error) {
+			constructed = value
+			value.AWSConfig.SkipAuth = true
+			return anthropicmessages.NewAWSClient(ctx, value)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewProductionEngineFactory() error = %v", err)
+	}
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{
+		"anthropic-aws": {
+			Family: "anthropic_aws_messages", BaseURL: "https://aws-external-anthropic.us-east-1.api.aws", OutboundHosts: []string{"aws-external-anthropic.us-east-1.api.aws"},
+			Region: "us-east-1", AWSWorkspaceID: "ws-example-123", Auth: config.AuthConfig{Kind: "aws_default_chain"},
+			ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "standard_only"}},
+		},
+	}}
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: "anthropic-aws", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
+	}}}
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws")
+	if err != nil {
+		t.Fatalf("buildAdapter() error = %v", err)
+	}
+	if adapter == nil || adapter.Name() != "anthropic.messages/anthropic-aws" {
+		t.Fatalf("adapter = %#v, want Anthropic AWS messages adapter", adapter)
+	}
+	if resolvedSecret {
+		t.Fatal("AWS gateway resolved a provider secret")
+	}
+	if constructed.BaseURL != value.Endpoints["anthropic-aws"].BaseURL || constructed.AWSConfig.AWSRegion != "us-east-1" || constructed.AWSConfig.WorkspaceID != "ws-example-123" {
+		t.Fatalf("AWS gateway client configuration = %#v", constructed)
+	}
+	if constructed.AWSConfig.APIKey != "" || constructed.AWSConfig.AWSAccessKey != "" || constructed.AWSConfig.AWSSecretAccessKey != "" || constructed.AWSConfig.AWSSessionToken != "" || constructed.AWSConfig.AWSProfile != "" {
+		t.Fatalf("AWS gateway client accepted static credentials: %#v", constructed)
+	}
+}
+
+func TestProductionFactoryRejectsSecretAuthForAnthropicAWSGateway(t *testing.T) {
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{HTTPClient: &http.Client{}}}
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{
+		"anthropic-aws": {Family: "anthropic_aws_messages", BaseURL: "https://aws-external-anthropic.us-east-1.api.aws", OutboundHosts: []string{"aws-external-anthropic.us-east-1.api.aws"}, Region: "us-east-1", AWSWorkspaceID: "ws-example-123", Auth: config.AuthConfig{Kind: "bearer_env", Name: "ANTHROPIC_AWS_API_KEY"}},
+	}}
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: "anthropic-aws", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
+	}}}
+	_, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws")
+	if !errors.Is(err, ErrUnsupportedProviderAuth) {
+		t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
+	}
+}
+
 func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{HTTPClient: &http.Client{}}}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
@@ -92,6 +156,9 @@ func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
 	}
 	if got := endpointFamily("bedrock_anthropic_messages"); got != provider.FamilyBedrockMessages {
 		t.Fatalf("Bedrock family = %q, want %q", got, provider.FamilyBedrockMessages)
+	}
+	if got := endpointFamily("anthropic_aws_messages"); got != provider.FamilyAnthropicMessages {
+		t.Fatalf("Anthropic AWS family = %q, want %q", got, provider.FamilyAnthropicMessages)
 	}
 	if !llm.ServiceClassPriority.Valid() {
 		t.Fatal("priority service class is unexpectedly invalid")

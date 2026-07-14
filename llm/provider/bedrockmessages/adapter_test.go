@@ -46,6 +46,27 @@ func TestCompileMapsOnlyTheThreePublicBedrockServiceClasses(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsPinnedAnthropicAWSContinuation(t *testing.T) {
+	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
+	_, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{
+			OperationKey: "bedrock-reject-aws-continuation",
+			Model:        "claude-contract",
+			Continuation: &llm.Continuation{
+				Handle:     "anthropic-messages:msg-aws-fixture",
+				EndpointID: "anthropic-aws",
+				Model:      "claude-contract",
+				Pinned:     true,
+			},
+		},
+		Query:  provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
+		Strict: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "continuation endpoint") {
+		t.Fatalf("cross-family continuation error = %v", err)
+	}
+}
+
 func TestProfileRejectsReservedCapacityAsPublicTier(t *testing.T) {
 	profile := DefaultProfile("bedrock-contract")
 	profile.ServiceTiers[llm.ServiceClassEconomy] = "reserved"
