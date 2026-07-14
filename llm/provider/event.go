@@ -151,7 +151,7 @@ func (assembler *Assembler) Add(event Event) error {
 		assembler.outputs = append(assembler.outputs, item)
 		delete(assembler.active, event.Index)
 	case UsageUpdated:
-		assembler.usage = event.Usage
+		assembler.usage = mergeUsage(assembler.usage, event.Usage)
 	case StreamCompleted:
 		if len(assembler.active) > 0 {
 			return fmt.Errorf("stream completed with unfinished output")
@@ -194,6 +194,33 @@ func (assembler *Assembler) Add(event Event) error {
 
 func usageEmpty(usage llm.Usage) bool {
 	return usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 && len(usage.ProviderRaw) == 0
+}
+
+func mergeUsage(current, update llm.Usage) llm.Usage {
+	if update.InputTokens != 0 {
+		current.InputTokens = update.InputTokens
+	}
+	if update.OutputTokens != 0 {
+		current.OutputTokens = update.OutputTokens
+	}
+	if update.ReasoningTokens != 0 {
+		current.ReasoningTokens = update.ReasoningTokens
+	}
+	if update.CacheReadTokens != 0 {
+		current.CacheReadTokens = update.CacheReadTokens
+	}
+	if update.CacheWriteTokens != 0 {
+		current.CacheWriteTokens = update.CacheWriteTokens
+	}
+	if len(update.ProviderRaw) > 0 {
+		if current.ProviderRaw == nil {
+			current.ProviderRaw = make(map[string]json.RawMessage, len(update.ProviderRaw))
+		}
+		for key, value := range update.ProviderRaw {
+			current.ProviderRaw[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	return current
 }
 
 func (assembler *Assembler) state(index int) (*outputState, error) {
