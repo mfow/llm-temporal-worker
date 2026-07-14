@@ -151,7 +151,7 @@ portability checks permit it.
 | Provider definite transient failure | Release/refund as documented; try next candidate only within route bounds |
 | Provider ambiguous failure | Keep reservation, record ambiguity, stop automatic retries |
 | Worker termination | Temporal retries; ledger returns a completed result or ambiguity instead of blindly repeating |
-| Configuration reload failure | Keep serving the last valid snapshot and expose readiness/metric failure |
+| Configuration reload failure | Keep serving the last valid snapshot and return the reload error; readiness remains based on the active snapshot and dependency probes |
 
 ## Horizontal scaling
 
