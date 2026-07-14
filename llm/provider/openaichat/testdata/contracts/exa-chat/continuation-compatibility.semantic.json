@@ -1,0 +1,19 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-exa-chat-continuation",
+  "model": "exa",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "continue chat"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": {
+    "handle": "chat:continuation-1",
+    "endpoint_id": "exa-chat-fixture",
+    "model": "exa",
+    "pinned": true
+  },
+  "extensions": {}
+}

@@ -1,0 +1,16 @@
+{
+  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "usage response", "role": "assistant"}}],
+  "generation_id": "gen-openrouter-usage",
+  "id": "chat-openrouter-usage",
+  "model": "router-model",
+  "service_tier": "default",
+  "usage": {
+    "completion_tokens": 13,
+    "completion_tokens_details": {"reasoning_tokens": 3},
+    "cost": 0.00000456,
+    "cost_details": {"upstream_inference_cost": 0.00000456},
+    "prompt_tokens": 21,
+    "prompt_tokens_details": {"cache_write_tokens": 2, "cached_tokens": 5},
+    "total_tokens": 34
+  }
+}

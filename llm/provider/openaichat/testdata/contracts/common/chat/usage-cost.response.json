@@ -1,0 +1,21 @@
+{
+  "id": "chat-openai-usage",
+  "object": "chat.completion",
+  "created": 1710000001,
+  "model": "chat-contract",
+  "service_tier": "default",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {"role": "assistant", "content": "usage response", "refusal": ""}
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 21,
+    "completion_tokens": 13,
+    "total_tokens": 34,
+    "prompt_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 2},
+    "completion_tokens_details": {"reasoning_tokens": 3}
+  }
+}

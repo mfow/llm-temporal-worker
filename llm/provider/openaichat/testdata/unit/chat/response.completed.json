@@ -1,5 +1,5 @@
 {
-  "id": "chat-openai-fixture",
+  "id": "chat-1",
   "object": "chat.completion",
   "created": 1710000000,
   "model": "chat-contract",
@@ -8,7 +8,7 @@
     {
       "index": 0,
       "finish_reason": "stop",
-      "message": {"role": "assistant", "content": "fixture chat response", "refusal": ""}
+      "message": {"role": "assistant", "content": "hello", "refusal": ""}
     }
   ],
   "usage": {

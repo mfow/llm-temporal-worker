@@ -2,15 +2,15 @@
   "api_version": "llm.temporal/v1",
   "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
   "diagnostics": [],
-  "operation_key": "fixture-openai-chat",
+  "operation_key": "fixture-usage-cost",
   "output": [
-    {"actor": "model", "content": [{"kind": "text", "text": "fixture chat response"}], "kind": "message"}
+    {"actor": "model", "content": [{"kind": "text", "text": "usage response"}], "kind": "message"}
   ],
   "provider": {
     "finish_reason": "stop",
     "raw": {"choice_index": 0},
     "request_id": "req-openai-chat-fixture",
-    "response_id": "chat-openai-fixture"
+    "response_id": "chat-openai-usage"
   },
   "route": {
     "api_family": "openai_chat",
@@ -27,11 +27,11 @@
   },
   "status": "completed",
   "usage": {
-    "cache_read_tokens": 3,
-    "cache_write_tokens": 1,
-    "input_tokens": 10,
-    "output_tokens": 7,
-    "provider_raw": {"total_tokens": 17},
-    "reasoning_tokens": 2
+    "cache_read_tokens": 5,
+    "cache_write_tokens": 2,
+    "input_tokens": 21,
+    "output_tokens": 13,
+    "provider_raw": {"total_tokens": 34},
+    "reasoning_tokens": 3
   }
 }

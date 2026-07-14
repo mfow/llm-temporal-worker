@@ -1,0 +1,15 @@
+{
+  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "usage response", "role": "assistant"}}],
+  "costDollars": {"total": "0.00000456"},
+  "id": "chat-exa-usage",
+  "model": "exa",
+  "results": [{"id": "usage-result", "score": 0.8, "title": "Usage source", "url": "https://example.com/usage-source"}],
+  "service_tier": "standard",
+  "usage": {
+    "completion_tokens": 13,
+    "completion_tokens_details": {"reasoning_tokens": 3},
+    "prompt_tokens": 21,
+    "prompt_tokens_details": {"cache_write_tokens": 2, "cached_tokens": 5},
+    "total_tokens": 34
+  }
+}

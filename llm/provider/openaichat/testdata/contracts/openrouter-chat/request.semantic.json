@@ -1,0 +1,20 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-openrouter-chat",
+  "model": "router-model",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [
+    {
+      "kind": "message",
+      "actor": "human",
+      "content": [{"kind": "text", "text": "fixture openrouter chat"}]
+    }
+  ],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": null,
+  "extensions": {}
+}

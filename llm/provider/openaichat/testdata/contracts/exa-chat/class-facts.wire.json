@@ -1,0 +1,5 @@
+[
+  {"class": "economy", "supported": false},
+  {"class": "standard", "supported": true, "requested_tier": "standard", "actual_tier": "standard"},
+  {"class": "priority", "supported": false}
+]
