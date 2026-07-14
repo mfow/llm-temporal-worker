@@ -136,10 +136,10 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 		"DB: postgres12",
 		"DB_PORT: \"5432\"",
 		"POSTGRES_USER: temporal",
-		"POSTGRES_PWD: temporal",
+		"POSTGRES_PWD: ${LLMTW_POSTGRES_PASSWORD:-local-only}",
 		"POSTGRES_SEEDS: postgres",
 		"DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml",
-		"POSTGRES_PASSWORD: temporal",
+		"${LLMTW_POSTGRES_PASSWORD:-local-only}",
 		"temporal-postgres-data:/var/lib/postgresql/data",
 	} {
 		if !strings.Contains(string(raw), required) {
@@ -148,6 +148,9 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "DB: sqlite") {
 		t.Error("Temporal auto-setup must not use unsupported sqlite storage")
+	}
+	if got := strings.Count(string(raw), "${LLMTW_POSTGRES_PASSWORD:-local-only}"); got != 2 {
+		t.Fatalf("PostgreSQL password variable occurrences = %d, want the same variable on Postgres and Temporal", got)
 	}
 }
 

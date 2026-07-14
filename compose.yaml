@@ -5,7 +5,7 @@ services:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_USER: temporal
-      POSTGRES_PASSWORD: temporal
+      POSTGRES_PASSWORD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
     volumes:
       - temporal-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +24,7 @@ services:
       DB: postgres12
       DB_PORT: "5432"
       POSTGRES_USER: temporal
-      POSTGRES_PWD: temporal
+      POSTGRES_PWD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
       POSTGRES_SEEDS: postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     ports:
