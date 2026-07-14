@@ -158,6 +158,21 @@ func validateRouteShape(route Route) error {
 	if len(route.Classes) == 0 {
 		return fmt.Errorf("route %q has no service classes", route.ID)
 	}
+	for _, class := range route.Classes {
+		if !class.Valid() {
+			return fmt.Errorf("route %q contains unknown public service class %q; want economy, standard, or priority", route.ID, class)
+		}
+	}
+	invalidTierClasses := make([]string, 0)
+	for class := range route.ProviderTiers {
+		if !class.Valid() {
+			invalidTierClasses = append(invalidTierClasses, string(class))
+		}
+	}
+	if len(invalidTierClasses) > 0 {
+		sort.Strings(invalidTierClasses)
+		return fmt.Errorf("route %q has a provider tier for unknown public service class %q; want economy, standard, or priority", route.ID, invalidTierClasses[0])
+	}
 	if route.ModelLineage == "" {
 		route.ModelLineage = route.Model
 	}
