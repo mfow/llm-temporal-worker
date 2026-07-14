@@ -403,8 +403,12 @@ func (budgets BudgetsConfig) validate() error {
 			return fmt.Errorf("%s duplicate policy ID %q", path, policy.ID)
 		}
 		seen[policy.ID] = struct{}{}
-		if policy.Match.Tenant == "" || policy.Match.Environment == "" {
-			return fmt.Errorf("%s.match tenant and environment are required", path)
+		match := policy.Match
+		if match.Tenant == "" && match.Project == "" && match.ActorPrefix == "" && match.Environment == "" && match.LogicalModel == "" && match.EndpointID == "" && match.ServiceClass == "" {
+			return fmt.Errorf("%s.match must contain at least one restriction", path)
+		}
+		if match.ServiceClass != "" && !match.ServiceClass.Valid() {
+			return fmt.Errorf("%s.match.service_class must be economy, standard, or priority", path)
 		}
 		if len(policy.Windows) == 0 {
 			return fmt.Errorf("%s.windows must not be empty", path)

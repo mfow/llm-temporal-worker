@@ -120,27 +120,34 @@ forbidden.
 
 ```yaml
 budgets:
-  - id: acme-production
-    match:
-      tenant: acme
-      project: "*"
-      environment: production
-    windows:
-      - duration: 1h
-        limit_micro_usd: 25000000
-        bucket: 1m
-      - duration: 24h
-        limit_micro_usd: 250000000
-        bucket: 5m
-      - duration: 30d
-        limit_micro_usd: 3000000000
-        bucket: 1h
+  require_match: true
+  policies:
+    - id: acme-production
+      match:
+        tenant: acme
+        project: assistant
+        actor_prefix: service-
+        environment: production
+        logical_model: reasoning
+        endpoint: openai-prod
+        service_class: priority
+      windows:
+        - duration: 1h
+          limit_micro_usd: 25000000
+          bucket: 1m
+        - duration: 24h
+          limit_micro_usd: 250000000
+          bucket: 5m
+        - duration: 30d
+          limit_micro_usd: 3000000000
+          bucket: 1h
 ```
 
 Matchers cover tenant, project, actor prefix, environment, logical model,
-endpoint, and service class. All matching policies and all windows within them
-apply; policies are not first-match-wins. Missing context cannot match a
-restricted policy. With `budgets.require_match: true`, every authorized
+endpoint, and service class. A policy must declare at least one matcher; all
+matching policies and all windows within them apply; policies are not
+first-match-wins. Missing context cannot match a restricted policy. With
+`budgets.require_match: true`, every authorized
 candidate must match at least one policy before it can be priced, admitted, or
 dispatched. This filtering is candidate-specific, so an explicit fallback that
 matches remains eligible even if the requested service class does not. If no
