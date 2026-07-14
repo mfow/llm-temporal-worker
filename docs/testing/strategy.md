@@ -9,13 +9,25 @@ run without credentials or internet access.
 The standard implementation gate is:
 
 ```sh
-gofmt -w .
+gofmt -l .
 go vet ./...
 go test -race ./...
-go test ./... -run=^$ -fuzz=FuzzName -fuzztime=30s
-go build ./cmd/llm-temporal-worker
-docker build .
+go build ./...
+docker build --tag llm-temporal-worker:local .
 ```
+
+`gofmt -l` reports files that need formatting without changing the checkout.
+The fuzz target is selected explicitly rather than through a placeholder name;
+for example, a 30-second provider stream smoke is:
+
+```sh
+go test ./llm/provider/openairesponses -run=^$ -fuzz=FuzzDecodeStream -fuzztime=30s
+```
+
+For the repository's complete offline gate, run `make verify`. It checks
+formatting, schemas, documentation links and invariants, vet, the ordinary
+test suite, and every Go package build. It does not run the race detector or
+the Docker, Compose, or Kubernetes gates shown below.
 
 ## Local release gates
 
@@ -40,8 +52,9 @@ tests and `deploy/verify.sh`, which renders each overlay locally through
 `kubectl kustomize` and never applies anything to a cluster. Set `KUBECTL` to a
 reviewed, pinned executable when `kubectl` is not on `PATH`.
 
-Plans introduce these commands incrementally. CI checks formatting with
-`gofmt -l` rather than modifying files.
+The release plan may list additional future gates; the commands above are the
+currently implemented targets. CI checks formatting with `gofmt -l` rather than
+modifying files.
 
 ## Test layers
 
