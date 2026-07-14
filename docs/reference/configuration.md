@@ -198,6 +198,28 @@ endpoints:
     capability_profile: anthropic-messages-v4
     price_catalog: catalog-2026-07-13
 
+  anthropic-aws-us-east-1:
+    # This is Anthropic's AWS gateway, not Amazon Bedrock. Keep both endpoint
+    # families and their pinned continuations separate.
+    family: anthropic_aws_messages
+    base_url: https://aws-external-anthropic.us-east-1.api.aws
+    outbound_hosts: [aws-external-anthropic.us-east-1.api.aws]
+    region: us-east-1
+    aws_workspace_id: ws-example-123
+    auth:
+      kind: aws_default_chain
+    timeout: 115s
+    service_classes:
+      standard:
+        provider_value: standard_only
+      priority:
+        provider_value: auto
+        requires_capability: priority_capacity
+    capability_profile: anthropic-aws-us-east-1-v1
+    price_catalog: catalog-2026-07-13
+    provider_storage:
+      permitted: false
+
   bedrock-us-east-1:
     family: bedrock_anthropic_messages
     outbound_hosts: [bedrock-runtime.us-east-1.amazonaws.com]
@@ -230,6 +252,10 @@ models:
         classes: [standard, priority]
       - id: anthropic-secondary
         endpoint: anthropic-direct
+        model: claude-example-2026-06-01
+        classes: [standard, priority]
+      - id: anthropic-aws-secondary
+        endpoint: anthropic-aws-us-east-1
         model: claude-example-2026-06-01
         classes: [standard, priority]
       - id: bedrock-economy
@@ -299,6 +325,14 @@ without a trailing dot, and duplicates are rejected. The hostname in a
 non-Bedrock `base_url` must be present in that list. Bedrock endpoints with no
 `base_url` must instead name the exact regional runtime hostname that the SDK
 will use, such as `bedrock-runtime.us-east-1.amazonaws.com`.
+
+`anthropic_aws_messages` is Anthropic's AWS gateway, not Amazon Bedrock. It
+requires an explicit HTTPS `base_url`, `region`, `aws_workspace_id`, and
+`auth.kind: aws_default_chain`. The production constructor rejects API keys,
+static AWS credentials, named AWS profiles, auth-skipping mode, and
+`ANTHROPIC_AWS_API_KEY`; that preserves the configured default AWS credential
+chain instead of silently changing authentication. Its catalog family and
+pinned continuation endpoint remain distinct from Bedrock.
 
 At runtime the provider client permits HTTPS requests only to those configured
 hostnames and the configured HTTPS port for the endpoint. A base URL hostname
@@ -402,6 +436,14 @@ Candidates that match no budget policy are excluded. If none remains, the
 request terminates as `no_route`; it creates no admission operation and sends
 no provider request. Set `require_match: false` only when an unmatched route is
 intentionally allowed to proceed without a monetary budget reservation.
+
+Each policy `match` must name at least one restriction. The supported keys are
+`tenant`, `project`, `actor_prefix`, `environment`, `logical_model`, `endpoint`,
+and `service_class`. All populated keys must match the request and candidate;
+`service_class` is limited to the public `economy`, `standard`, and `priority`
+enum. `*` is an exact-field wildcard, not a restriction, so a policy with only
+wildcards is rejected. A missing request or candidate fact cannot satisfy an
+exact or prefix restriction.
 
 ## Price catalog shape
 

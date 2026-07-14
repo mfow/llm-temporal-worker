@@ -42,6 +42,66 @@ func TestLoadCompleteExample(t *testing.T) {
 	}
 }
 
+func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
+	data := strings.Replace(
+		string(exampleYAML(t)),
+		"match:\n        tenant: acme\n        environment: production",
+		"match:\n        project: critical-workload\n        actor_prefix: service-\n        logical_model: reasoning\n        endpoint: openai-prod\n        service_class: priority",
+		1,
+	)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := loaded.Budgets.Policies[0].Match
+	if match.Project != "critical-workload" || match.ActorPrefix != "service-" || match.LogicalModel != "reasoning" || match.EndpointID != "openai-prod" || match.ServiceClass != llm.ServiceClassPriority {
+		t.Fatalf("budget matcher = %#v", match)
+	}
+	if match.Tenant != "" || match.Environment != "" {
+		t.Fatalf("budget matcher retained omitted restrictions = %#v", match)
+	}
+}
+
+func TestLoadRejectsUnsafeBudgetMatchers(t *testing.T) {
+	withEmptyMatch := strings.Replace(string(exampleYAML(t)), "match:\n        tenant: acme\n        environment: production", "match: {}", 1)
+	if _, err := config.Load([]byte(withEmptyMatch)); err == nil {
+		t.Fatal("accepted an unrestricted budget policy")
+	}
+	withUnknownClass := strings.Replace(string(exampleYAML(t)), "        environment: production", "        environment: production\n        service_class: provider_default", 1)
+	if _, err := config.Load([]byte(withUnknownClass)); err == nil {
+		t.Fatal("accepted provider_default as a budget service class")
+	}
+}
+
+func TestLoadRejectsWildcardOnlyBudgetMatchers(t *testing.T) {
+	for _, matcher := range []string{
+		"tenant: \"*\"",
+		"project: \"*\"",
+		"environment: \"*\"",
+		"logical_model: \"*\"",
+		"endpoint: \"*\"",
+	} {
+		t.Run(matcher, func(t *testing.T) {
+			data := strings.Replace(
+				string(exampleYAML(t)),
+				"match:\n        tenant: acme\n        environment: production",
+				"match:\n        "+matcher,
+				1,
+			)
+			if _, err := config.Load([]byte(data)); err == nil {
+				t.Fatalf("accepted unrestricted wildcard matcher %q", matcher)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsWildcardAlongsideBudgetRestriction(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "tenant: acme", "tenant: \"*\"", 1)
+	if _, err := config.Load([]byte(data)); err != nil {
+		t.Fatalf("rejected wildcard with environment restriction: %v", err)
+	}
+}
+
 func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {
@@ -110,6 +170,56 @@ func TestLoadCanonicalizesOutboundProviderHosts(t *testing.T) {
 	if got, want := loaded.Endpoints["openai-prod"].OutboundHosts, []string{"api.openai.com"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("outbound hosts = %#v, want %#v", got, want)
 	}
+}
+
+func TestLoadAcceptsConfiguredAnthropicAWSGatewayEndpoint(t *testing.T) {
+	loaded, err := config.Load([]byte(anthropicAWSGatewayYAML(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, ok := loaded.Endpoints["anthropic-aws-us-east-1"]
+	if !ok {
+		t.Fatal("Anthropic AWS gateway endpoint was not loaded")
+	}
+	if endpoint.Family != "anthropic_aws_messages" || endpoint.Region != "us-east-1" || endpoint.AWSWorkspaceID != "ws-example-123" || endpoint.Auth.Kind != "aws_default_chain" {
+		t.Fatalf("loaded AWS gateway endpoint = %#v", endpoint)
+	}
+}
+
+func TestLoadRejectsAnthropicAWSGatewayEndpointWithoutClosedAWSIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{name: "base URL", old: "    base_url: https://aws-external-anthropic.us-east-1.api.aws\n", want: "base_url must be an https URL"},
+		{name: "region", old: "    region: us-east-1\n", want: "region is required for Anthropic AWS gateway"},
+		{name: "workspace", old: "    aws_workspace_id: ws-example-123\n", want: "aws_workspace_id is required"},
+		{name: "secret auth", old: "    aws_workspace_id: ws-example-123\n    auth:\n      kind: aws_default_chain", new: "    aws_workspace_id: ws-example-123\n    auth:\n      kind: bearer_env\n      name: ANTHROPIC_AWS_API_KEY", want: "aws_default_chain"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := strings.Replace(anthropicAWSGatewayYAML(t), test.old, test.new, 1)
+			_, err := config.Load([]byte(data))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAWSWorkspaceIDOnNonAWSGatewayEndpoint(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "  anthropic-direct:\n", "  anthropic-direct:\n    aws_workspace_id: ws-example-123\n", 1)
+	_, err := config.Load([]byte(data))
+	if err == nil || !strings.Contains(err.Error(), "only valid for Anthropic AWS gateway") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func anthropicAWSGatewayYAML(t *testing.T) string {
+	t.Helper()
+	return string(exampleYAML(t))
 }
 
 func TestLoadRejectsUnknownDuplicateAndFourthClass(t *testing.T) {

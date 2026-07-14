@@ -177,6 +177,7 @@ type EndpointConfig struct {
 	BaseURL           string                          `yaml:"base_url" json:"base_url"`
 	OutboundHosts     []string                        `yaml:"outbound_hosts" json:"outbound_hosts"`
 	Region            string                          `yaml:"region" json:"region"`
+	AWSWorkspaceID    string                          `yaml:"aws_workspace_id" json:"aws_workspace_id"`
 	Auth              AuthConfig                      `yaml:"auth" json:"auth"`
 	AccountRegion     string                          `yaml:"account_region" json:"account_region"`
 	Timeout           Duration                        `yaml:"timeout" json:"timeout"`
@@ -244,8 +245,13 @@ type BudgetPolicy struct {
 }
 
 type BudgetMatch struct {
-	Tenant      string `yaml:"tenant" json:"tenant"`
-	Environment string `yaml:"environment" json:"environment"`
+	Tenant       string           `yaml:"tenant" json:"tenant,omitempty"`
+	Project      string           `yaml:"project" json:"project,omitempty"`
+	ActorPrefix  string           `yaml:"actor_prefix" json:"actor_prefix,omitempty"`
+	Environment  string           `yaml:"environment" json:"environment,omitempty"`
+	LogicalModel string           `yaml:"logical_model" json:"logical_model,omitempty"`
+	EndpointID   string           `yaml:"endpoint" json:"endpoint,omitempty"`
+	ServiceClass llm.ServiceClass `yaml:"service_class" json:"service_class,omitempty"`
 }
 
 type BudgetWindow struct {
