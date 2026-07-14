@@ -3,6 +3,7 @@ package compose_test
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -367,6 +368,8 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"metrics_port=0",
 		"postgres_password=\"$${LLMTW_POSTGRES_PASSWORD:-local-only}\"",
 		"mock_api_key=local-only",
+		"continuation_hmac=",
+		"od -An -N32 -tx1 /dev/urandom",
 		"LLMTW_COMPOSE_TEMPORAL_UI_PORT",
 		"LLMTW_POSTGRES_PASSWORD=\"$$postgres_password\"",
 		"$(COMPOSE) port temporal 7233",
@@ -375,10 +378,12 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"$(COMPOSE) port worker 8080",
 		"$(COMPOSE) port worker 9090",
 		"compose-live-integration service logs (redacted; service output only; no environment inspection):",
-		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock",
-		"awk -v redis_secret=\"$$redis_password\" -v postgres_secret=\"$$postgres_password\" -v mock_secret=\"$$mock_api_key\"",
-		"secrets[3] = mock_secret",
-		"[REDACTED]",
+		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker",
+		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
+		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD=\"$$postgres_password\"",
+		"LLMTW_LOG_REDACT_MOCK_API_KEY=\"$$mock_api_key\"",
+		"LLMTW_LOG_REDACT_CONTINUATION_HMAC=\"$$continuation_hmac\"",
+		"sh ./scripts/redact-compose-logs.sh",
 		"LLMTW_TEMPORAL_ADDRESS=\"$$temporal_address\"",
 		"LLMTW_REDIS_ADDR=\"$$redis_address\"",
 		"LLMTW_REDIS_USERNAME",
@@ -397,6 +402,46 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		if strings.Contains(string(data), fixedPort) {
 			t.Errorf("compose live integration target retains fixed host port %q", fixedPort)
 		}
+	}
+}
+
+func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
+	t.Parallel()
+	secrets := map[string]string{
+		"continuation HMAC":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"custom Redis password": "redis-custom-\\password-$[]",
+		"mock API key":          "mock-api-key-123+/:",
+		"PostgreSQL password":   "postgres-custom:with=equals",
+	}
+	input := strings.Join([]string{
+		"worker | Redis authentication failed: " + secrets["custom Redis password"],
+		"postgres | startup password=" + secrets["PostgreSQL password"],
+		"provider-mock | Authorization: Bearer " + secrets["mock API key"],
+		"worker | continuation signer=" + secrets["continuation HMAC"],
+		"worker | repeated Redis authentication failed: " + secrets["custom Redis password"],
+	}, "\n")
+
+	command := exec.Command("sh", filepath.Join(repositoryRoot(t), "scripts", "redact-compose-logs.sh"))
+	command.Dir = repositoryRoot(t)
+	command.Env = append(os.Environ(),
+		"LLMTW_LOG_REDACT_REDIS_PASSWORD="+secrets["custom Redis password"],
+		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD="+secrets["PostgreSQL password"],
+		"LLMTW_LOG_REDACT_MOCK_API_KEY="+secrets["mock API key"],
+		"LLMTW_LOG_REDACT_CONTINUATION_HMAC="+secrets["continuation HMAC"],
+	)
+	command.Stdin = strings.NewReader(input)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run compose failure-log redactor: %v: %s", err, output)
+	}
+	redacted := string(output)
+	for name, secret := range secrets {
+		if strings.Contains(redacted, secret) {
+			t.Errorf("compose failure-log redactor leaked %s", name)
+		}
+	}
+	if got, want := strings.Count(redacted, "[REDACTED]"), 5; got != want {
+		t.Errorf("redaction count = %d, want %d; output = %q", got, want, redacted)
 	}
 }
 
