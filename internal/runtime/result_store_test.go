@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/engine"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/pricing"
+	"github.com/mfow/llm-temporal-worker/state"
 	"github.com/mfow/llm-temporal-worker/storage/blob"
 	memoryadmission "github.com/mfow/llm-temporal-worker/storage/memory"
 )
@@ -123,5 +124,25 @@ func TestBlobResultStoreMissingReferenceIsNotFound(t *testing.T) {
 	_, err = store.Get(context.Background(), "missing")
 	if !errors.Is(err, engine.ErrResultNotFound) {
 		t.Fatalf("error = %v, want ErrResultNotFound", err)
+	}
+}
+
+func TestContentAddressedFileBlobResolverUsesTenantRelativeLocator(t *testing.T) {
+	resolver, err := NewContentAddressedBlobRefResolver("file", "")
+	if err != nil {
+		t.Fatalf("NewContentAddressedBlobRefResolver() error = %v", err)
+	}
+	value := state.BlobRef{Digest: [32]byte{1}, Size: 42, Media: "application/json"}
+	expiresAt := time.Now().Add(time.Hour)
+	ref, err := resolver(context.Background(), "tenant-a", value, expiresAt)
+	if err != nil {
+		t.Fatalf("resolver() error = %v", err)
+	}
+	prefix, err := blob.TenantPrefix("tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Store != "file" || ref.Locator != prefix+"/"+value.DigestHex() {
+		t.Fatalf("file ref = %#v", ref)
 	}
 }

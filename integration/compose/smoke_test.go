@@ -21,6 +21,7 @@ type composeService struct {
 	Build       composeBuild         `yaml:"build"`
 	Profiles    []string             `yaml:"profiles"`
 	DependsOn   map[string]yaml.Node `yaml:"depends_on"`
+	Command     yaml.Node            `yaml:"command"`
 	ReadOnly    bool                 `yaml:"read_only"`
 	CapDrop     []string             `yaml:"cap_drop"`
 	Healthcheck map[string]yaml.Node `yaml:"healthcheck"`
@@ -103,18 +104,66 @@ func TestComposeFixtureIsOfflineSafe(t *testing.T) {
 	}
 }
 
+func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
+	document, raw := readCompose(t)
+	postgres, ok := document.Services["postgres"]
+	if !ok {
+		t.Fatal("Compose fixture is missing the Temporal PostgreSQL service")
+	}
+	if !strings.Contains(postgres.Image, "@sha256:") {
+		t.Errorf("postgres image must be digest pinned, got %q", postgres.Image)
+	}
+	if postgres.Healthcheck == nil {
+		t.Error("postgres must expose a healthcheck before Temporal starts")
+	}
+
+	temporal := document.Services["temporal"]
+	dependency, ok := temporal.DependsOn["postgres"]
+	if !ok {
+		t.Fatal("temporal does not wait for PostgreSQL health")
+	}
+	var condition struct {
+		Condition string `yaml:"condition"`
+	}
+	if err := dependency.Decode(&condition); err != nil {
+		t.Fatalf("decode PostgreSQL dependency: %v", err)
+	}
+	if condition.Condition != "service_healthy" {
+		t.Fatalf("temporal PostgreSQL condition = %q, want service_healthy", condition.Condition)
+	}
+
+	for _, required := range []string{
+		"DB: postgres12",
+		"DB_PORT: \"5432\"",
+		"POSTGRES_USER: temporal",
+		"POSTGRES_PWD: temporal",
+		"POSTGRES_SEEDS: postgres",
+		"DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml",
+		"POSTGRES_PASSWORD: temporal",
+		"temporal-postgres-data:/var/lib/postgresql/data",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("Compose fixture is missing PostgreSQL Temporal input %q", required)
+		}
+	}
+	if strings.Contains(string(raw), "DB: sqlite") {
+		t.Error("Temporal auto-setup must not use unsupported sqlite storage")
+	}
+}
+
 func TestLocalFixtureDocumentationPreservesFailClosedProviderEgress(t *testing.T) {
 	root := repositoryRoot(t)
 	for path, required := range map[string][]string{
 		"deploy/local/README.md": {
 			"parser/configuration/readiness fixture",
 			"provider egress is not available",
+			"content-free adapter",
 			"weaken the policy",
 		},
 		"docs/architecture/deployment-and-operations.md": {
-			"parser/configuration/readiness-only",
-			"does not execute a fixture Activity",
-			"must not create a Docker-private-address bypass",
+			"LLMTW_COMPOSE_LIVE=1 make compose-live-integration",
+			"content-free injected adapter",
+			"Docker-private-address bypass",
 		},
 	} {
 		data, err := os.ReadFile(filepath.Join(root, path))
@@ -172,6 +221,96 @@ func TestRedisFunctionProvisionerEscapesShellVariablesFromCompose(t *testing.T) 
 	for _, variable := range []string{"library", "version", "source"} {
 		if !strings.Contains(string(raw), "$${"+variable+"}") {
 			t.Errorf("provisioner does not escape shell variable %q from Compose interpolation", variable)
+		}
+	}
+}
+
+func TestComposeProvisionerShellScriptsAreSingleArguments(t *testing.T) {
+	document, _ := readCompose(t)
+	for _, name := range []string{"redis-function-provisioner", "blob-volume-provisioner"} {
+		service := document.Services[name]
+		if service.Command.Kind != yaml.SequenceNode || len(service.Command.Content) != 1 {
+			t.Errorf("%s command must be a one-element sequence so /bin/sh -c receives the full script, got kind=%d len=%d", name, service.Command.Kind, len(service.Command.Content))
+		}
+	}
+}
+
+func TestComposeWorkerUsesDurableFileBlobAndExactHealthEndpoints(t *testing.T) {
+	document, raw := readCompose(t)
+	worker := document.Services["worker"]
+	if worker.Healthcheck == nil {
+		t.Error("worker must have a healthcheck that verifies its live and ready endpoints")
+	}
+	if _, ok := document.Services["blob-volume-provisioner"]; !ok {
+		t.Error("Compose fixture is missing a file-blob volume provisioner")
+	}
+	if _, ok := worker.DependsOn["blob-volume-provisioner"]; !ok {
+		t.Error("worker does not wait for file-blob volume provisioning")
+	}
+	for _, required := range []string{
+		"blob-data:/var/lib/llmtw/blobs",
+		"/health/live",
+		"/health/ready",
+		"healthcheck",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("Compose fixture is missing %q", required)
+		}
+	}
+	root := repositoryRoot(t)
+	localConfig, err := os.ReadFile(filepath.Join(root, "deploy", "local", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"kind: file", "root: /var/lib/llmtw/blobs"} {
+		if !strings.Contains(string(localConfig), required) {
+			t.Errorf("local configuration is missing %q", required)
+		}
+	}
+	deployment, err := os.ReadFile(filepath.Join(root, "deploy", "kubernetes", "base", "deployment.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"/health/live", "/health/ready"} {
+		if !strings.Contains(string(raw), endpoint) || !strings.Contains(string(deployment), endpoint) {
+			t.Errorf("Compose and Kubernetes must both use %q", endpoint)
+		}
+	}
+}
+
+func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"compose-live-integration:",
+		"LLMTW_COMPOSE_LIVE:-0",
+		"docker info",
+		"set -e;",
+		"--profile worker",
+		"build --no-cache --quiet",
+		"LLMTW_TEMPORAL_ADDRESS",
+		"LLMTW_REDIS_ADDR",
+	} {
+		if !strings.Contains(string(data), required) {
+			t.Errorf("compose live integration target is missing %q", required)
+		}
+	}
+}
+
+func TestCIExercisesAuthorizedComposeLiveGate(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, path := range []string{
+		".github/workflows/pull-request.yml",
+		".github/workflows/master.yml",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "LLMTW_COMPOSE_LIVE=1 make compose-live-integration") {
+			t.Errorf("%s must exercise the authorized Compose lifecycle gate", path)
 		}
 	}
 }

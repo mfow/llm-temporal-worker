@@ -119,11 +119,20 @@
     },
     "blob_store": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "inline_bytes", "s3"],
+      "required": ["kind", "inline_bytes"],
       "properties": {
-        "kind": { "const": "s3" }, "inline_bytes": { "type": "integer", "minimum": 1 },
-        "s3": { "$ref": "#/$defs/s3" }
-      }
+        "kind": { "enum": ["s3", "file"] }, "inline_bytes": { "type": "integer", "minimum": 1 },
+        "s3": {}, "file": {}
+      },
+      "oneOf": [
+        { "properties": { "kind": { "const": "s3" }, "s3": { "$ref": "#/$defs/s3" } }, "required": ["s3"] },
+        { "properties": { "kind": { "const": "file" }, "file": { "$ref": "#/$defs/file_blob" } }, "required": ["file"] }
+      ]
+    },
+    "file_blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root"],
+      "properties": { "root": { "type": "string", "minLength": 1 } }
     },
     "s3": {
       "type": "object", "additionalProperties": false,

@@ -227,6 +227,24 @@ resumes polling only after every required check recovers. Provider availability
 is a route-health concern and is evaluated by request planning rather than by
 this probe.
 
+## Local Compose recovery proof
+
+`LLMTW_COMPOSE_LIVE=1 make compose-live-integration` is the opt-in local
+operational proof. It starts a uniquely named Compose project with pinned
+Postgres-backed Temporal and Redis services, the development-only file blob
+store, and the same worker health endpoints used by Kubernetes. It checks
+liveness and readiness through the worker binary, stops Redis while the worker
+runs, and requires readiness to become unavailable while liveness remains
+available before polling can resume after Redis returns.
+
+The same gate runs a real Temporal SDK Activity with two worker replicas and a
+shared Redis admission store. Its adapter is content-free and in-process: it
+records a possible provider write, the first worker stops, and the replacement
+must receive either a completed durable replay or the conservative ambiguity
+terminal result. The fixture asserts one dispatch and one bounded shared-budget
+reservation, never makes a provider-network request, and does not relax the
+Docker-private provider-egress denial.
+
 ## Temporal tests
 
 The Temporal Go SDK Activity test environment covers:
@@ -239,6 +257,11 @@ The Temporal Go SDK Activity test environment covers:
 - budget retry-after details;
 - non-retryable type names and safe details;
 - graceful worker shutdown with an in-flight Activity.
+
+The opt-in Compose gate complements those deterministic tests with a real
+Temporal service, shared Redis admission ledger, worker-stop recovery, and
+the live readiness probe transition. It is intentionally excluded from normal
+offline tests and pull-request CI.
 
 Workflow-level tests live in an example package and demonstrate caller-owned
 tool execution, but the worker does not ship a general agent Workflow.

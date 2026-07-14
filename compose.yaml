@@ -1,14 +1,35 @@
 name: llmtw
 
 services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 5s
+
   temporal:
     image: temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      DB: sqlite
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development.yaml
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     ports:
-      - "7233:7233"
-      - "8233:8233"
+      - "127.0.0.1:${LLMTW_COMPOSE_TEMPORAL_PORT:-7233}:7233"
+      - "127.0.0.1:${LLMTW_COMPOSE_TEMPORAL_UI_PORT:-8233}:8233"
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7233"]
       interval: 5s
@@ -20,7 +41,7 @@ services:
     image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${LLMTW_COMPOSE_REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -40,20 +61,21 @@ services:
       redis:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      library=llmtw_admission_v1
-      version=admission_v1
-      source=/opt/llmtw/functions/admission.lua
-      if redis-cli -h redis --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
-        echo "Redis Function $${library} already exists; leaving it unchanged"
-        exit 0
-      fi
-      {
-        printf '%s\n' "#!lua name=$${library}"
-        printf '%s\n' "redis.register_function('$${version}', function(KEYS, ARGV)"
-        cat "$${source}"
-        printf '\nend)\n'
-      } | redis-cli -h redis -x FUNCTION LOAD
+    command:
+      - |
+        library=llmtw_admission_v1
+        version=admission_v1
+        source=/opt/llmtw/functions/admission.lua
+        if redis-cli -h redis --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
+          echo "Redis Function $${library} already exists; leaving it unchanged"
+          exit 0
+        fi
+        {
+          printf '%s\n' "#!lua name=$${library}"
+          printf '%s\n' "redis.register_function('$${version}', function(KEYS, ARGV)"
+          cat "$${source}"
+          printf '\nend)\n'
+        } | redis-cli -h redis -x FUNCTION LOAD
     volumes:
       - type: bind
         source: ./storage/redis/functions/admission.lua
@@ -63,12 +85,29 @@ services:
   provider-mock:
     build:
       context: ./deploy/local/provider-mock
-    image: llmtw/provider-mock:local
+    image: ${LLMTW_PROVIDER_MOCK_IMAGE:-llmtw/provider-mock:local}
     healthcheck:
       test: ["CMD", "python", "-c", "import ssl,urllib.request; urllib.request.urlopen('https://127.0.0.1:8081/health', context=ssl._create_unverified_context())"]
       interval: 5s
       timeout: 3s
       retries: 12
+
+  # A development file blob store is deliberately a separate named volume:
+  # Redis is durable admission state, while results and continuations are
+  # content-addressed blobs. The worker runs as UID 65532, so provision its
+  # writable root before the read-only worker starts.
+  blob-volume-provisioner:
+    profiles: [worker]
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mkdir -p /var/lib/llmtw/blobs
+        chown 65532:65532 /var/lib/llmtw/blobs
+        chmod 0700 /var/lib/llmtw/blobs
+    volumes:
+      - blob-data:/var/lib/llmtw/blobs
 
   # The worker is opt-in because it requires a locally generated continuation
   # key. Start the dependencies with `docker compose up -d`, then run
@@ -85,7 +124,7 @@ services:
         VERSION: local
         REVISION: working-tree
         BUILD_TIME: reproducible-local
-    image: llmtw/worker:local
+    image: ${LLMTW_WORKER_IMAGE:-llmtw/worker:local}
     command: ["worker", "--config", "/etc/llmtw/config.yaml"]
     depends_on:
       temporal:
@@ -93,6 +132,8 @@ services:
       redis:
         condition: service_healthy
       redis-function-provisioner:
+        condition: service_completed_successfully
+      blob-volume-provisioner:
         condition: service_completed_successfully
       provider-mock:
         condition: service_healthy
@@ -117,6 +158,7 @@ services:
         source: ./deploy/local/prices.yaml
         target: /etc/llmtw/prices.yaml
         read_only: true
+      - blob-data:/var/lib/llmtw/blobs
       - type: tmpfs
         target: /tmp
         tmpfs:
@@ -126,8 +168,14 @@ services:
       - no-new-privileges:true
     cap_drop: [ALL]
     ports:
-      - "8080:8080"
-      - "9090:9090"
+      - "127.0.0.1:${LLMTW_COMPOSE_HEALTH_PORT:-8080}:8080"
+      - "127.0.0.1:${LLMTW_COMPOSE_METRICS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/llm-temporal-worker", "healthcheck", "--url", "http://127.0.0.1:8080/health/live", "--url", "http://127.0.0.1:8080/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
     stop_grace_period: 90s
 
 secrets:
@@ -135,4 +183,6 @@ secrets:
     file: ${LLMTW_CONTINUATION_KEY_FILE:-./.local/continuation-hmac}
 
 volumes:
+  blob-data:
   redis-data:
+  temporal-postgres-data:

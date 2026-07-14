@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"path/filepath"
 	"strings"
 
 	"github.com/mfow/llm-temporal-worker/llm"
@@ -37,7 +38,7 @@ func (config Config) Validate() error {
 	if err := config.State.validate(); err != nil {
 		return err
 	}
-	if err := config.BlobStore.validate(); err != nil {
+	if err := config.BlobStore.validate(config.Environment); err != nil {
 		return err
 	}
 	if err := config.Limits.validate(); err != nil {
@@ -202,17 +203,37 @@ func (redis RedisConfig) validate() error {
 	}
 }
 
-func (blob BlobStoreConfig) validate() error {
-	if blob.Kind != "s3" {
-		return fmt.Errorf("blob_store.kind %q is unsupported", blob.Kind)
-	}
+func (blob BlobStoreConfig) validate(environment string) error {
 	if blob.InlineBytes <= 0 || blob.InlineBytes > 16<<20 {
 		return fmt.Errorf("blob_store.inline_bytes is outside safe bounds")
 	}
-	if blob.S3.Bucket == "" || blob.S3.Region == "" || blob.S3.Prefix == "" {
-		return fmt.Errorf("blob_store.s3 bucket, region, and prefix are required")
+	switch blob.Kind {
+	case "s3":
+		if strings.TrimSpace(blob.File.Root) != "" {
+			return fmt.Errorf("blob_store.file is only valid when blob_store.kind is file")
+		}
+		if blob.S3.Bucket == "" || blob.S3.Region == "" || blob.S3.Prefix == "" {
+			return fmt.Errorf("blob_store.s3 bucket, region, and prefix are required")
+		}
+		return blob.S3.Auth.Validate("blob_store.s3.auth")
+	case "file":
+		if environment != "development" {
+			return fmt.Errorf("blob_store.kind file is supported only in development")
+		}
+		root := strings.TrimSpace(blob.File.Root)
+		if root == "" || !filepath.IsAbs(root) || strings.ContainsAny(root, "\r\n") {
+			return fmt.Errorf("blob_store.file.root must be an absolute path")
+		}
+		if filepath.Clean(root) == string(filepath.Separator) {
+			return fmt.Errorf("blob_store.file.root must not be the filesystem root")
+		}
+		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth.Kind != "" {
+			return fmt.Errorf("blob_store.s3 is only valid when blob_store.kind is s3")
+		}
+		return nil
+	default:
+		return fmt.Errorf("blob_store.kind %q is unsupported", blob.Kind)
 	}
-	return blob.S3.Auth.Validate("blob_store.s3.auth")
 }
 
 func (limits LimitsConfig) validate() error {

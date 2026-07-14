@@ -8,8 +8,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -138,5 +140,43 @@ func TestCommandFailuresAreRedacted(t *testing.T) {
 	})
 	if code != 1 || strings.Contains(errorsOut.String(), "secret-token-value") {
 		t.Fatalf("failure code=%d output=%q", code, errorsOut.String())
+	}
+}
+
+func TestHealthcheckCommandProbesEveryConfiguredURL(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	var output, errorsOut bytes.Buffer
+	code := Execute(context.Background(), []string{
+		"healthcheck",
+		"--url", server.URL + "/health/live",
+		"--url", server.URL + "/health/ready",
+	}, CommandOptions{Out: &output, ErrOut: &errorsOut})
+	if code != 0 {
+		t.Fatalf("healthcheck code=%d error=%q", code, errorsOut.String())
+	}
+	if want := []string{"/health/live", "/health/ready"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("healthcheck paths=%#v, want %#v", paths, want)
+	}
+}
+
+func TestHealthcheckCommandFailsWhenAProbeIsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	var errorsOut bytes.Buffer
+	code := Execute(context.Background(), []string{"healthcheck", "--url", server.URL + "/health/ready"}, CommandOptions{ErrOut: &errorsOut})
+	if code != 1 {
+		t.Fatalf("healthcheck code=%d error=%q", code, errorsOut.String())
+	}
+	if !strings.Contains(errorsOut.String(), "healthcheck failed") {
+		t.Fatalf("healthcheck failure=%q", errorsOut.String())
 	}
 }

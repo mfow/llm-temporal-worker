@@ -42,6 +42,84 @@ func TestLoadCompleteExample(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)
+	data = strings.Replace(data, `blob_store:
+  kind: s3
+  inline_bytes: 262144
+  s3:
+    bucket: acme-llmtw-production
+    region: ap-southeast-2
+    prefix: v1
+    auth:
+      kind: aws_default_chain`, `blob_store:
+  kind: file
+  inline_bytes: 262144
+  file:
+    root: /var/lib/llmtw/blobs`, 1)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		BlobStore struct {
+			Kind string `json:"kind"`
+			File struct {
+				Root string `json:"root"`
+			} `json:"file"`
+		} `json:"blob_store"`
+	}
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.BlobStore.Kind != "file" || document.BlobStore.File.Root != "/var/lib/llmtw/blobs" {
+		t.Fatalf("development file blob store = %#v", document.BlobStore)
+	}
+}
+
+func TestLoadRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), `blob_store:
+  kind: s3
+  inline_bytes: 262144
+  s3:
+    bucket: acme-llmtw-production
+    region: ap-southeast-2
+    prefix: v1
+    auth:
+      kind: aws_default_chain`, `blob_store:
+  kind: file
+  inline_bytes: 262144
+  file:
+    root: /var/lib/llmtw/blobs`, 1)
+	_, err := config.Load([]byte(data))
+	if err == nil || !strings.Contains(err.Error(), "development") {
+		t.Fatalf("file blob store outside development error = %v", err)
+	}
+}
+
+func developmentFileBlobYAML(t *testing.T) []byte {
+	t.Helper()
+	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)
+	data = strings.Replace(data, `blob_store:
+  kind: s3
+  inline_bytes: 262144
+  s3:
+    bucket: acme-llmtw-production
+    region: ap-southeast-2
+    prefix: v1
+    auth:
+      kind: aws_default_chain`, `blob_store:
+  kind: file
+  inline_bytes: 262144
+  file:
+    root: /var/lib/llmtw/blobs`, 1)
+	return []byte(data)
+}
+
 func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),

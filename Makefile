@@ -13,7 +13,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= go1.26.0
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -130,6 +130,54 @@ compose-smoke:
 	else \
 		echo "compose smoke passed (Compose model and offline fixture checks; live services not started)"; \
 	fi
+
+# The local live gate is deliberately separate from compose-smoke. It requires
+# an explicit opt-in, starts a uniquely named Docker Compose project, and
+# removes only the project resources, generated continuation key, temporary Go
+# cache, and images it creates. It never sends a provider request: the Temporal
+# recovery test injects a content-free adapter in the Go test process.
+compose-live-integration:
+	@if [ "$${LLMTW_COMPOSE_LIVE:-0}" != "1" ]; then \
+		echo "compose-live-integration requires LLMTW_COMPOSE_LIVE=1; it starts local Docker services and is intentionally opt-in" >&2; \
+		exit 2; \
+	fi
+	@command -v "$(firstword $(COMPOSE))" >/dev/null 2>&1 || { \
+		echo "compose-live-integration requires '$(firstword $(COMPOSE))'; install Docker Compose or set COMPOSE to an equivalent command" >&2; \
+		exit 2; \
+	}
+	@docker info >/dev/null 2>&1 || { \
+		echo "compose-live-integration requires a running Docker daemon" >&2; \
+		exit 2; \
+	}
+	@set -e; \
+	tmpdir="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-compose-live.XXXXXX")"; \
+	project="llmtw-compose-live-$$$$"; \
+	worker_image="llmtw/worker:compose-live-$$$$"; \
+	mock_image="llmtw/provider-mock:compose-live-$$$$"; \
+	temporal_port="$${LLMTW_COMPOSE_TEMPORAL_PORT:-17233}"; \
+	redis_port="$${LLMTW_COMPOSE_REDIS_PORT:-16380}"; \
+	health_port="$${LLMTW_COMPOSE_HEALTH_PORT:-18080}"; \
+	metrics_port="$${LLMTW_COMPOSE_METRICS_PORT:-19090}"; \
+	key="$$tmpdir/continuation-hmac"; \
+	go_cache="$$tmpdir/gocache"; \
+	cleanup() { \
+		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
+		docker image rm -f "$$worker_image" "$$mock_image" >/dev/null 2>&1 || true; \
+		rm -rf "$$tmpdir"; \
+	}; \
+	trap cleanup EXIT HUP INT TERM; \
+	umask 077; \
+	dd if=/dev/urandom of="$$key" bs=32 count=1 status=none; \
+	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
+	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
+	$(COMPOSE) --profile worker up --wait --wait-timeout 180; \
+	redis_container="$$( $(COMPOSE) ps -q redis )"; \
+	if [ -z "$$redis_container" ]; then \
+		echo "compose-live-integration could not find the isolated Redis container" >&2; \
+		exit 1; \
+	fi; \
+	GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="127.0.0.1:$$health_port" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'; \
+	GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="127.0.0.1:$$temporal_port" LLMTW_REDIS_ADDR="127.0.0.1:$$redis_port" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'
 
 deployment-policy-verify:
 	KUBECTL= $(GO) test ./integration/kubernetes
