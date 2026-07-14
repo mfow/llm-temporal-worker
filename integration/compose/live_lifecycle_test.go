@@ -54,6 +54,11 @@ const (
 	composeContainerHealthUnhealthy composeContainerHealthVerdict = "unhealthy"
 )
 
+var composeDockerHealthTimestampLayouts = []string{
+	time.RFC3339Nano,
+	"2006-01-02 15:04:05.999999999 -0700 MST",
+}
+
 func TestComposeContainerHealthVerdictRequiresPostRestartProbe(t *testing.T) {
 	containerStartedAt := time.Date(2026, time.July, 14, 20, 10, 0, 0, time.UTC)
 	for _, test := range []struct {
@@ -110,15 +115,31 @@ func TestComposeContainerHealthVerdictRequiresPostRestartProbe(t *testing.T) {
 }
 
 func TestParseComposeContainerHealthSnapshot(t *testing.T) {
-	snapshot, err := parseComposeContainerHealthSnapshot("unhealthy\n2026-07-14T20:09:55.000000000Z\n2026-07-14T20:10:01.000000000Z\n")
-	if err != nil {
-		t.Fatalf("parse health snapshot: %v", err)
-	}
-	if got, want := snapshot.status, "unhealthy"; got != want {
-		t.Fatalf("health status = %q, want %q", got, want)
-	}
-	if got, want := snapshot.latestCheckStartedAt, time.Date(2026, time.July, 14, 20, 10, 1, 0, time.UTC); !got.Equal(want) {
-		t.Fatalf("latest health check started at = %s, want %s", got, want)
+	for _, test := range []struct {
+		name   string
+		output string
+	}{
+		{
+			name:   "RFC3339Nano health timestamps",
+			output: "unhealthy\n2026-07-14T20:09:55.000000000Z\n2026-07-14T20:10:01.000000000Z\n",
+		},
+		{
+			name:   "Docker Go time-string health timestamps",
+			output: "unhealthy\n2026-07-14 20:09:55.000000000 +0000 UTC\n2026-07-14 20:10:01.000000000 +0000 UTC\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot, err := parseComposeContainerHealthSnapshot(test.output)
+			if err != nil {
+				t.Fatalf("parse health snapshot: %v", err)
+			}
+			if got, want := snapshot.status, "unhealthy"; got != want {
+				t.Fatalf("health status = %q, want %q", got, want)
+			}
+			if got, want := snapshot.latestCheckStartedAt, time.Date(2026, time.July, 14, 20, 10, 1, 0, time.UTC); !got.Equal(want) {
+				t.Fatalf("latest health check started at = %s, want %s", got, want)
+			}
+		})
 	}
 }
 
@@ -385,7 +406,7 @@ func parseComposeContainerHealthSnapshot(output string) (composeContainerHealthS
 		if line == "" {
 			continue
 		}
-		startedAt, err := time.Parse(time.RFC3339Nano, line)
+		startedAt, err := parseComposeDockerHealthTimestamp(line)
 		if err != nil {
 			return composeContainerHealthSnapshot{}, fmt.Errorf("parse Docker health check timestamp %q: %w", line, err)
 		}
@@ -394,6 +415,18 @@ func parseComposeContainerHealthSnapshot(output string) (composeContainerHealthS
 		}
 	}
 	return snapshot, nil
+}
+
+func parseComposeDockerHealthTimestamp(value string) (time.Time, error) {
+	var errors []string
+	for _, layout := range composeDockerHealthTimestampLayouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, nil
+		}
+		errors = append(errors, err.Error())
+	}
+	return time.Time{}, fmt.Errorf("does not match accepted Docker timestamp layouts: %s", strings.Join(errors, "; "))
 }
 
 func composeContainerHealthVerdictAfterRestart(snapshot composeContainerHealthSnapshot, restartedAt time.Time) composeContainerHealthVerdict {
