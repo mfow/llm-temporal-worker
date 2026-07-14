@@ -227,6 +227,10 @@ resumes polling only after every required check recovers. Provider availability
 is a route-health concern and is evaluated by request planning rather than by
 this probe.
 
+The monitor keeps running while a paused Temporal poller completes its graceful
+drain. It does not start a replacement poller until that drain completes, so a
+transient dependency recovery cannot create overlapping pollers.
+
 ## Local Compose recovery proof
 
 `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` is the opt-in local

@@ -14,7 +14,13 @@ import (
 	sdkworker "go.temporal.io/sdk/worker"
 )
 
-var ErrWorkerStopping = errors.New("worker is stopping")
+var (
+	ErrWorkerStopping = errors.New("worker is stopping")
+	// ErrWorkerDraining means a paused controller is still completing its
+	// graceful stop. Callers can retry after the dependency monitor's next
+	// successful check; a replacement controller must not overlap it.
+	ErrWorkerDraining = errors.New("worker is draining")
+)
 
 type WorkerController interface {
 	Start() error
@@ -45,8 +51,16 @@ type TemporalWorker struct {
 	mu       sync.Mutex
 	started  bool
 	starting bool
-	paused   bool
-	stopping bool
+	// startAuthorized is the start-call linearization point. A Pause that
+	// observes it false prevents controller.Start from being called; once true,
+	// Pause returns promptly and startController drains the controller on return.
+	startAuthorized bool
+	paused          bool
+	stopping        bool
+
+	startDone chan struct{}
+	drainDone chan struct{}
+	stopDone  chan struct{}
 }
 
 func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
@@ -108,44 +122,52 @@ func (worker *TemporalWorker) Start() error {
 		worker.mu.Unlock()
 		return ErrWorkerStopping
 	}
+	if worker.drainDone != nil {
+		worker.mu.Unlock()
+		return ErrWorkerDraining
+	}
 	if worker.started || worker.starting {
 		worker.mu.Unlock()
 		return fmt.Errorf("Temporal worker is already started")
 	}
 	worker.paused = false
 	worker.starting = true
+	worker.startAuthorized = false
+	worker.startDone = make(chan struct{})
 	controller := worker.controller
 	worker.mu.Unlock()
 	return worker.startController(controller)
 }
 
 // Pause stops Temporal polling without making the worker permanently
-// unavailable. Resume creates and registers a fresh controller because a
-// stopped Temporal SDK worker is not reusable.
+// unavailable. The detached controller drains asynchronously so dependency
+// checks can continue; Resume creates a fresh controller only after that drain
+// completes because a stopped Temporal SDK worker is not reusable.
 func (worker *TemporalWorker) Pause() {
 	if worker == nil {
 		return
 	}
-	worker.health.SetReady(false)
-	if worker.metrics != nil {
-		worker.metrics.SetWorkerPolling(false)
-	}
 	worker.mu.Lock()
+	worker.setNotReadyLocked()
 	if worker.stopping {
 		worker.mu.Unlock()
 		return
 	}
 	worker.paused = true
 	if !worker.started {
+		if worker.starting && !worker.startAuthorized {
+			worker.controller = nil
+		}
 		worker.mu.Unlock()
 		return
 	}
 	controller := worker.controller
 	worker.controller = nil
 	worker.started = false
+	drainDone, draining := worker.beginDrainLocked(controller)
 	worker.mu.Unlock()
-	if controller != nil {
-		controller.Stop()
+	if draining {
+		worker.drainController(controller, drainDone)
 	}
 }
 
@@ -160,12 +182,18 @@ func (worker *TemporalWorker) Resume() error {
 		worker.mu.Unlock()
 		return ErrWorkerStopping
 	}
+	if worker.drainDone != nil {
+		worker.mu.Unlock()
+		return ErrWorkerDraining
+	}
 	if worker.started || worker.starting {
 		worker.mu.Unlock()
 		return fmt.Errorf("Temporal worker is already started")
 	}
 	worker.paused = false
 	worker.starting = true
+	worker.startAuthorized = false
+	worker.startDone = make(chan struct{})
 	controller := worker.controller
 	worker.mu.Unlock()
 	return worker.startController(controller)
@@ -183,71 +211,159 @@ func (worker *TemporalWorker) startController(controller WorkerController) error
 			worker.finishStartFailure()
 			return err
 		}
-		worker.mu.Lock()
-		if worker.stopping {
-			worker.starting = false
-			worker.mu.Unlock()
-			return ErrWorkerStopping
-		}
-		worker.controller = controller
-		worker.mu.Unlock()
+	}
+	startAllowed, err := worker.authorizeStart(controller)
+	if err != nil || !startAllowed {
+		return err
 	}
 	if err := controller.Start(); err != nil {
 		worker.finishStartFailure()
 		return fmt.Errorf("start Temporal worker: %w", err)
 	}
 	worker.mu.Lock()
-	worker.starting = false
-	if worker.stopping || worker.paused {
-		paused := worker.paused
+	if worker.stopping {
 		worker.controller = nil
 		worker.mu.Unlock()
 		controller.Stop()
-		if paused {
-			return nil
-		}
+		worker.mu.Lock()
+		worker.finishStartLocked()
+		worker.mu.Unlock()
 		return ErrWorkerStopping
 	}
+	if worker.paused {
+		worker.controller = nil
+		drainDone, draining := worker.beginDrainLocked(controller)
+		worker.finishStartLocked()
+		worker.mu.Unlock()
+		if draining {
+			worker.drainController(controller, drainDone)
+		}
+		return nil
+	}
 	worker.started = true
+	worker.setReadyLocked()
+	worker.finishStartLocked()
 	worker.mu.Unlock()
+	return nil
+}
+
+// authorizeStart is the sole permission handoff to controller.Start. Keeping
+// the paused check and permission commit under one lock makes a Pause that
+// wins before this point cancel the pending start without blocking on a slow
+// controller.Start call.
+func (worker *TemporalWorker) authorizeStart(controller WorkerController) (bool, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.stopping {
+		worker.finishStartLocked()
+		return false, ErrWorkerStopping
+	}
+	if worker.paused {
+		worker.controller = nil
+		worker.finishStartLocked()
+		return false, nil
+	}
+	worker.controller = controller
+	worker.startAuthorized = true
+	return true, nil
+}
+
+func (worker *TemporalWorker) finishStartFailure() {
+	worker.mu.Lock()
+	worker.setNotReadyLocked()
+	worker.finishStartLocked()
+	worker.mu.Unlock()
+}
+
+func (worker *TemporalWorker) setReadyLocked() {
 	worker.health.SetReady(true)
 	if worker.metrics != nil {
 		worker.metrics.SetWorkerPolling(true)
 	}
-	return nil
 }
 
-func (worker *TemporalWorker) finishStartFailure() {
+func (worker *TemporalWorker) setNotReadyLocked() {
 	worker.health.SetReady(false)
 	if worker.metrics != nil {
 		worker.metrics.SetWorkerPolling(false)
 	}
-	worker.mu.Lock()
-	worker.starting = false
-	worker.mu.Unlock()
 }
 
-// Stop turns readiness off before stopping pollers. The Temporal SDK owns the
-// configured graceful wait for in-flight Activity calls.
+func (worker *TemporalWorker) finishStartLocked() {
+	worker.starting = false
+	worker.startAuthorized = false
+	if worker.startDone == nil {
+		return
+	}
+	close(worker.startDone)
+	worker.startDone = nil
+}
+
+func (worker *TemporalWorker) beginDrainLocked(controller WorkerController) (chan struct{}, bool) {
+	if controller == nil || worker.drainDone != nil {
+		return worker.drainDone, false
+	}
+	done := make(chan struct{})
+	worker.drainDone = done
+	return done, true
+}
+
+func (worker *TemporalWorker) drainController(controller WorkerController, done chan struct{}) {
+	if controller == nil || done == nil {
+		return
+	}
+	go func() {
+		controller.Stop()
+		worker.mu.Lock()
+		if worker.drainDone == done {
+			worker.drainDone = nil
+		}
+		worker.mu.Unlock()
+		close(done)
+	}()
+}
+
+// Stop turns readiness off before stopping pollers. A permanent stop waits for
+// an owned pause drain before allowing client teardown to continue. The
+// Temporal SDK owns the configured graceful wait for in-flight Activity calls.
 func (worker *TemporalWorker) Stop() {
 	if worker == nil {
 		return
 	}
-	worker.health.SetReady(false)
-	if worker.metrics != nil {
-		worker.metrics.SetWorkerPolling(false)
-	}
 	worker.mu.Lock()
+	worker.setNotReadyLocked()
 	if worker.stopping {
+		done := worker.stopDone
 		worker.mu.Unlock()
+		if done != nil {
+			<-done
+		}
 		return
 	}
 	worker.stopping = true
+	stopDone := make(chan struct{})
+	worker.stopDone = stopDone
+	starting := worker.starting
+	startDone := worker.startDone
+	drainDone := worker.drainDone
 	started := worker.started
 	controller := worker.controller
-	worker.started = false
-	worker.controller = nil
+	if !starting && drainDone == nil {
+		worker.started = false
+		worker.controller = nil
+	}
 	worker.mu.Unlock()
+	defer close(stopDone)
+	if starting {
+		if startDone != nil {
+			<-startDone
+		}
+		return
+	}
+	if drainDone != nil {
+		<-drainDone
+		return
+	}
 	if started && controller != nil {
 		controller.Stop()
 	}

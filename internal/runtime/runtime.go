@@ -501,6 +501,9 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 	}
 	if err := runtime.Worker.Resume(); err != nil {
 		runtime.Health.SetReady(false)
+		if errors.Is(err, app.ErrWorkerDraining) {
+			return nil
+		}
 		return err
 	}
 	return nil

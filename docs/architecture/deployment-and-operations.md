@@ -91,7 +91,9 @@ The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. S3 readiness uses `HeadBucket`
 against the configured bucket only, never a tenant key. A failed state check
 keeps liveness `200`, sets readiness `503`, and pauses Temporal polling;
-periodic checks resume polling only after every dependency has recovered.
+periodic checks resume polling only after every dependency has recovered. The
+monitor keeps checking while a paused poller drains, but does not start its
+replacement until that prior poller has stopped.
 
 On termination, readiness fails immediately, polling stops, in-flight Activities
 receive the Temporal worker grace period, and telemetry flushes. Deployment
