@@ -1,0 +1,46 @@
+{
+  "api_version": "llm.temporal/v1",
+  "continuation": {
+    "endpoint_id": "bedrock-fixture",
+    "handle": "bedrock-messages:msg-bedrock-fixture",
+    "model": "claude-contract",
+    "pinned": true,
+    "provider_state": [
+      {"endpoint_family": "messages", "kind": "provider_state", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoidGhpbmtpbmciLCJ0aGlua2luZyI6InByaXZhdGUgZml4dHVyZSIsInNpZ25hdHVyZSI6InNpZy1bUkVEQUNURURdIn0=", "provider": "bedrock"},
+      {"endpoint_family": "messages", "kind": "provider_state", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoicmVkYWN0ZWRfdGhpbmtpbmciLCJkYXRhIjoib3BhcXVlLVtSRURBQ1RFRF0ifQ==", "provider": "bedrock"}
+    ]
+  },
+  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-bedrock-request",
+  "output": [
+    {"endpoint_family": "messages", "kind": "provider_state", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoidGhpbmtpbmciLCJ0aGlua2luZyI6InByaXZhdGUgZml4dHVyZSIsInNpZ25hdHVyZSI6InNpZy1bUkVEQUNURURdIn0=", "provider": "bedrock"},
+    {"endpoint_family": "messages", "kind": "provider_state", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoicmVkYWN0ZWRfdGhpbmtpbmciLCJkYXRhIjoib3BhcXVlLVtSRURBQ1RFRF0ifQ==", "provider": "bedrock"},
+    {"actor": "model", "content": [{"kind": "text", "text": "hello from Bedrock"}], "kind": "message"},
+    {"arguments": {"query": "fixture"}, "id": "toolu-fixture", "kind": "tool_call", "name": "lookup"}
+  ],
+  "provider": {
+    "finish_reason": "tool_use",
+    "raw": {"stop_sequence": null},
+    "request_id": "bedrock-request-fixture",
+    "response_id": "msg-bedrock-fixture"
+  },
+  "route": {"api_family": "bedrock_messages", "endpoint_id": "bedrock-fixture", "requested_model": "claude-contract", "resolved_model": "claude-contract"},
+  "service": {"actual": "priority", "attempted": "standard", "fallback_index": 0, "provider_value": "priority", "requested": "standard"},
+  "status": "tool_calls",
+  "usage": {
+    "cache_read_tokens": 3,
+    "cache_write_tokens": 2,
+    "input_tokens": 10,
+    "output_tokens": 7,
+    "provider_raw": {
+      "cache_creation_input_tokens": 2,
+      "cache_read_input_tokens": 3,
+      "input_tokens": 10,
+      "output_tokens": 7,
+      "output_tokens_details": {"thinking_tokens": 4},
+      "service_tier": "priority"
+    },
+    "reasoning_tokens": 4
+  }
+}

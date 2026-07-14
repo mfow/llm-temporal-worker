@@ -2,7 +2,7 @@ version: 1
 id: bedrock-anthropic
 provider: bedrock
 family: messages
-coverage: bootstrap
+coverage: enforced
 metadata: metadata.yaml
 service_classes:
   economy:
@@ -15,9 +15,41 @@ service_classes:
     requested_tier: priority
     actual_tier: priority
 cases:
+  - id: semantic-request
+    artifacts:
+      semantic: request.semantic.json
   - id: captured-wire-request
     artifacts:
       wire: request.wire.json
+  - id: response
+    artifacts:
+      semantic: response.semantic.json
+      wire: response.completed.json
   - id: classified-error
     artifacts:
-      wire: error.access-denied.json
+      wire: classified-error.wire.json
+  - id: security-redaction
+    artifacts:
+      wire: security-redaction.wire.json
+  - id: usage-cost
+    artifacts:
+      semantic: usage-cost.semantic.json
+      wire: usage-cost.response.json
+  - id: full-stream
+    artifacts:
+      events: full-stream.events
+  - id: fragmented-stream
+    artifacts:
+      events: fragmented-stream.events
+  - id: strict-loss
+    artifacts:
+      semantic: strict-loss.semantic.json
+      wire: strict-loss.wire.json
+  - id: class-facts
+    artifacts:
+      semantic: class-facts.semantic.json
+      wire: class-facts.wire.json
+  - id: continuation-compatibility
+    artifacts:
+      semantic: continuation-compatibility.semantic.json
+      wire: continuation-compatibility.wire.json

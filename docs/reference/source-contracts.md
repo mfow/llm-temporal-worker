@@ -56,12 +56,27 @@ model, economy-tier, continuation, or streaming availability.
 - [Anthropic Go SDK](https://github.com/anthropics/anthropic-sdk-go) contains
   direct Messages support, configurable retry count, and AWS/Bedrock client
   support; retries are disabled here.
+- [Amazon Bedrock Anthropic Claude Messages API](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html)
+  defines the native Messages request/response shape and the base invocation
+  and response-stream operations.
 - [Amazon Bedrock service tiers](https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html)
   define flex, default, priority, and reserved behavior and availability.
 
 Design consequence: direct synchronous Anthropic has no assumed economy mapping.
 AWS profiles declare exact offering/model mappings; reserved capacity is not a
 fourth public request class.
+
+### Bedrock Anthropic fixture boundary
+
+As of 2026-07-14, the `bedrock-anthropic` profile has an enforced offline
+fixture matrix for native Messages lowering/lifting, service-tier facts,
+opaque thinking state, tool argument fragments, usage with unreported cost,
+classified errors, and source-date/redaction checks. Opaque state remains
+endpoint-pinned: direct Anthropic and AWS-gateway continuation state cannot be
+replayed through the Bedrock adapter without an explicit portable transcript.
+The captured SSE fixtures prove decoder and assembler semantics under
+fragmentation; they are not evidence of an end-to-end client streaming-dispatch
+implementation.
 
 ## OpenAI-compatible endpoints
 

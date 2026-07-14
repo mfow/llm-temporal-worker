@@ -1,0 +1,7 @@
+{
+  "code": "invalid_argument",
+  "phase": "compile",
+  "dispatch": "not_dispatched",
+  "retry": "never",
+  "message_contains": "sampling field is not supported"
+}

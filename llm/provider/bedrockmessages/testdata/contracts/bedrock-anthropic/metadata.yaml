@@ -9,10 +9,10 @@ redactions:
 capability_facts:
   usage: supported
   streaming: supported
-  strict_loss: pending
-  best_effort: pending
+  strict_loss: supported
+  best_effort: unsupported
   service_class: supported
-  continuation: pending
+  continuation: supported
 generated_field_exemptions:
   - provider.request_id
   - provider.response_id

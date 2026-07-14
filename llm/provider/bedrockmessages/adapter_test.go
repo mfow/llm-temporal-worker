@@ -55,7 +55,7 @@ func TestProfileRejectsReservedCapacityAsPublicTier(t *testing.T) {
 }
 
 func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
-	responseBody := string(mustReadBedrockFixture(t, "response.completed.json"))
+	responseBody := string(mustReadBedrockFixture(t, "invoke.response.json"))
 	calls := 0
 	var requestBody []byte
 	client, err := NewClient(context.Background(), ClientConfig{

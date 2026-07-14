@@ -42,12 +42,17 @@ The shared validator reports the two coverage states separately:
 | `bootstrap` | validates schema, declared artifacts, source metadata, and raw fixture-byte redaction | a structurally governed profile; it does not claim full-matrix coverage |
 | `enforced` | also requires every code-owned case applicable to its capability facts | a profile whose dedicated coverage task has supplied its complete fixture matrix |
 
-All currently checked-in production profiles are `bootstrap`. A profile must
-remain there until its dedicated coverage task adds the required semantic
-request, captured wire request, response, usage/cost, error, stream,
-loss/diagnostic, service-class, continuation, and security fixtures. The
-registry is intentionally code-owned so a future semantic field or capability
-cannot silently escape an enforced profile's fixture matrix.
+`bedrock-anthropic` is currently `enforced`; the remaining checked-in
+production profiles are `bootstrap`. A profile remains bootstrap until its
+dedicated coverage task adds the required semantic request, captured wire
+request, response, usage/cost, error, stream, loss/diagnostic, service-class,
+continuation, and security fixtures. The Bedrock suite proves exact opaque
+state replay, service-tier lowering/lifting, classified-error redaction, and
+captured SSE decoding/assembly across deterministic fragment boundaries.
+Captured SSE coverage is protocol evidence only; it does not by itself claim a
+client `StreamingAdapter` dispatch path. The registry is intentionally
+code-owned so a future semantic field or capability cannot silently escape an
+enforced profile's fixture matrix.
 
 ### Responses profile boundary
 

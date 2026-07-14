@@ -533,8 +533,20 @@ func TestRepositoryManifests(t *testing.T) {
 	if len(report.Bootstrap) == 0 {
 		t.Fatal("repository has no bootstrap adapter contract profiles")
 	}
-	if len(report.Enforced) != 0 {
-		t.Fatalf("repository enforced profiles = %#v; fixture completion tasks have not run", report.Enforced)
+	const bedrockProfilePath = "llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic"
+	var (
+		bedrock      Profile
+		foundBedrock bool
+	)
+	for _, profile := range report.Enforced {
+		if profile.ID == "bedrock-anthropic" {
+			bedrock = profile
+			foundBedrock = true
+			break
+		}
+	}
+	if !foundBedrock || bedrock.Coverage != CoverageEnforced || bedrock.Path != bedrockProfilePath {
+		t.Fatalf("repository enforced profiles = %#v; want enforced Bedrock profile at %q", report.Enforced, bedrockProfilePath)
 	}
 	t.Logf("adapter contract bootstrap profiles: %s", profileIDs(report.Bootstrap))
 	t.Logf("adapter contract enforced profiles: %s", profileIDs(report.Enforced))
