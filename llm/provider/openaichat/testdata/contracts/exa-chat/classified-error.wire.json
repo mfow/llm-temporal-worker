@@ -1,0 +1,7 @@
+{
+  "status": 429,
+  "code": "rate_limit_exceeded",
+  "request_id": "req-exa-chat-redacted",
+  "retry_after": "3",
+  "message": "synthetic upstream diagnostic"
+}

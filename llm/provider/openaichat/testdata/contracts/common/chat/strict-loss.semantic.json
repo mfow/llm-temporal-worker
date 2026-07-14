@@ -1,0 +1,15 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-openai-chat-strict-loss",
+  "model": "chat-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "strict loss"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "sampling": {"top_k": 4},
+  "continuation": null,
+  "extensions": {}
+}

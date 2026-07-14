@@ -1,9 +1,15 @@
 {
-  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "answer", "role": "assistant"}}],
+  "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "fixture exa response", "role": "assistant"}}],
   "costDollars": {"total": "0.00000123"},
-  "id": "exa-generation-1",
+  "id": "chat-exa-fixture",
   "model": "exa",
-  "results": [{"title": "Source", "url": "https://example.com/source"}],
+  "results": [{"id": "fixture-result", "score": 0.9, "title": "Fixture source", "url": "https://example.com/fixture-source"}],
   "service_tier": "standard",
-  "usage": {"completion_tokens": 3, "prompt_tokens": 5, "total_tokens": 8}
+  "usage": {
+    "completion_tokens": 7,
+    "completion_tokens_details": {"reasoning_tokens": 2},
+    "prompt_tokens": 10,
+    "prompt_tokens_details": {"cache_write_tokens": 1, "cached_tokens": 3},
+    "total_tokens": 17
+  }
 }

@@ -72,7 +72,7 @@ func assertCanonicalFixture(t *testing.T, got []byte, name string) {
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("testdata/contracts/common/chat/" + name)
+	data, err := os.ReadFile("testdata/unit/chat/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}

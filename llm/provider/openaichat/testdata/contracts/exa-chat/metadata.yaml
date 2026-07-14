@@ -8,11 +8,12 @@ redactions:
   - unstable provider identifiers
 capability_facts:
   usage: supported
-  streaming: pending
-  strict_loss: pending
-  best_effort: pending
+  streaming: unsupported
+  stream_decoder: supported
+  strict_loss: supported
+  best_effort: unsupported
   service_class: supported
-  continuation: pending
+  continuation: unsupported
 generated_field_exemptions:
   - provider.request_id
   - provider.response_id

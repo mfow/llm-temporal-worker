@@ -1,0 +1,19 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-openrouter-chat-continuation",
+  "model": "router-model",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "continue chat"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": {
+    "handle": "chat:continuation-1",
+    "endpoint_id": "openrouter-chat-fixture",
+    "model": "router-model",
+    "pinned": true
+  },
+  "extensions": {}
+}

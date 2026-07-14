@@ -533,20 +533,9 @@ func TestRepositoryManifests(t *testing.T) {
 	if len(report.Bootstrap) == 0 {
 		t.Fatal("repository has no bootstrap adapter contract profiles")
 	}
-	const bedrockProfilePath = "llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic"
-	var (
-		bedrock      Profile
-		foundBedrock bool
-	)
-	for _, profile := range report.Enforced {
-		if profile.ID == "bedrock-anthropic" {
-			bedrock = profile
-			foundBedrock = true
-			break
-		}
-	}
-	if !foundBedrock || bedrock.Coverage != CoverageEnforced || bedrock.Path != bedrockProfilePath {
-		t.Fatalf("repository enforced profiles = %#v; want enforced Bedrock profile at %q", report.Enforced, bedrockProfilePath)
+	const wantEnforced = "bedrock-anthropic, exa-chat, openai-chat, openrouter-chat"
+	if got := profileIDs(report.Enforced); got != wantEnforced {
+		t.Fatalf("repository enforced profiles = %q, want %q", got, wantEnforced)
 	}
 	t.Logf("adapter contract bootstrap profiles: %s", profileIDs(report.Bootstrap))
 	t.Logf("adapter contract enforced profiles: %s", profileIDs(report.Enforced))

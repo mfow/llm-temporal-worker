@@ -1,0 +1,6 @@
+{
+  "authorization": "Bearer [REDACTED]",
+  "api_key": "[REDACTED]",
+  "provider_order": "[REDACTED]",
+  "note": "synthetic redaction fixture"
+}

@@ -1,0 +1,44 @@
+{
+  "api_version": "llm.temporal/v1",
+  "cost": {"actual_microusd": 2, "catalog_version": "", "currency": "USD", "method": "exa_reported", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-exa-chat",
+  "output": [
+    {"actor": "model", "content": [{"kind": "text", "text": "fixture exa response"}], "kind": "message"},
+    {"kind": "reference", "metadata": {"id": "fixture-result", "score": 0.9, "title": "Fixture source"}, "uri": "https://example.com/fixture-source"}
+  ],
+  "provider": {
+    "finish_reason": "stop",
+    "generation_id": "chat-exa-fixture",
+    "raw": {
+      "choice_index": 0,
+      "costDollars": {"total": "0.00000123"},
+      "exa_cost_dollars": "0.00000123",
+      "exa_results": [{"id": "fixture-result", "score": 0.9, "title": "Fixture source", "url": "https://example.com/fixture-source"}]
+    },
+    "request_id": "req-exa-chat-fixture",
+    "response_id": "chat-exa-fixture"
+  },
+  "route": {
+    "api_family": "openai_chat",
+    "endpoint_id": "exa-chat-fixture",
+    "requested_model": "exa",
+    "resolved_model": "exa"
+  },
+  "service": {
+    "actual": "standard",
+    "attempted": "standard",
+    "fallback_index": 0,
+    "provider_value": "standard",
+    "requested": "standard"
+  },
+  "status": "completed",
+  "usage": {
+    "cache_read_tokens": 3,
+    "cache_write_tokens": 1,
+    "input_tokens": 10,
+    "output_tokens": 7,
+    "provider_raw": {"costDollars": {"total": "0.00000123"}, "exa_cost_dollars": "0.00000123", "total_tokens": 17},
+    "reasoning_tokens": 2
+  }
+}
