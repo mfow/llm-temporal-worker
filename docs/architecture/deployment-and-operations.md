@@ -76,11 +76,17 @@ by the workload-identity overlays.
 | Endpoint | Meaning | Failure effect |
 | --- | --- | --- |
 | `/health/live` | event loop and internal deadlock sentinel responsive | restart pod |
-| `/health/ready` | valid snapshot, worker polling, required state stores healthy | remove from service/polling |
+| `/health/ready` | valid snapshot and Temporal worker controller started | remove from service/polling |
 | `/metrics` | Prometheus exposition | none |
 
-Provider endpoints are excluded from readiness because one route can be down
-while another is valid. A configuration with zero eligible routes is not ready.
+The current readiness signal is lifecycle-driven: the runtime starts false,
+sets it true after the Temporal worker starts, and sets it false before worker
+shutdown. It does not yet perform a separate Redis/blob/persistence probe or
+revoke readiness after a dependency fails. The v1 completion plan calls for
+dependency-aware readiness; until that gate is implemented, `/health/ready`
+must not be treated as proof that every required state operation will succeed.
+Provider route eligibility is evaluated per request by the planner and is not a
+current readiness check.
 
 On termination, readiness fails immediately, polling stops, in-flight Activities
 receive the Temporal worker grace period, and telemetry flushes. Deployment
@@ -103,7 +109,8 @@ The internal application package supports an atomic reload API:
 3. resolve all references and compile catalogs;
 4. validate routes, cycles, capability mappings, prices, budgets, retention, and
    Redis numeric bounds;
-5. build clients and perform bounded dependency checks;
+5. build clients; constructor failures reject the candidate snapshot (the
+   current production factory does not add a separate dependency probe);
 6. atomically publish the snapshot;
 7. drain old clients after their captured Activities finish.
 

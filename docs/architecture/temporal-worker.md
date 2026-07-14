@@ -174,12 +174,17 @@ Startup order:
 
 1. parse and validate configuration;
 2. resolve secret references;
-3. create provider/Redis/telemetry clients;
-4. ping required shared dependencies;
-5. compile the immutable snapshot;
-6. register Activities on the configured task queue;
-7. start the Temporal worker;
-8. mark readiness true.
+3. create provider/Redis/blob/telemetry clients and compile the immutable
+   snapshot;
+4. construct the Temporal client and register Activities on the configured
+   task queue;
+5. bind the health and metrics listeners;
+6. start the Temporal worker;
+7. mark readiness true.
+
+Client construction and configuration validation can fail before the worker
+starts, but the current runtime does not perform a separate startup ping of
+Redis, blob storage, or Redis Function/persistence state.
 
 On `SIGTERM`/`SIGINT`, readiness turns false first. The process stops polling,
 allows the Temporal worker's configured graceful stop timeout, flushes telemetry
@@ -192,10 +197,13 @@ drains the captured snapshot clients, and closes the Temporal SDK client after
 polling has stopped. Runtime errors are bounded, actionable messages and never
 include resolved secret bytes or provider payloads.
 
-Liveness proves only that the process event loop is responsive. Readiness proves
-there is a valid snapshot, Temporal registration is running, and required Redis
-state is reachable. Provider availability is a route-health concern and does not
-make the whole pod unready when another route is eligible.
+Liveness proves only that the process event loop is responsive. In the current
+implementation, readiness proves that a valid snapshot was composed and the
+Temporal worker controller started; it does not prove that required Redis or
+blob operations remain reachable after startup. Provider availability is a
+route-health concern and is evaluated by request planning rather than by this
+probe. Dependency-aware readiness is a v1 completion item, not a current
+runtime guarantee.
 
 ## Temporal tests
 
