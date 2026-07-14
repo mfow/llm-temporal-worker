@@ -112,16 +112,18 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	} {
 		assertJobUsesAction(t, master, "release-evidence", action)
 	}
+	assertJobActionInput(t, master, "release-evidence", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "version", "v0.16.2")
+	assertJobActionInput(t, master, "release-evidence", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "driver-opts", "image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27")
 	assertJobActionInput(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "version", "v1.32.6")
-	assertJobActionPrecedesRunCommand(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "--image-oci-layout \"$RUNNER_TEMP/image.oci.tar\"")
+	assertJobActionPrecedesRunCommand(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "--image-oci-layout \"$RUNNER_TEMP/image.oci\"")
 	for _, command := range []string{"make release-verify"} {
 		if !jobHasRunCommand(job, command) {
 			t.Fatalf("release-evidence job does not run %q", command)
 		}
 	}
 	for _, want := range []string{
-		"oci-archive:\"$RUNNER_TEMP/image.oci.tar\"",
-		"input: ${{ runner.temp }}/image.oci.tar",
+		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
+		"input: ${{ runner.temp }}/image.oci",
 		"syft-version: v1.44.0",
 		"version: v0.72.0",
 		"version: v1.32.6",
@@ -140,20 +142,20 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	if err := validateReleaseEvidencePathOverridePolicy(master); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateReleaseEvidenceTemporaryOCIArchivePolicy(master); err != nil {
+	if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestWorkflowReleaseEvidenceTemporaryOCIArchivePolicyRejectsRetentionAndMissingCleanup(t *testing.T) {
+func TestWorkflowReleaseEvidenceTemporaryOCIDirectoryPolicyRejectsRetentionAndMissingCleanup(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
 	for _, test := range []struct {
 		name        string
 		replacement string
 	}{
 		{
-			name:        "retained archive path",
-			replacement: "release-artifacts/image.oci.tar",
+			name:        "retained OCI directory path",
+			replacement: "release-artifacts/image.oci",
 		},
 		{
 			name:        "missing cleanup",
@@ -163,14 +165,14 @@ func TestWorkflowReleaseEvidenceTemporaryOCIArchivePolicyRejectsRetentionAndMiss
 		t.Run(test.name, func(t *testing.T) {
 			mutated := master
 			switch test.name {
-			case "retained archive path":
-				mutated.raw = strings.ReplaceAll(mutated.raw, "$RUNNER_TEMP/image.oci.tar", test.replacement)
-				mutated.raw = strings.ReplaceAll(mutated.raw, "${{ runner.temp }}/image.oci.tar", test.replacement)
+			case "retained OCI directory path":
+				mutated.raw = strings.ReplaceAll(mutated.raw, "$RUNNER_TEMP/image.oci", test.replacement)
+				mutated.raw = strings.ReplaceAll(mutated.raw, "${{ runner.temp }}/image.oci", test.replacement)
 			case "missing cleanup":
-				mutated.raw = strings.Replace(mutated.raw, `rm -f -- "$RUNNER_TEMP/image.oci.tar"`, test.replacement, 1)
+				mutated.raw = strings.Replace(mutated.raw, `rm -rf -- "$RUNNER_TEMP/image.oci"`, test.replacement, 1)
 			}
-			if err := validateReleaseEvidenceTemporaryOCIArchivePolicy(mutated); err == nil {
-				t.Fatalf("temporary OCI archive policy accepted %s", test.name)
+			if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(mutated); err == nil {
+				t.Fatalf("temporary OCI directory policy accepted %s", test.name)
 			}
 		})
 	}
@@ -228,8 +230,8 @@ func TestWorkflowReleaseEvidenceRejectsEvidencePathOverrides(t *testing.T) {
 		},
 		{
 			name: "GitHub environment file override",
-			old:  "        run: |\n          bash scripts/release/collect.sh \\\n            --artifact-dir release-artifacts \\\n            --image-oci-layout \"$RUNNER_TEMP/image.oci.tar\"",
-			new:  "        run: |\n          echo 'RELEASE_EVIDENCE_DIR=alternate-artifacts' >> \"$GITHUB_ENV\"\n          bash scripts/release/collect.sh \\\n            --artifact-dir release-artifacts \\\n            --image-oci-layout \"$RUNNER_TEMP/image.oci.tar\"",
+			old:  "        run: |\n          bash scripts/release/collect.sh \\\n            --artifact-dir release-artifacts \\\n            --image-oci-layout \"$RUNNER_TEMP/image.oci\"",
+			new:  "        run: |\n          echo 'RELEASE_EVIDENCE_DIR=alternate-artifacts' >> \"$GITHUB_ENV\"\n          bash scripts/release/collect.sh \\\n            --artifact-dir release-artifacts \\\n            --image-oci-layout \"$RUNNER_TEMP/image.oci\"",
 		},
 		{
 			name: "shell declaration and export override",
@@ -730,32 +732,40 @@ func validateReleaseEvidencePathOverridePolicy(workflow workflowDocument) error 
 	return nil
 }
 
-func validateReleaseEvidenceTemporaryOCIArchivePolicy(workflow workflowDocument) error {
-	const temporaryOCIArchive = "$RUNNER_TEMP/image.oci.tar"
-	const actionTemporaryOCIArchive = "${{ runner.temp }}/image.oci.tar"
+func validateReleaseEvidenceTemporaryOCIDirectoryPolicy(workflow workflowDocument) error {
+	const temporaryOCIDirectory = "$RUNNER_TEMP/image.oci"
+	const actionTemporaryOCIDirectory = "${{ runner.temp }}/image.oci"
 	for _, required := range []string{
 		"bash scripts/release/collect.sh \\",
 		"--artifact-dir release-artifacts \\",
-		"--image-oci-layout \"$RUNNER_TEMP/image.oci.tar\"",
-		"layout-digest -layout \"$RUNNER_TEMP/image.oci.tar\"",
-		"oci-archive:\"$RUNNER_TEMP/image.oci.tar\"",
-		"input: ${{ runner.temp }}/image.oci.tar",
-		`rm -f -- "$RUNNER_TEMP/image.oci.tar"`,
+		"--image-oci-layout \"$RUNNER_TEMP/image.oci\"",
+		"layout-digest -layout \"$RUNNER_TEMP/image.oci\"",
+		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
+		"input: ${{ runner.temp }}/image.oci",
+		`rm -rf -- "$RUNNER_TEMP/image.oci"`,
 	} {
 		if !strings.Contains(workflow.raw, required) {
-			return fmt.Errorf("%s does not use the required temporary OCI archive boundary %q", workflow.name, required)
+			return fmt.Errorf("%s does not use the required temporary OCI directory boundary %q", workflow.name, required)
 		}
 	}
-	if strings.Contains(workflow.raw, "release-artifacts/image.oci.tar") || strings.Contains(workflow.raw, "-artifact image_layout=") {
-		return fmt.Errorf("%s retains a raw OCI archive in release-artifacts", workflow.name)
+	for _, forbidden := range []string{
+		"image.oci.tar",
+		"oci-archive:",
+		"docker load --input",
+		"release-artifacts/image.oci",
+		"-artifact image_layout=",
+	} {
+		if strings.Contains(workflow.raw, forbidden) {
+			return fmt.Errorf("%s retains or consumes a forbidden raw OCI image form %q", workflow.name, forbidden)
+		}
 	}
 	upload := strings.Index(workflow.raw, "path: release-artifacts/")
-	cleanup := strings.Index(workflow.raw, `rm -f -- "$RUNNER_TEMP/image.oci.tar"`)
+	cleanup := strings.Index(workflow.raw, `rm -rf -- "$RUNNER_TEMP/image.oci"`)
 	if upload < 0 || cleanup <= upload {
-		return fmt.Errorf("%s does not remove the temporary OCI archive after artifact upload", workflow.name)
+		return fmt.Errorf("%s does not remove the temporary OCI directory after artifact upload", workflow.name)
 	}
-	if !strings.Contains(workflow.raw, temporaryOCIArchive) || !strings.Contains(workflow.raw, actionTemporaryOCIArchive) {
-		return fmt.Errorf("%s does not bind all OCI tooling to the runner temporary archive", workflow.name)
+	if !strings.Contains(workflow.raw, temporaryOCIDirectory) || !strings.Contains(workflow.raw, actionTemporaryOCIDirectory) {
+		return fmt.Errorf("%s does not bind all OCI tooling to the runner temporary directory", workflow.name)
 	}
 	return nil
 }

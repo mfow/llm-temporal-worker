@@ -198,6 +198,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.16.2
+          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
 
       - name: Set up pinned kubectl for local manifest rendering
         uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
@@ -210,16 +213,16 @@ jobs:
         run: |
           bash scripts/release/collect.sh \
             --artifact-dir release-artifacts \
-            --image-oci-layout "$RUNNER_TEMP/image.oci.tar"
+            --image-oci-layout "$RUNNER_TEMP/image.oci"
 
       - name: Inspect immutable OCI manifest descriptor
         id: image
         shell: bash
         run: |
           set -euo pipefail
-          digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci.tar")"
+          digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "temporary OCI archive returned an invalid manifest digest" >&2
+            echo "temporary OCI directory returned an invalid manifest digest" >&2
             exit 1
           fi
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
@@ -231,22 +234,22 @@ jobs:
         with:
           syft-version: v1.44.0
 
-      - name: Generate and bind CycloneDX SBOM for temporary OCI archive
+      - name: Generate and bind CycloneDX SBOM for temporary OCI directory
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.syft.outputs.cmd }}" oci-archive:"$RUNNER_TEMP/image.oci.tar" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
+          "${{ steps.syft.outputs.cmd }}" oci-dir:"$RUNNER_TEMP/image.oci" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
           python3 scripts/release/collect.py annotate-sbom \
             --input "$RUNNER_TEMP/sbom.cdx.json" \
             --output release-artifacts/sbom.cdx.json \
             --reference "${{ steps.image.outputs.reference }}" \
             --digest "${{ steps.image.outputs.digest }}"
 
-      - name: Scan temporary OCI archive with pinned Trivy
+      - name: Scan temporary OCI directory with pinned Trivy
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: image
-          input: ${{ runner.temp }}/image.oci.tar
+          input: ${{ runner.temp }}/image.oci
           format: json
           output: ${{ runner.temp }}/image-scan.json
           trivy-config: scripts/release/trivy.yaml
@@ -300,7 +303,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Remove temporary OCI archive
+      - name: Remove temporary OCI directory
         if: always()
         shell: bash
-        run: rm -f -- "$RUNNER_TEMP/image.oci.tar"
+        run: rm -rf -- "$RUNNER_TEMP/image.oci"

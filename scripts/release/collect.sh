@@ -50,13 +50,13 @@ if [[ "$image_oci_layout" != /* ]]; then
   image_oci_layout="$root/$image_oci_layout"
 fi
 image_oci_parent="$(dirname -- "$image_oci_layout")"
-[[ -d "$image_oci_parent" && ! -L "$image_oci_parent" ]] || fail "temporary OCI archive parent must be a real directory"
+[[ -d "$image_oci_parent" && ! -L "$image_oci_parent" ]] || fail "temporary OCI directory parent must be a real directory"
 image_oci_layout="$(CDPATH= cd -- "$image_oci_parent" && pwd -P)/$(basename -- "$image_oci_layout")"
-[[ "$(basename -- "$image_oci_layout")" == "image.oci.tar" ]] || fail "temporary OCI archive must use the image.oci.tar filename"
+[[ "$(basename -- "$image_oci_layout")" == "image.oci" ]] || fail "temporary OCI directory must use the image.oci filename"
 case "$image_oci_layout" in
-  "$artifact_dir"|"$artifact_dir"/*) fail "temporary OCI archive must be outside the artifact directory" ;;
+  "$artifact_dir"|"$artifact_dir"/*) fail "temporary OCI directory must be outside the artifact directory" ;;
 esac
-[[ ! -e "$image_oci_layout" && ! -L "$image_oci_layout" ]] || fail "temporary OCI archive path must not already exist"
+[[ ! -e "$image_oci_layout" && ! -L "$image_oci_layout" ]] || fail "temporary OCI directory path must not already exist"
 
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/llmtw-release-evidence.XXXXXX")"
 compose_project="llmtw-release-evidence-${GITHUB_RUN_ID:-local}-$$"
@@ -174,4 +174,4 @@ python3 "$collector" vulnerability-results \
 if ! IMAGE_VERIFY_OCI_LAYOUT="$image_oci_layout" make -C "$root" image-verify >"$temporary/image-verify.output" 2>&1; then
   fail "temporary OCI image verification failed; inspect the trusted CI step output"
 fi
-[[ -s "$image_oci_layout" ]] || fail "image verification did not create a temporary OCI archive"
+[[ -d "$image_oci_layout" && ! -L "$image_oci_layout" && -f "$image_oci_layout/oci-layout" && -f "$image_oci_layout/index.json" ]] || fail "image verification did not create a temporary OCI directory"

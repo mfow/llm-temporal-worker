@@ -501,15 +501,15 @@ def command_annotate_scan(args: argparse.Namespace) -> None:
     if document.get("ArtifactType") != "container_image":
         fail("image scan is not a Trivy container-image report")
     artifact_name = require_string(document.get("ArtifactName"), "Trivy image scan artifact name")
-    if artifact_name.replace("\\", "/").endswith("/") or artifact_name.replace("\\", "/").rsplit("/", 1)[-1] != "image.oci.tar":
-        fail("image scan was not generated from the temporary OCI archive")
+    if artifact_name.replace("\\", "/").endswith("/") or artifact_name.replace("\\", "/").rsplit("/", 1)[-1] != "image.oci":
+        fail("image scan was not generated from the temporary OCI directory")
     require_list(document.get("Results"), "Trivy image scan results")
     if "release_subject" in document:
         fail("image scan already has an immutable release subject")
     # Trivy reports the absolute runner-temporary input path. Retain only its
     # stable basename so the redacted evidence bundle cannot disclose runner
     # filesystem details while still proving the expected scan input.
-    document["ArtifactName"] = "image.oci.tar"
+    document["ArtifactName"] = "image.oci"
     document["release_subject"] = {"reference": args.reference, "digest": args.digest}
     write_json(Path(args.output), document)
 

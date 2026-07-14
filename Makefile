@@ -90,14 +90,14 @@ image-verify:
 			test ! -e "$$layout" && test ! -L "$$layout" || { echo "image-verify OCI layout already exists: $$layout" >&2; exit 2; }; \
 			docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
 				--tag "$(IMAGE_VERIFY_TAG)" \
-				--output "type=oci,dest=$$layout,name=$(IMAGE_VERIFY_TAG)" \
+				--output "type=oci,dest=$$layout,tar=false,name=$(IMAGE_VERIFY_TAG)" \
+				--load \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
 				--build-arg REVISION="$$revision" \
 				--build-arg BUILD_TIME="$$build_time" \
 				--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
 				--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
 				.; \
-			docker load --input "$$layout" >/dev/null; \
 			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
 		else \
 			docker build --tag "$(IMAGE_VERIFY_TAG)" \

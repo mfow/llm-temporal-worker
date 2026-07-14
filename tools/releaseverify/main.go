@@ -5,7 +5,6 @@
 package main
 
 import (
-	"archive/tar"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,7 +30,6 @@ const (
 	schemaResourceURL     = "urn:llmtw:release-evidence:v1"
 	artifactSchemaURL     = "urn:llmtw:release-evidence-artifact:v1"
 	maxArtifactBytes      = 32 * 1024 * 1024
-	maxOCILayoutBytes     = 512 * 1024 * 1024
 	maxOCIExpandedBytes   = 1024 * 1024 * 1024
 	maxOCIMetadataBytes   = 1024 * 1024
 )
@@ -214,7 +212,7 @@ func run(args []string, stdout io.Writer) error {
 func runLayoutDigest(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("layout-digest", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	layoutPath := flags.String("layout", "", "temporary OCI image layout archive")
+	layoutPath := flags.String("layout", "", "temporary OCI image layout directory")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -838,27 +836,22 @@ type ociManifestDocument struct {
 	Layers        []ociDescriptor `json:"layers"`
 }
 
-type ociArchiveEntry struct {
+type ociLayoutEntry struct {
 	size   int64
 	digest string
 	data   []byte
 }
 
 func inspectOCILayout(path string) (string, error) {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", errors.New("OCI layout must be a regular archive")
+	if filepath.Clean(path) != path {
+		return "", errors.New("OCI layout must use a canonical path")
 	}
-	if info.Size() <= 0 || info.Size() > maxOCILayoutBytes {
-		return "", errors.New("OCI layout archive has an invalid byte length")
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("OCI layout must be a real directory")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", errors.New("cannot read OCI layout")
-	}
-	defer file.Close()
 
-	entries, err := readOCILayoutArchive(tar.NewReader(file))
+	entries, err := readOCILayoutDirectory(path)
 	if err != nil {
 		return "", err
 	}
@@ -937,7 +930,7 @@ func inspectOCILayout(path string) (string, error) {
 // OCI-standard index and blobs. It is not part of the descriptor graph, so
 // accept only that exact, bounded JSON metadata filename; every image payload
 // remains required to be referenced by the OCI manifest descriptor above.
-func validateOptionalOCILayoutMetadata(entries map[string]ociArchiveEntry, requiredEntries map[string]struct{}) error {
+func validateOptionalOCILayoutMetadata(entries map[string]ociLayoutEntry, requiredEntries map[string]struct{}) error {
 	entry, ok := entries["manifest.json"]
 	if !ok {
 		return nil
@@ -961,78 +954,97 @@ func validateOptionalOCILayoutMetadata(entries map[string]ociArchiveEntry, requi
 	return nil
 }
 
-func readOCILayoutArchive(reader *tar.Reader) (map[string]ociArchiveEntry, error) {
-	entries := make(map[string]ociArchiveEntry)
+func readOCILayoutDirectory(root string) (map[string]ociLayoutEntry, error) {
+	entries := make(map[string]ociLayoutEntry)
 	var expanded int64
-	for {
-		header, err := reader.Next()
-		if errors.Is(err, io.EOF) {
-			break
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return errors.New("OCI layout directory cannot be read")
 		}
+		if path == root {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
 		if err != nil {
-			return nil, errors.New("OCI layout archive cannot be read")
+			return errors.New("OCI layout contains an unsafe directory path")
 		}
-		name, err := safeOCITarPath(header.Name)
+		name, err := safeOCIDirectoryPath(relative)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if header.Size != 0 {
-				return nil, errors.New("OCI layout directory has data")
-			}
-			continue
-		case tar.TypeReg, tar.TypeRegA:
-		default:
-			return nil, fmt.Errorf("OCI layout contains unsupported archive entry %q", name)
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("OCI layout contains a symlink %q", name)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return errors.New("OCI layout directory entry cannot be inspected")
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("OCI layout contains an unsupported directory entry %q", name)
 		}
 		if _, duplicate := entries[name]; duplicate {
-			return nil, fmt.Errorf("OCI layout repeats archive entry %q", name)
+			return fmt.Errorf("OCI layout repeats directory entry %q", name)
 		}
-		if header.Size < 0 || header.Size > maxOCIExpandedBytes-expanded {
-			return nil, errors.New("OCI layout expanded payload is too large")
+		if info.Size() < 0 || info.Size() > maxOCIExpandedBytes-expanded {
+			return errors.New("OCI layout payload is too large")
 		}
-		expanded += header.Size
-		entry, err := readOCIArchiveEntry(reader, header.Size)
+		expanded += info.Size()
+		layoutEntry, err := readOCILayoutFile(path, info.Size())
 		if err != nil {
-			return nil, err
+			return err
 		}
-		entries[name] = entry
+		entries[name] = layoutEntry
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return entries, nil
 }
 
-func safeOCITarPath(value string) (string, error) {
-	canonical := strings.TrimSuffix(value, "/")
+func safeOCIDirectoryPath(value string) (string, error) {
+	canonical := filepath.ToSlash(value)
 	cleaned := pathpkg.Clean(canonical)
-	if canonical == "" || pathpkg.IsAbs(value) || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned != canonical {
-		return "", errors.New("OCI layout contains an unsafe archive path")
+	if canonical == "" || filepath.IsAbs(value) || strings.Contains(canonical, "\\") || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned != canonical {
+		return "", errors.New("OCI layout contains an unsafe directory path")
 	}
 	return cleaned, nil
 }
 
-func readOCIArchiveEntry(reader io.Reader, size int64) (ociArchiveEntry, error) {
+func readOCILayoutFile(path string, size int64) (ociLayoutEntry, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return ociLayoutEntry{}, errors.New("OCI layout directory entry cannot be read")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		return ociLayoutEntry{}, errors.New("OCI layout directory entry changed while reading")
+	}
 	hash := sha256.New()
 	var data bytes.Buffer
 	writer := io.Writer(hash)
 	if size <= maxOCIMetadataBytes {
 		writer = io.MultiWriter(hash, &data)
 	}
-	written, err := io.CopyN(writer, reader, size)
+	written, err := io.CopyN(writer, file, size)
 	if err != nil || written != size {
-		return ociArchiveEntry{}, errors.New("OCI layout archive entry is truncated")
+		return ociLayoutEntry{}, errors.New("OCI layout directory entry is truncated")
 	}
-	return ociArchiveEntry{size: size, digest: hex.EncodeToString(hash.Sum(nil)), data: data.Bytes()}, nil
+	return ociLayoutEntry{size: size, digest: hex.EncodeToString(hash.Sum(nil)), data: data.Bytes()}, nil
 }
 
-func ociDescriptorEntry(entries map[string]ociArchiveEntry, descriptor ociDescriptor) (ociArchiveEntry, string, error) {
+func ociDescriptorEntry(entries map[string]ociLayoutEntry, descriptor ociDescriptor) (ociLayoutEntry, string, error) {
 	if !strings.HasPrefix(descriptor.Digest, "sha256:") || !digestPattern.MatchString(strings.TrimPrefix(descriptor.Digest, "sha256:")) || descriptor.Size < 0 {
-		return ociArchiveEntry{}, "", errors.New("has an invalid digest or size")
+		return ociLayoutEntry{}, "", errors.New("has an invalid digest or size")
 	}
 	path := "blobs/sha256/" + strings.TrimPrefix(descriptor.Digest, "sha256:")
 	entry, ok := entries[path]
 	if !ok || entry.size != descriptor.Size || entry.digest != strings.TrimPrefix(descriptor.Digest, "sha256:") {
-		return ociArchiveEntry{}, "", errors.New("does not match a retained payload")
+		return ociLayoutEntry{}, "", errors.New("does not match a retained payload")
 	}
 	return entry, path, nil
 }
@@ -1095,8 +1107,8 @@ func validateTrivyScan(path string, image image) error {
 		return errors.New("final-image scan is not a Trivy container-image report")
 	}
 	artifactName, _ := document["ArtifactName"].(string)
-	if artifactName != "image.oci.tar" {
-		return errors.New("final-image scan was not normalized to the temporary OCI archive basename")
+	if artifactName != "image.oci" {
+		return errors.New("final-image scan was not normalized to the temporary OCI directory basename")
 	}
 	subject, ok := document["release_subject"].(map[string]any)
 	if !ok {

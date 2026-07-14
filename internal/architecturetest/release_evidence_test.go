@@ -1,7 +1,6 @@
 package architecturetest
 
 import (
-	"archive/tar"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -72,7 +71,7 @@ func TestReleaseEvidenceVerifierAcceptsCompleteRedactedBundle(t *testing.T) {
 
 func TestReleaseEvidenceLayoutDigestUsesTheOCIManifestDescriptor(t *testing.T) {
 	root := repositoryRoot(t)
-	path := filepath.Join(t.TempDir(), "image.oci.tar")
+	path := filepath.Join(t.TempDir(), "image.oci")
 	want := writeReleaseEvidenceOCILayout(t, path)
 
 	output, err := runReleaseEvidenceLayoutDigest(root, path)
@@ -86,7 +85,7 @@ func TestReleaseEvidenceLayoutDigestUsesTheOCIManifestDescriptor(t *testing.T) {
 
 func TestReleaseEvidenceLayoutDigestAcceptsDockerOCICompatibilityMetadata(t *testing.T) {
 	root := repositoryRoot(t)
-	path := filepath.Join(t.TempDir(), "image.oci.tar")
+	path := filepath.Join(t.TempDir(), "image.oci")
 	want := writeReleaseEvidenceOCILayoutWithCompatibilityMetadata(t, path)
 
 	output, err := runReleaseEvidenceLayoutDigest(root, path)
@@ -98,38 +97,151 @@ func TestReleaseEvidenceLayoutDigestAcceptsDockerOCICompatibilityMetadata(t *tes
 	}
 }
 
-func TestReleaseEvidenceLayoutDigestRejectsNonCanonicalArchivePaths(t *testing.T) {
+func TestReleaseEvidenceLayoutDigestRejectsFilesAndUnsafeDirectoryPaths(t *testing.T) {
 	root := repositoryRoot(t)
-	path := filepath.Join(t.TempDir(), "noncanonical.oci.tar")
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer := tar.NewWriter(file)
-	if err := writer.WriteHeader(&tar.Header{Name: "blobs//sha256/not-a-digest", Mode: 0o600, Size: 1, Typeflag: tar.TypeReg}); err != nil {
-		writer.Close()
-		file.Close()
-		t.Fatal(err)
-	}
-	if _, err := writer.Write([]byte("x")); err != nil {
-		writer.Close()
-		file.Close()
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		file.Close()
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("archive file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "image.oci.tar")
+		writeReleaseArtifact(t, path, []byte("not an OCI directory"))
 
-	output, err := runReleaseEvidenceLayoutDigest(root, path)
-	if err == nil {
-		t.Fatalf("layout digest accepted a noncanonical archive path:\n%s", output)
-	}
-	if !strings.Contains(string(output), "unsafe archive path") {
-		t.Fatalf("noncanonical archive path failure = %q", output)
+		output, err := runReleaseEvidenceLayoutDigest(root, path)
+		if err == nil {
+			t.Fatalf("layout digest accepted an OCI archive file:\n%s", output)
+		}
+		if !strings.Contains(string(output), "real directory") {
+			t.Fatalf("OCI archive input failure = %q", output)
+		}
+	})
+
+	t.Run("symlinked layout", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "image.oci")
+		writeReleaseEvidenceOCILayout(t, target)
+		path := filepath.Join(t.TempDir(), "image.oci")
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+
+		output, err := runReleaseEvidenceLayoutDigest(root, path)
+		if err == nil {
+			t.Fatalf("layout digest accepted a symlinked OCI directory:\n%s", output)
+		}
+		if !strings.Contains(string(output), "real directory") {
+			t.Fatalf("symlinked OCI directory failure = %q", output)
+		}
+	})
+
+	t.Run("noncanonical path", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "image.oci")
+		writeReleaseEvidenceOCILayout(t, path)
+		noncanonical := filepath.Dir(path) + string(filepath.Separator) + "." + string(filepath.Separator) + filepath.Base(path)
+
+		output, err := runReleaseEvidenceLayoutDigest(root, noncanonical)
+		if err == nil {
+			t.Fatalf("layout digest accepted a noncanonical OCI directory path:\n%s", output)
+		}
+		if !strings.Contains(string(output), "canonical path") {
+			t.Fatalf("noncanonical OCI directory failure = %q", output)
+		}
+	})
+}
+
+func TestReleaseEvidenceLayoutDigestRejectsUnsafeOrUnboundDirectoryEntries(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, test := range []struct {
+		name    string
+		mutate  func(t *testing.T, path string)
+		failure string
+	}{
+		{
+			name: "nested blob symlink",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Symlink("missing-blob", filepath.Join(path, "blobs", "sha256", "nested-link")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			failure: "contains a symlink",
+		},
+		{
+			name: "unreferenced blob",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				data := []byte("unreferenced OCI blob")
+				writeReleaseArtifact(t, filepath.Join(path, "blobs", "sha256", sha256Hex(data)), data)
+			},
+			failure: "unreferenced payload",
+		},
+		{
+			name: "mismatched config blob",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				indexData, err := os.ReadFile(filepath.Join(path, "index.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var index struct {
+					Manifests []struct {
+						Digest string `json:"digest"`
+					} `json:"manifests"`
+				}
+				if err := json.Unmarshal(indexData, &index); err != nil || len(index.Manifests) != 1 {
+					t.Fatalf("cannot read test OCI index: %v", err)
+				}
+				manifestData, err := os.ReadFile(filepath.Join(path, "blobs", "sha256", strings.TrimPrefix(index.Manifests[0].Digest, "sha256:")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var manifest struct {
+					Config struct {
+						Digest string `json:"digest"`
+					} `json:"config"`
+				}
+				if err := json.Unmarshal(manifestData, &manifest); err != nil {
+					t.Fatal(err)
+				}
+				writeReleaseArtifact(t, filepath.Join(path, "blobs", "sha256", strings.TrimPrefix(manifest.Config.Digest, "sha256:")), []byte("mismatched OCI config"))
+			},
+			failure: "does not match a retained payload",
+		},
+		{
+			name: "multiple manifest descriptors",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				indexPath := filepath.Join(path, "index.json")
+				data, err := os.ReadFile(indexPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var index map[string]any
+				if err := json.Unmarshal(data, &index); err != nil {
+					t.Fatal(err)
+				}
+				manifests, ok := index["manifests"].([]any)
+				if !ok || len(manifests) != 1 {
+					t.Fatalf("test OCI index manifest list = %#v", index["manifests"])
+				}
+				index["manifests"] = append(manifests, manifests[0])
+				updated, err := json.Marshal(index)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeReleaseArtifact(t, indexPath, updated)
+			},
+			failure: "exactly one manifest descriptor",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "image.oci")
+			writeReleaseEvidenceOCILayout(t, path)
+			test.mutate(t, path)
+
+			output, err := runReleaseEvidenceLayoutDigest(root, path)
+			if err == nil {
+				t.Fatalf("layout digest accepted %s:\n%s", test.name, output)
+			}
+			if !strings.Contains(string(output), test.failure) {
+				t.Fatalf("%s failure = %q, want %q", test.name, output, test.failure)
+			}
+		})
 	}
 }
 
@@ -329,7 +441,7 @@ func TestReleaseEvidenceCollectorRejectsNonContainerTrivyReport(t *testing.T) {
 	inputPath := filepath.Join(directory, "scan.json")
 	outputPath := filepath.Join(directory, "image-scan.json")
 	digest := "sha256:" + strings.Repeat("b", 64)
-	writeReleaseArtifact(t, inputPath, []byte(`{"SchemaVersion":2,"ArtifactType":"filesystem","ArtifactName":"image.oci.tar","Results":[]}`))
+	writeReleaseArtifact(t, inputPath, []byte(`{"SchemaVersion":2,"ArtifactType":"filesystem","ArtifactName":"image.oci","Results":[]}`))
 
 	command := exec.Command(
 		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "annotate-scan",
@@ -351,7 +463,7 @@ func TestReleaseEvidenceCollectorRejectsNonContainerTrivyReport(t *testing.T) {
 	}
 }
 
-func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyArchiveName(t *testing.T) {
+func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyOCIDirectoryName(t *testing.T) {
 	root := repositoryRoot(t)
 	digest := "sha256:" + strings.Repeat("b", 64)
 	for _, test := range []struct {
@@ -359,8 +471,8 @@ func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyArchiveName(t *testing.
 		artifactName string
 		accept       bool
 	}{
-		{name: "temporary absolute archive path", artifactName: "/private/runner-temp/image.oci.tar", accept: true},
-		{name: "unexpected archive basename", artifactName: "/private/runner-temp/other-image.oci.tar", accept: false},
+		{name: "temporary absolute OCI directory path", artifactName: "/private/runner-temp/image.oci", accept: true},
+		{name: "unexpected OCI directory basename", artifactName: "/private/runner-temp/other-image.oci", accept: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -379,28 +491,28 @@ func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyArchiveName(t *testing.
 			output, err := command.CombinedOutput()
 			if test.accept {
 				if err != nil {
-					t.Fatalf("scan collector rejected temporary archive path: %v\n%s", err, output)
+					t.Fatalf("scan collector rejected temporary OCI directory path: %v\n%s", err, output)
 				}
 				document := readReleaseEvidenceJSONArtifact(t, directory, "image_scan")
-				if artifactName, _ := document["ArtifactName"].(string); artifactName != "image.oci.tar" {
+				if artifactName, _ := document["ArtifactName"].(string); artifactName != "image.oci" {
 					t.Fatalf("annotated scan artifact name = %q, want stable basename", artifactName)
 				}
 				return
 			}
 			if err == nil {
-				t.Fatalf("scan collector accepted unexpected temporary archive basename:\n%s", output)
+				t.Fatalf("scan collector accepted unexpected temporary OCI directory basename:\n%s", output)
 			}
-			if !strings.Contains(string(output), "temporary OCI archive") {
-				t.Fatalf("unexpected archive basename failure = %q", output)
+			if !strings.Contains(string(output), "temporary OCI directory") {
+				t.Fatalf("unexpected OCI directory basename failure = %q", output)
 			}
 			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-				t.Fatalf("scan collector wrote evidence after rejecting archive basename: %v", err)
+				t.Fatalf("scan collector wrote evidence after rejecting OCI directory basename: %v", err)
 			}
 		})
 	}
 }
 
-func TestReleaseEvidenceCollectorRejectsRetainedOrSymlinkedOCIArchiveDestination(t *testing.T) {
+func TestReleaseEvidenceCollectorRejectsRetainedOrSymlinkedOCIDirectoryDestination(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, test := range []struct {
 		name    string
@@ -410,7 +522,7 @@ func TestReleaseEvidenceCollectorRejectsRetainedOrSymlinkedOCIArchiveDestination
 		{
 			name: "artifact directory",
 			prepare: func(_ *testing.T, artifactDirectory string) string {
-				return filepath.Join(artifactDirectory, "image.oci.tar")
+				return filepath.Join(artifactDirectory, "image.oci")
 			},
 			want: "outside the artifact directory",
 		},
@@ -418,8 +530,8 @@ func TestReleaseEvidenceCollectorRejectsRetainedOrSymlinkedOCIArchiveDestination
 			name: "dangling symlink",
 			prepare: func(t *testing.T, _ string) string {
 				t.Helper()
-				layoutPath := filepath.Join(t.TempDir(), "image.oci.tar")
-				if err := os.Symlink(filepath.Join(t.TempDir(), "missing-image.oci.tar"), layoutPath); err != nil {
+				layoutPath := filepath.Join(t.TempDir(), "image.oci")
+				if err := os.Symlink(filepath.Join(t.TempDir(), "missing-image.oci"), layoutPath); err != nil {
 					t.Fatal(err)
 				}
 				return layoutPath
@@ -438,10 +550,10 @@ func TestReleaseEvidenceCollectorRejectsRetainedOrSymlinkedOCIArchiveDestination
 			command.Dir = root
 			output, err := command.CombinedOutput()
 			if err == nil {
-				t.Fatalf("collector accepted unsafe temporary OCI archive destination:\n%s", output)
+				t.Fatalf("collector accepted unsafe temporary OCI directory destination:\n%s", output)
 			}
 			if !strings.Contains(string(output), test.want) {
-				t.Fatalf("unsafe temporary OCI archive destination failure = %q, want %q", output, test.want)
+				t.Fatalf("unsafe temporary OCI directory destination failure = %q, want %q", output, test.want)
 			}
 		})
 	}
@@ -989,11 +1101,11 @@ func TestReleaseEvidenceVerifierRejectsNonContainerTrivyReport(t *testing.T) {
 	}
 }
 
-func TestReleaseEvidenceVerifierRejectsUnnormalizedTemporaryTrivyArchiveName(t *testing.T) {
+func TestReleaseEvidenceVerifierRejectsUnnormalizedTemporaryTrivyOCIDirectoryName(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle := writeReleaseEvidenceBundle(t, false)
 	evidence := readReleaseEvidence(t, bundle.directory)
-	scan := strings.Replace(releaseEvidenceScan(bundle.imageReference, bundle.imageDigest, false), `"ArtifactName":"image.oci.tar"`, `"ArtifactName":"/private/runner-temp/image.oci.tar"`, 1)
+	scan := strings.Replace(releaseEvidenceScan(bundle.imageReference, bundle.imageDigest, false), `"ArtifactName":"image.oci"`, `"ArtifactName":"/private/runner-temp/image.oci"`, 1)
 	replaceReleaseEvidenceArtifact(t, bundle, evidence, "image_scan", []byte(scan))
 	writeReleaseEvidence(t, bundle.directory, evidence)
 
@@ -1001,7 +1113,7 @@ func TestReleaseEvidenceVerifierRejectsUnnormalizedTemporaryTrivyArchiveName(t *
 	if err == nil {
 		t.Fatalf("release evidence verifier accepted a runner-temporary Trivy path:\n%s", output)
 	}
-	if !strings.Contains(string(output), "normalized to the temporary OCI archive basename") {
+	if !strings.Contains(string(output), "normalized to the temporary OCI directory basename") {
 		t.Fatalf("unnormalized temporary Trivy path failure = %q", output)
 	}
 }
@@ -1161,6 +1273,24 @@ func TestReleaseEvidenceVerifierRejectsResidualOCIArchive(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceVerifierRejectsResidualOCILayoutDirectory(t *testing.T) {
+	root := repositoryRoot(t)
+	bundle := writeReleaseEvidenceBundle(t, false)
+	layout := filepath.Join(bundle.directory, "image.oci")
+	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeReleaseArtifact(t, filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`))
+
+	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
+	if err == nil {
+		t.Fatalf("release evidence verifier accepted a residual OCI layout directory:\n%s", output)
+	}
+	if !strings.Contains(string(output), "unreferenced directory") {
+		t.Fatalf("residual OCI layout directory failure = %q", output)
+	}
+}
+
 func TestReleaseEvidenceVerifierScansEveryRetainedArtifact(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, name := range requiredReleaseEvidenceArtifacts {
@@ -1266,6 +1396,32 @@ func TestReleaseEvidenceRecorderRejectsImageLayoutArtifact(t *testing.T) {
 	}
 	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
 		t.Fatalf("recorder wrote evidence after raw OCI archive rejection: %v", err)
+	}
+}
+
+func TestReleaseEvidenceRecorderRejectsResidualOCILayoutDirectory(t *testing.T) {
+	root := repositoryRoot(t)
+	bundle := writeReleaseEvidenceBundle(t, false)
+	directory := resolvedReleaseEvidenceDirectory(t, bundle.directory)
+	if err := os.Remove(filepath.Join(directory, "evidence.json")); err != nil {
+		t.Fatal(err)
+	}
+	layout := filepath.Join(directory, "image.oci")
+	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeReleaseArtifact(t, filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`))
+	outputPath := filepath.Join(directory, "evidence.json")
+
+	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)
+	if err == nil {
+		t.Fatalf("release evidence recorder accepted a residual OCI layout directory:\n%s", output)
+	}
+	if !strings.Contains(string(output), "unreferenced directory") {
+		t.Fatalf("residual OCI layout directory recorder failure = %q", output)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("recorder wrote evidence after residual OCI layout rejection: %v", err)
 	}
 }
 
@@ -1525,7 +1681,7 @@ type releaseEvidenceBundle struct {
 func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvidenceBundle {
 	t.Helper()
 	directory := t.TempDir()
-	imageDigest := writeReleaseEvidenceOCILayout(t, filepath.Join(t.TempDir(), "image.oci.tar"))
+	imageDigest := writeReleaseEvidenceOCILayout(t, filepath.Join(t.TempDir(), "image.oci"))
 	imageReference := "llm-temporal-worker@" + imageDigest
 	contents := map[string]string{
 		"test_summary":          releaseEvidenceGateSummary("test_summary"),
@@ -1594,7 +1750,7 @@ func releaseEvidenceScan(reference, digest string, criticalFinding bool) string 
 	if criticalFinding {
 		vulnerabilities = `[{"VulnerabilityID":"CVE-2026-0001","Severity":"CRITICAL"}]`
 	}
-	return `{"SchemaVersion":2,"ArtifactName":"image.oci.tar","ArtifactType":"container_image","release_subject":{"reference":"` + reference + `","digest":"` + digest + `"},"Results":[{"Target":"image","Vulnerabilities":` + vulnerabilities + `}]}`
+	return `{"SchemaVersion":2,"ArtifactName":"image.oci","ArtifactType":"container_image","release_subject":{"reference":"` + reference + `","digest":"` + digest + `"},"Results":[{"Target":"image","Vulnerabilities":` + vulnerabilities + `}]}`
 }
 
 func writeReleaseEvidenceOCILayout(t *testing.T, path string) string {
@@ -1618,11 +1774,9 @@ func writeReleaseEvidenceOCILayoutWithCompatibility(t *testing.T, path string, i
 	manifestDigest := sha256Hex(manifest)
 	index := []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%d}]}`,
 		manifestDigest, len(manifest)))
-	file, err := os.Create(path)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writer := tar.NewWriter(file)
 	entries := []struct {
 		name string
 		data []byte
@@ -1640,23 +1794,7 @@ func writeReleaseEvidenceOCILayoutWithCompatibility(t *testing.T, path string, i
 		}{name: "manifest.json", data: []byte(`[]`)})
 	}
 	for _, entry := range entries {
-		if err := writer.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.data)), Typeflag: tar.TypeReg}); err != nil {
-			writer.Close()
-			file.Close()
-			t.Fatal(err)
-		}
-		if _, err := writer.Write(entry.data); err != nil {
-			writer.Close()
-			file.Close()
-			t.Fatal(err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		file.Close()
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
+		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
 	}
 	return "sha256:" + manifestDigest
 }

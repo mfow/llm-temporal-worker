@@ -12,25 +12,28 @@ The `release-evidence` job runs only after `verify` on a `push` to `master`.
 Pull-request, scheduled, and manual workflow executions do not collect or
 retain this bundle. The job has only `contents: read` permission.
 
-The job builds one Linux OCI archive at `$RUNNER_TEMP/image.oci.tar`, outside
-`release-artifacts/`, runtime-tests the image loaded from that archive, then
-obtains the immutable image subject from the archive's single OCI manifest
-descriptor:
+The job builds one Linux OCI layout directory at `$RUNNER_TEMP/image.oci`,
+outside `release-artifacts/`, runtime-tests the image loaded by the same Buildx
+solve, then obtains the immutable image subject from the layout's single OCI
+manifest descriptor:
 
 ```sh
-digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci.tar")"
+digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
 reference="llm-temporal-worker@$digest"
 ```
 
 The descriptor, rather than a local image ID or mutable tag, is the source of
 truth. The retained CycloneDX SBOM and Trivy JSON scan are both bound to the
 same `reference` and `digest`; the verifier rejects stale or mismatched
-subjects. The raw archive is CI-temporary evidence only: it is used for the
-descriptor, Syft, and Trivy, never recorded or uploaded, and is removed after
-the artifact-upload step. Trusted CI uses explicit Syft `v1.44.0` and Trivy
-`v0.72.0` inputs, with the checked-in
+subjects. The raw OCI layout directory is CI-temporary only: the descriptor,
+Syft, and Trivy consume that exact directory; it is never recorded or uploaded
+and is removed after artifact upload. The Buildx action explicitly pins Buildx
+`v0.16.2` and BuildKit `v0.16.0` by immutable image digest, so its two
+same-solve exporters (`type=oci,tar=false` and `--load`) meet Docker's
+multi-exporter capability requirement without a second build. Trusted CI uses
+explicit Syft `v1.44.0` and Trivy `v0.72.0` inputs, with the checked-in
 [Trivy configuration](../../scripts/release/trivy.yaml) applied to that
-temporary archive.
+temporary directory.
 
 Before compact manifest collection, trusted CI installs `kubectl v1.32.6` with
 the immutable `azure/setup-kubectl` `v4.0.1` action commit. The collector
@@ -65,37 +68,38 @@ URL with a DNS hostname and no explicit port, userinfo, backslashes, query
 strings, or fragments. This keeps credentials and mutable URL decorations out
 of retained release evidence.
 
-Command output, scanner diagnostics, the raw OCI archive, credentials, request
-content, and provider payloads stay in private runner temporary storage. Raw
-service output also stays there: the three retained log records contain only
-fixed allowlisted event counts (`allowlist-v1`), plus the observed line and
-byte counts. This preserves proof that Redis and Temporal each emitted a safe
-runtime-boundary event, including both families in the combined Compose record,
-without retaining arbitrary message text. The verifier scans every retained
-artifact for secret-like values and rejects unsafe paths, symlinks, residual
-raw OCI archives, unreferenced files, digest or byte-count changes, incomplete
-fixture records, mismatched image subjects, and HIGH or CRITICAL image findings.
+Command output, scanner diagnostics, the raw OCI layout directory, credentials,
+request content, and provider payloads stay in private runner temporary
+storage. Raw service output also stays there: the three retained log records
+contain only fixed allowlisted event counts (`allowlist-v1`), plus the observed
+line and byte counts. This preserves proof that Redis and Temporal each emitted
+a safe runtime-boundary event, including both families in the combined Compose
+record, without retaining arbitrary message text. The verifier scans every
+retained artifact for secret-like values and rejects unsafe paths, symlinks,
+residual raw OCI directories or archives, unreferenced files, digest or
+byte-count changes, incomplete fixture records, mismatched image subjects, and
+HIGH or CRITICAL image findings.
 
 ## Collect, record, and verify
 
-The trusted job first produces the compact summaries and a temporary OCI
-archive outside the retained directory:
+The trusted job first produces the compact summaries and a temporary OCI layout
+directory outside the retained directory:
 
 ```sh
-oci_archive="$RUNNER_TEMP/image.oci.tar"
+oci_layout="$RUNNER_TEMP/image.oci"
 bash scripts/release/collect.sh \
   --artifact-dir release-artifacts \
-  --image-oci-layout "$oci_archive"
+  --image-oci-layout "$oci_layout"
 ```
 
-The collector rejects an archive path inside `release-artifacts/`. It then
-generates the SBOM and scan from the temporary archive, binds both to the
+The collector rejects a layout path inside `release-artifacts/`. It then
+generates the SBOM and scan from the temporary directory, binds both to the
 descriptor subject above, and records the completed bundle. A local caller
-must supply a temporary archive path outside its evidence directory and the
-two final JSON files before it can record the exact same bundle:
+must supply a temporary layout path outside its evidence directory and the two
+final JSON files before it can record the exact same bundle:
 
 ```sh
-digest="$(go run ./tools/releaseverify layout-digest -layout "$oci_archive")"
+digest="$(go run ./tools/releaseverify layout-digest -layout "$oci_layout")"
 reference="llm-temporal-worker@$digest"
 
 bash scripts/release/record.sh \
@@ -140,5 +144,8 @@ bash scripts/release/verify.sh \
 ```
 
 After successful verification the master-push job retains the redacted bundle
-for 14 days and removes `$RUNNER_TEMP/image.oci.tar`. `release-artifacts/` is
-ignored by Git and excluded from the Docker build context.
+for 14 days and removes `$RUNNER_TEMP/image.oci`. It never produces or
+retains `image.oci.tar`, never uses `oci-archive:`, and never uses
+`docker load --input`; the unretained directory is the only raw OCI subject.
+`release-artifacts/` is ignored by Git and excluded from the Docker build
+context.
