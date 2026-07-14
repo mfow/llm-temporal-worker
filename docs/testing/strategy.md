@@ -88,15 +88,13 @@ silently change encoding.
 
 ### Streaming tests
 
-For each representative stream byte sequence, a fragmentation harness feeds:
-
-- the complete stream;
-- one byte at a time;
-- every two-part split point;
-- deterministic random chunking;
-- empty chunks and CR/LF boundary splits.
-
-All chunkings must produce the same typed events/final response. Tests also cover
+The checked-in provider decoder tests currently exercise representative streams
+as complete input, one byte at a time, and deterministic seeded random chunks.
+The chunk readers tolerate zero-length reads, but the provider tests do not yet
+inject empty chunks or enumerate every two-part split point and CR/LF boundary.
+Those cases remain part of the v1 completion matrix and must be added before
+claiming exhaustive fragmentation coverage. For every case that is exercised,
+the decoder must produce the same typed events and final response. Tests also cover
 duplicate/out-of-order IDs, invalid UTF-8, partial JSON/tool arguments, missing
 terminal event, terminal error after deltas, cancellation, and oversized event.
 
@@ -116,9 +114,11 @@ Fuzz targets include:
 - Redis Function argument codec;
 - response aggregation under arbitrary event sequences.
 
-Seed corpora contain every golden fixture plus minimized past failures. CI runs
-short deterministic fuzz smoke; scheduled master CI runs longer fuzz jobs once
-implementation exists.
+Seed corpora contain every golden fixture plus minimized past failures. The
+current pull-request and master workflows replay those seeds through ordinary
+`go test` but do not run Go's `-fuzz` mode. Short deterministic fuzz smoke and
+longer scheduled fuzz jobs remain planned release gates; run a named target
+locally as shown above when investigating a decoder or parser change.
 
 ### Store conformance
 

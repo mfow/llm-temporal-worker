@@ -96,8 +96,11 @@ stream:
 - provider tier and response metadata;
 - terminal success, terminal provider error, and truncated stream.
 
-The fragmentation harness executes every representative fixture as full,
-single-byte, every split point, and seeded random chunks.
+The checked-in provider tests currently execute representative fixtures as full
+streams, single-byte chunks, and deterministic seeded random chunks. The v1
+acceptance matrix still requires explicit every-split-point, empty-read, and
+CR/LF-boundary cases; those are not yet covered by the current provider test
+suite.
 
 ## Reverse-conversion assertions
 
