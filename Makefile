@@ -244,14 +244,14 @@ compose-live-integration:
 	fi
 
 deployment-policy-verify:
-	KUBECTL= $(GO) test ./integration/kubernetes
+	KUBECTL="$(KUBECTL)" ./deploy/verify.sh
+	$(GO) test ./integration/kubernetes
 
 kustomize-verify:
 	@command -v "$(KUBECTL)" >/dev/null 2>&1 || { \
 		echo "kustomize-verify requires '$(KUBECTL)'; install kubectl or set KUBECTL to a pinned executable" >&2; \
 		exit 2; \
 	}
-	KUBECTL="$(KUBECTL)" $(GO) test ./integration/kubernetes
 	KUBECTL="$(KUBECTL)" ./deploy/verify.sh
 
 adapter-contracts:

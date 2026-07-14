@@ -19,15 +19,25 @@ Kubernetes manifests live under `kubernetes/base` and include:
 - AWS and Azure workload-identity examples that opt into service-account token
   mounting only in the selected overlay.
 
-Render and check every manifest offline with:
+Render and structurally inspect every manifest offline with:
 
 ```sh
-./deploy/verify.sh
+make deployment-policy-verify
 ```
 
-The script uses the local `kubectl kustomize` implementation and never contacts
-a cluster. Replace the example image/config/catalog/identity values in a
-reviewed overlay before production use; no credentials belong in this tree.
+For an explicit, reviewed `kubectl` binary, run the companion check with its
+path pinned by the invoking environment:
+
+```sh
+KUBECTL=/path/to/pinned/kubectl make kustomize-verify
+```
+
+Both commands use only `kubectl kustomize`; neither can apply a resource or
+contact a cluster. The rendered policy rejects root or string identities,
+unbounded writable storage, missing CPU/memory constraints, unsafe service
+account token mounting, and probe paths that diverge from the worker contract.
+Replace the example image/config/catalog/identity values in a reviewed overlay
+before production use; no credentials belong in this tree.
 
 ## Hardened image verification
 

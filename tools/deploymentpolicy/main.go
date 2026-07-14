@@ -1,0 +1,471 @@
+// Command deploymentpolicy validates locally rendered Kubernetes workload
+// manifests without contacting a cluster.
+package main
+
+import (
+	"bytes"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"strings"
+
+	yaml "go.yaml.in/yaml/v4"
+)
+
+const runtimeIdentity = 65532
+
+func main() {
+	rendered := flag.String("rendered", "", "path to a rendered Kubernetes manifest")
+	overlay := flag.String("overlay", "", "Kustomize overlay name")
+	flag.Parse()
+
+	if *rendered == "" || *overlay == "" {
+		fmt.Fprintln(os.Stderr, "deployment policy verification requires --rendered and --overlay")
+		os.Exit(2)
+	}
+	data, err := os.ReadFile(*rendered)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "deployment policy verification cannot read rendered manifest")
+		os.Exit(1)
+	}
+	if err := verifyRendered(*overlay, data); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Printf("deployment policy verified for %s\n", *overlay)
+}
+
+func verifyRendered(overlay string, rendered []byte) error {
+	documents, err := decodeDocuments(rendered)
+	if err != nil {
+		return fmt.Errorf("deployment policy verification cannot decode %s: %w", overlay, err)
+	}
+
+	deployment, err := findResource(documents, "Deployment", "llmtw-worker")
+	if err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
+	serviceAccount, err := findResource(documents, "ServiceAccount", "llmtw-worker")
+	if err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
+	if err := verifyWorkload(overlay, deployment, serviceAccount); err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
+	return nil
+}
+
+func decodeDocuments(rendered []byte) ([]map[string]any, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(rendered))
+	var documents []map[string]any
+	for {
+		var document map[string]any
+		err := decoder.Decode(&document)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(document) != 0 {
+			documents = append(documents, document)
+		}
+	}
+	if len(documents) == 0 {
+		return nil, errors.New("rendered manifest is empty")
+	}
+	return documents, nil
+}
+
+func findResource(documents []map[string]any, kind, name string) (map[string]any, error) {
+	for _, document := range documents {
+		if stringAt(document, "kind") != kind {
+			continue
+		}
+		metadata, ok := mapAt(document, "metadata")
+		if ok && stringAt(metadata, "name") == name {
+			return document, nil
+		}
+	}
+	return nil, fmt.Errorf("rendered %s %q is missing", strings.ToLower(kind), name)
+}
+
+func verifyWorkload(overlay string, deployment, serviceAccount map[string]any) error {
+	podSpec, err := deploymentPodSpec(deployment)
+	if err != nil {
+		return err
+	}
+	securityContext, ok := mapAt(podSpec, "securityContext")
+	if !ok {
+		return errors.New("pod securityContext is missing")
+	}
+	if boolAt(securityContext, "runAsNonRoot") != true {
+		return errors.New("runAsNonRoot must be true")
+	}
+	if !integerEqual(valueAt(securityContext, "runAsUser"), runtimeIdentity) {
+		return errors.New("runAsUser must be the positive numeric UID 65532")
+	}
+	if !integerEqual(valueAt(securityContext, "runAsGroup"), runtimeIdentity) {
+		return errors.New("runAsGroup must be the numeric GID 65532")
+	}
+	if !integerEqual(valueAt(securityContext, "fsGroup"), runtimeIdentity) {
+		return errors.New("fsGroup must be the numeric fsGroup 65532")
+	}
+	seccomp, ok := mapAt(securityContext, "seccompProfile")
+	if !ok || stringAt(seccomp, "type") != "RuntimeDefault" {
+		return errors.New("seccompProfile.type must be RuntimeDefault")
+	}
+	if !positiveInteger(valueAt(podSpec, "terminationGracePeriodSeconds")) {
+		return errors.New("terminationGracePeriodSeconds must be a positive number")
+	}
+	if initContainers, exists := podSpec["initContainers"]; exists {
+		entries, ok := initContainers.([]any)
+		if !ok || len(entries) != 0 {
+			return errors.New("init containers are not allowed")
+		}
+	}
+
+	if err := verifyServiceAccountPolicy(overlay, podSpec, serviceAccount); err != nil {
+		return err
+	}
+	containers, ok := listAt(podSpec, "containers")
+	if !ok || len(containers) != 1 {
+		return errors.New("worker deployment must contain exactly one container")
+	}
+	container, err := namedListItem(podSpec, "containers", "worker")
+	if err != nil {
+		return err
+	}
+	if err := verifyWorkerContainer(container); err != nil {
+		return err
+	}
+	if err := verifyWritableMounts(container, podSpec); err != nil {
+		return err
+	}
+	return nil
+}
+
+func deploymentPodSpec(deployment map[string]any) (map[string]any, error) {
+	spec, ok := mapAt(deployment, "spec")
+	if !ok {
+		return nil, errors.New("deployment spec is missing")
+	}
+	template, ok := mapAt(spec, "template")
+	if !ok {
+		return nil, errors.New("deployment template is missing")
+	}
+	podSpec, ok := mapAt(template, "spec")
+	if !ok {
+		return nil, errors.New("deployment pod spec is missing")
+	}
+	return podSpec, nil
+}
+
+func verifyServiceAccountPolicy(overlay string, podSpec, serviceAccount map[string]any) error {
+	if stringAt(podSpec, "serviceAccountName") != "llmtw-worker" {
+		return errors.New("worker must use the llmtw-worker service account")
+	}
+	podAutomount, podAutomountSet := boolValue(valueAt(podSpec, "automountServiceAccountToken"))
+	accountAutomount, accountAutomountSet := boolValue(valueAt(serviceAccount, "automountServiceAccountToken"))
+	if !podAutomountSet || !accountAutomountSet || podAutomount != accountAutomount {
+		return errors.New("pod and service account must declare the same token automount policy")
+	}
+
+	switch overlay {
+	case "aws-workload-identity":
+		if !podAutomount || !serviceAccountAnnotation(serviceAccount, "eks.amazonaws.com/role-arn") {
+			return errors.New("AWS workload identity must opt in to the reviewed service account token policy")
+		}
+	case "azure-workload-identity":
+		if !podAutomount || !serviceAccountAnnotation(serviceAccount, "azure.workload.identity/client-id") {
+			return errors.New("Azure workload identity must opt in to the reviewed service account token policy")
+		}
+	default:
+		if podAutomount {
+			return errors.New("service account token automount is allowed only in a workload identity overlay")
+		}
+	}
+	return nil
+}
+
+func serviceAccountAnnotation(serviceAccount map[string]any, key string) bool {
+	metadata, ok := mapAt(serviceAccount, "metadata")
+	if !ok {
+		return false
+	}
+	annotations, ok := mapAt(metadata, "annotations")
+	if !ok {
+		return false
+	}
+	return stringAt(annotations, key) != ""
+}
+
+func verifyWorkerContainer(container map[string]any) error {
+	if !strings.Contains(stringAt(container, "image"), "@sha256:") {
+		return errors.New("worker image must be digest pinned")
+	}
+	securityContext, ok := mapAt(container, "securityContext")
+	if !ok {
+		return errors.New("worker securityContext is missing")
+	}
+	allowPrivilegeEscalation, allowPrivilegeEscalationSet := boolValue(valueAt(securityContext, "allowPrivilegeEscalation"))
+	if !allowPrivilegeEscalationSet || allowPrivilegeEscalation {
+		return errors.New("worker must disable privilege escalation")
+	}
+	if boolAt(securityContext, "readOnlyRootFilesystem") != true {
+		return errors.New("worker root filesystem must be read-only")
+	}
+	capabilities, ok := mapAt(securityContext, "capabilities")
+	if !ok || !listContainsString(valueAt(capabilities, "drop"), "ALL") {
+		return errors.New("worker must drop every Linux capability")
+	}
+	if err := verifyResources(container); err != nil {
+		return err
+	}
+	if err := verifyHealthPort(container); err != nil {
+		return err
+	}
+	if err := verifyProbe(container, "livenessProbe", "/health/live"); err != nil {
+		return err
+	}
+	if err := verifyProbe(container, "readinessProbe", "/health/ready"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyResources(container map[string]any) error {
+	resources, ok := mapAt(container, "resources")
+	if !ok {
+		return errors.New("worker resource constraints are missing")
+	}
+	for _, class := range []string{"requests", "limits"} {
+		values, ok := mapAt(resources, class)
+		if !ok || stringAt(values, "cpu") == "" || stringAt(values, "memory") == "" {
+			return fmt.Errorf("worker %s must bound CPU and memory", class)
+		}
+	}
+	return nil
+}
+
+func verifyHealthPort(container map[string]any) error {
+	ports, ok := listAt(container, "ports")
+	if !ok {
+		return errors.New("worker health port is missing")
+	}
+	for _, port := range ports {
+		entry, ok := asMap(port)
+		if ok && stringAt(entry, "name") == "health" && integerEqual(valueAt(entry, "containerPort"), 8080) {
+			return nil
+		}
+	}
+	return errors.New("worker must expose a named health port")
+}
+
+func verifyProbe(container map[string]any, name, path string) error {
+	probe, ok := mapAt(container, name)
+	if !ok {
+		return fmt.Errorf("worker %s is missing", name)
+	}
+	httpGet, ok := mapAt(probe, "httpGet")
+	if !ok || stringAt(httpGet, "path") != path || !healthPortReference(valueAt(httpGet, "port")) {
+		return fmt.Errorf("worker %s must use the health port and %s", name, path)
+	}
+	return nil
+}
+
+func healthPortReference(value any) bool {
+	name, ok := value.(string)
+	return ok && name == "health"
+}
+
+func verifyWritableMounts(container, podSpec map[string]any) error {
+	mounts, ok := listAt(container, "volumeMounts")
+	if !ok {
+		return errors.New("worker volume mounts are missing")
+	}
+	volumes, ok := listAt(podSpec, "volumes")
+	if !ok {
+		return errors.New("pod volumes are missing")
+	}
+	volumeByName := make(map[string]map[string]any, len(volumes))
+	for _, volume := range volumes {
+		entry, ok := asMap(volume)
+		if !ok {
+			return errors.New("pod volume is invalid")
+		}
+		name := stringAt(entry, "name")
+		if name == "" {
+			return errors.New("pod volume name is missing")
+		}
+		if _, unsafe := entry["hostPath"]; unsafe {
+			return errors.New("hostPath volumes are not allowed")
+		}
+		volumeByName[name] = entry
+	}
+
+	writableMounts := 0
+	for _, mount := range mounts {
+		entry, ok := asMap(mount)
+		if !ok {
+			return errors.New("worker volume mount is invalid")
+		}
+		name := stringAt(entry, "name")
+		path := stringAt(entry, "mountPath")
+		if name == "" || path == "" || volumeByName[name] == nil {
+			return errors.New("worker volume mount must reference a declared volume")
+		}
+		readOnly, set := boolValue(valueAt(entry, "readOnly"))
+		if path != "/tmp" {
+			if !set || !readOnly {
+				return fmt.Errorf("worker mount %s must be read-only", path)
+			}
+			continue
+		}
+		if set && readOnly {
+			return errors.New("worker /tmp mount must be writable")
+		}
+		writableMounts++
+		if err := verifyBoundedTemporaryVolume(volumeByName[name]); err != nil {
+			return err
+		}
+	}
+	if writableMounts != 1 {
+		return errors.New("worker must have exactly one writable /tmp mount")
+	}
+	return nil
+}
+
+func verifyBoundedTemporaryVolume(volume map[string]any) error {
+	emptyDir, ok := mapAt(volume, "emptyDir")
+	if !ok || stringAt(emptyDir, "medium") != "Memory" || stringAt(emptyDir, "sizeLimit") == "" {
+		return errors.New("worker /tmp must use a bounded memory emptyDir")
+	}
+	return nil
+}
+
+func namedListItem(parent map[string]any, key, name string) (map[string]any, error) {
+	entries, ok := listAt(parent, key)
+	if !ok {
+		return nil, fmt.Errorf("%s is missing", key)
+	}
+	for _, entry := range entries {
+		value, ok := asMap(entry)
+		if ok && stringAt(value, "name") == name {
+			return value, nil
+		}
+	}
+	return nil, fmt.Errorf("%s %q is missing", key, name)
+}
+
+func mapAt(value map[string]any, key string) (map[string]any, bool) {
+	return asMap(valueAt(value, key))
+}
+
+func listAt(value map[string]any, key string) ([]any, bool) {
+	list, ok := valueAt(value, key).([]any)
+	return list, ok
+}
+
+func asMap(value any) (map[string]any, bool) {
+	mapping, ok := value.(map[string]any)
+	return mapping, ok
+}
+
+func valueAt(value map[string]any, key string) any {
+	return value[key]
+}
+
+func stringAt(value map[string]any, key string) string {
+	text, _ := valueAt(value, key).(string)
+	return text
+}
+
+func boolAt(value map[string]any, key string) bool {
+	result, _ := boolValue(valueAt(value, key))
+	return result
+}
+
+func boolValue(value any) (bool, bool) {
+	result, ok := value.(bool)
+	return result, ok
+}
+
+func positiveInteger(value any) bool {
+	switch number := value.(type) {
+	case int:
+		return number > 0
+	case int8:
+		return number > 0
+	case int16:
+		return number > 0
+	case int32:
+		return number > 0
+	case int64:
+		return number > 0
+	case uint:
+		return number > 0
+	case uint8:
+		return number > 0
+	case uint16:
+		return number > 0
+	case uint32:
+		return number > 0
+	case uint64:
+		return number > 0
+	case float32:
+		return number > 0 && math.Trunc(float64(number)) == float64(number)
+	case float64:
+		return number > 0 && math.Trunc(number) == number
+	default:
+		return false
+	}
+}
+
+func integerEqual(value any, expected int) bool {
+	switch number := value.(type) {
+	case int:
+		return number == expected
+	case int8:
+		return int(number) == expected
+	case int16:
+		return int(number) == expected
+	case int32:
+		return int(number) == expected
+	case int64:
+		return number == int64(expected)
+	case uint:
+		return number == uint(expected)
+	case uint8:
+		return int(number) == expected
+	case uint16:
+		return int(number) == expected
+	case uint32:
+		return number == uint32(expected)
+	case uint64:
+		return number == uint64(expected)
+	case float32:
+		return math.Trunc(float64(number)) == float64(number) && int(number) == expected
+	case float64:
+		return math.Trunc(number) == number && int(number) == expected
+	default:
+		return false
+	}
+}
+
+func listContainsString(value any, expected string) bool {
+	values, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, value := range values {
+		text, ok := value.(string)
+		if ok && text == expected {
+			return true
+		}
+	}
+	return false
+}
