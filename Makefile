@@ -7,7 +7,7 @@ READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e8
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 READINESS_REDIS_PORT ?= 16379
 
-.PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration compose-smoke deployment-policy-verify kustomize-verify adapter-contracts security-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -17,6 +17,9 @@ schema-verify:
 
 docs-verify:
 	$(GO) test ./internal/documentationtest -run TestDocumentationLinksAndInvariants
+
+workflow-verify:
+	bash scripts/check-workflow-policy.sh
 
 vet:
 	$(GO) vet ./...

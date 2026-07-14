@@ -244,7 +244,11 @@ requests. It has read-only permissions and no provider credentials.
 day at 05:00 using the `Australia/Sydney` schedule timezone. Release publishing
 is a later opt-in job; a scheduled validation never deploys automatically.
 
-Both workflows use concurrency cancellation, pinned major official actions,
-dependency caching through `setup-go`, explicit timeouts, and conditional Go/
-Docker steps. This checkout contains the Go implementation and Dockerfile, so
-the full implementation gates run on pull requests and master pushes.
+Both workflows use concurrency cancellation, immutable official-action commits
+with readable major-version comments, dependency caching through `setup-go`,
+explicit timeouts, and conditional Go/Docker steps. `make workflow-verify`
+uses pinned `actionlint` syntax validation plus a YAML contract test to keep
+that split, the exact Sydney schedule, and the no-credential/no-deployment
+boundary enforceable from a checkout. This checkout contains the Go
+implementation and Dockerfile, so the full implementation gates run on pull
+requests and master pushes.
