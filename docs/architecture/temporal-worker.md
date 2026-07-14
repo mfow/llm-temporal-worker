@@ -32,6 +32,14 @@ Dependencies are injected into an Activity struct and registered as methods.
 The Activity does not construct clients, read environment variables, or mutate
 global state.
 
+The process-level composition lives in `internal/runtime`. It validates and
+publishes one non-secret configuration snapshot, creates the Temporal client
+with TLS roots loaded from bounded regular files, starts separate health and
+metrics listeners, and injects the Activity's engine through a snapshot lease.
+Provider/state construction is an explicit `EngineFactory` seam: the CLI fails
+closed until a deployment supplies a provider-backed implementation rather
+than starting a worker that can only accept work and fail every Activity.
+
 ## Payload contract
 
 `GenerateRequest` wraps the canonical `llm.temporal/v1` request with only
@@ -175,6 +183,12 @@ On `SIGTERM`/`SIGINT`, readiness turns false first. The process stops polling,
 allows the Temporal worker's configured graceful stop timeout, flushes telemetry
 within a bound, and exits nonzero when shutdown integrity fails. Kubernetes
 termination grace must exceed worker graceful stop plus telemetry flush.
+
+`cmd/llm-temporal-worker` installs a signal-aware context and delegates the
+worker command to `internal/runtime`. Runtime shutdown closes probe listeners,
+drains the captured snapshot clients, and closes the Temporal SDK client after
+polling has stopped. Runtime errors are bounded, actionable messages and never
+include resolved secret bytes or provider payloads.
 
 Liveness proves only that the process event loop is responsive. Readiness proves
 there is a valid snapshot, Temporal registration is running, and required Redis
