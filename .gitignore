@@ -27,6 +27,9 @@ go.work.sum
 # Local implementation worktrees
 .worktrees/
 
+# Local subagent briefs, review packages, and execution ledger
+.superpowers/
+
 # env file
 .env
 

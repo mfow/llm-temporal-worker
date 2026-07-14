@@ -42,6 +42,7 @@ work that follows the foundation.
 10. [Security and privacy](architecture/security-and-privacy.md)
 11. [Testing strategy](testing/strategy.md)
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
+13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
 
 ## Reference material
 
