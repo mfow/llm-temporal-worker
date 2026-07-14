@@ -14,6 +14,22 @@ Redis implements operation, budget, and continuation state. A blob-store port
 handles payloads that exceed safe Redis or Temporal inline limits; filesystem is
 development-only and object storage is the production example.
 
+The `storage/redis` implementation uses the official go-redis v9 client and
+one embedded, versioned Lua Function for each admission mutation. Every key
+touched by a mutation is supplied explicitly and carries the configured
+`{admission}` hash tag. A transport error is never retried blindly; the caller
+reads the operation or continuation index to resolve whether the write
+committed. Offline command/function harnesses exercise the same store ports
+without requiring a Redis daemon. The live gate remains a pinned Redis
+integration run with Functions enabled and persistence settings matching the
+deployment profile.
+
+Budget hashes receive a Redis TTL only when the operation has an explicit
+expiry; the TTL is the operation retention plus the longest matching window.
+This keeps every bucket needed by an in-flight operation visible while
+allowing expired windows to be collected. Operations without an expiry are
+retained until the configured Redis retention/GC policy removes them.
+
 ## Operation record
 
 ```go
@@ -81,7 +97,8 @@ llmtw:{admission}:op:<scope-hmac>:<operation-hmac>
 llmtw:{admission}:budget:<policy-version>:<window>:<bucket>
 llmtw:{admission}:function-version
 
-llmtw:continuation:<tenant-hmac>:<continuation-id>
+llmtw:{admission}:continuation:<tenant-hmac>:<continuation-id>
+llmtw:{admission}:continuation:index:<handle-hmac>
 llmtw:result:<tenant-hmac>:<digest>
 ```
 

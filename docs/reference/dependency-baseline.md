@@ -30,6 +30,7 @@ allowed to leak into the `llm` package.
 | `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.105.1` | Official AWS S3 client for production content-addressed blobs | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/prometheus/client_golang` | `v1.23.2` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |
 | `go.opentelemetry.io/otel` and `/sdk` | `v1.39.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
 
 The SDK versions above are checked against their official release/source pages
 and the live Go module index on the recorded date. OpenAI's current module
