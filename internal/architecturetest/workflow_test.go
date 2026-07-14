@@ -126,6 +126,15 @@ func TestWorkflowVerificationEntrypoint(t *testing.T) {
 	}
 }
 
+func TestWorkflowsRunHardenedImageVerification(t *testing.T) {
+	for _, name := range []string{"master.yml", "pull-request.yml"} {
+		workflow := readWorkflow(t, name)
+		if !hasRunCommand(workflow, "make image-verify") {
+			t.Fatalf("%s does not run make image-verify", workflow.name)
+		}
+	}
+}
+
 func assertPullRequestTrigger(t *testing.T, workflow workflowDocument) {
 	t.Helper()
 	triggers := workflowMapping(t, workflow, "on")

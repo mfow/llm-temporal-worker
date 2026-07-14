@@ -40,6 +40,7 @@ server, or a Kubernetes cluster:
 
 ```sh
 make integration
+make image-verify
 make compose-smoke
 make deployment-policy-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
@@ -80,6 +81,13 @@ deploy, publish, or contact a provider.
 The release plan may list additional future gates; the commands above are the
 currently implemented targets. Both CI workflows call the same formatting
 helper as `make fmt-check`, and it checks rather than modifies files.
+
+`make image-verify` requires Docker. It builds an image from the checked-out
+revision, compares its five build-metadata fields in both OCI labels and the
+binary's `version` output, and starts the image without a shell or root
+override. That runtime check requires numeric UID/GID `65532:65532`, a
+read-only root filesystem, and only the documented `/tmp` tmpfs writable
+mount before probing `/health/live` and `/health/ready`.
 
 ## Test layers
 
