@@ -186,9 +186,27 @@ func readinessStatus(address, path string) (int, error) {
 
 type readinessNoProviderEngine struct{ calls atomic.Int32 }
 
+func TestReadinessNoProviderEngineRejectsGenerationAndStreaming(t *testing.T) {
+	engine := &readinessNoProviderEngine{}
+	if _, err := engine.Generate(context.Background(), llm.Request{}); err == nil {
+		t.Fatal("Generate unexpectedly succeeded")
+	}
+	if _, err := engine.Stream(context.Background(), llm.Request{}); err == nil {
+		t.Fatal("Stream unexpectedly succeeded")
+	}
+	if calls := engine.calls.Load(); calls != 2 {
+		t.Fatalf("forbidden provider calls = %d, want 2", calls)
+	}
+}
+
 func (engine *readinessNoProviderEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
 	engine.calls.Add(1)
 	return llm.Response{}, errors.New("provider calls are forbidden in readiness integration")
+}
+
+func (engine *readinessNoProviderEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
+	engine.calls.Add(1)
+	return nil, errors.New("provider calls are forbidden in readiness integration")
 }
 
 type readinessBucket struct{ calls atomic.Int32 }
