@@ -24,6 +24,7 @@ type Snapshot struct {
 	Health                routing.HealthView
 	Prices                pricing.Resolver
 	BudgetPolicies        []budget.Policy
+	RequireBudgetMatch    bool
 	Environment           string
 	ReservationLease      time.Duration
 	OperationRetention    time.Duration
