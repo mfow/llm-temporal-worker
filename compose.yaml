@@ -39,13 +39,24 @@ services:
 
   redis:
     image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    environment:
+      REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
+      REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        exec redis-server \
+          --appendonly yes \
+          --save "60 1" \
+          --user "default off" \
+          --user "$${REDIS_USERNAME} on >$${REDIS_PASSWORD} ~* +@all"
     ports:
       - "127.0.0.1:${LLMTW_COMPOSE_REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", 'redis-cli --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" ping']
       interval: 5s
       timeout: 3s
       retries: 24
@@ -60,13 +71,16 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    environment:
+      REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
+      REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
         library=llmtw_admission_v1
         version=admission_v1
         source=/opt/llmtw/functions/admission.lua
-        if redis-cli -h redis --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
+        if redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
           echo "Redis Function $${library} already exists; leaving it unchanged"
           exit 0
         fi
@@ -75,7 +89,7 @@ services:
           printf '%s\n' "redis.register_function('$${version}', function(KEYS, ARGV)"
           cat "$${source}"
           printf '\nend)\n'
-        } | redis-cli -h redis -x FUNCTION LOAD
+        } | redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" -x FUNCTION LOAD
     volumes:
       - type: bind
         source: ./storage/redis/functions/admission.lua
@@ -139,8 +153,8 @@ services:
         condition: service_healthy
     environment:
       MOCK_API_KEY: local-only
-      REDIS_USERNAME: local
-      REDIS_PASSWORD: local
+      REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
+      REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
       AWS_EC2_METADATA_DISABLED: "true"
     secrets:
       - source: continuation_hmac

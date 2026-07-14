@@ -32,6 +32,22 @@
     "continuation": { "$ref": "#/$defs/continuation" },
     "telemetry": { "$ref": "#/$defs/telemetry" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "blob_store": {
+            "properties": { "kind": { "const": "file" } },
+            "required": ["kind"]
+          }
+        },
+        "required": ["blob_store"]
+      },
+      "then": {
+        "properties": { "environment": { "const": "development" } }
+      }
+    }
+  ],
   "$defs": {
     "duration": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)([0-9]+(ns|us|µs|ms|s|m|h|d))*$" },
     "secret": {

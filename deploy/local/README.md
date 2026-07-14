@@ -4,7 +4,10 @@ The default Compose profile starts pinned Postgres-backed Temporal, Redis, and
 a deterministic OpenAI-compatible provider fixture. No provider credential is
 used. Postgres and Temporal share the development-only
 `${LLMTW_POSTGRES_PASSWORD:-local-only}` fixture variable; override it for any
-non-local use. The worker profile is deliberately opt-in because it needs a continuation
+non-local use. Redis disables its default user and gives the worker and
+provisioner the development-only `${LLMTW_REDIS_USERNAME:-local}` /
+`${LLMTW_REDIS_PASSWORD:-local-only}` ACL; override both for any non-local use.
+The worker profile is deliberately opt-in because it needs a continuation
 HMAC key. The supported lifecycle gate creates that key with restrictive
 permissions, uses a development-only durable file-blob volume, and removes its
 own containers, volumes, images, temporary Go cache, and key when it finishes:

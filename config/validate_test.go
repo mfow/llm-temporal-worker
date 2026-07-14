@@ -55,6 +55,29 @@ func TestConfigSchemaAcceptsDevelopmentFileBlobStore(t *testing.T) {
 	}
 }
 
+func TestConfigSchemaRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
+	loaded, err := config.Load(developmentFileBlobYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.Environment = "production"
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err == nil {
+		t.Fatal("schema accepted a production file blob store")
+	}
+}
+
 func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
 	if err != nil {

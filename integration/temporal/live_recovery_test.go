@@ -44,8 +44,10 @@ const (
 func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 	temporalAddress := os.Getenv("LLMTW_TEMPORAL_ADDRESS")
 	redisAddress := os.Getenv("LLMTW_REDIS_ADDR")
-	if temporalAddress == "" || redisAddress == "" {
-		t.Skip("make compose-live-integration supplies the local Temporal and Redis addresses")
+	redisUsername := os.Getenv("LLMTW_REDIS_USERNAME")
+	redisPassword := os.Getenv("LLMTW_REDIS_PASSWORD")
+	if temporalAddress == "" || redisAddress == "" || redisUsername == "" || redisPassword == "" {
+		t.Skip("make compose-live-integration supplies the local Temporal and authenticated Redis addresses")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -57,7 +59,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 	t.Cleanup(func() { workflowClient.Close() })
 
 	queue := fmt.Sprintf("llmtw-live-recovery-%d", time.Now().UnixNano())
-	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddress})
+	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddress, Username: redisUsername, Password: redisPassword})
 	t.Cleanup(func() { _ = redisClient.Close() })
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		t.Fatalf("ping Compose Redis: %v", err)

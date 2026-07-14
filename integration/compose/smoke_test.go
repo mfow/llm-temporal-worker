@@ -228,6 +228,22 @@ func TestRedisFunctionProvisionerEscapesShellVariablesFromCompose(t *testing.T) 
 	}
 }
 
+func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
+	_, raw := readCompose(t)
+	for _, required := range []string{
+		"REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}",
+		"REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}",
+		"default off",
+		"$${REDIS_USERNAME} on >$${REDIS_PASSWORD} ~* +@all",
+		"redis-cli --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\" ping",
+		"redis-cli -h redis --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\"",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("Compose Redis ACL fixture is missing %q", required)
+		}
+	}
+}
+
 func TestComposeProvisionerShellScriptsAreSingleArguments(t *testing.T) {
 	document, _ := readCompose(t)
 	for _, name := range []string{"redis-function-provisioner", "blob-volume-provisioner"} {
@@ -295,6 +311,8 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"build --no-cache --quiet",
 		"LLMTW_TEMPORAL_ADDRESS",
 		"LLMTW_REDIS_ADDR",
+		"LLMTW_REDIS_USERNAME",
+		"LLMTW_REDIS_PASSWORD",
 	} {
 		if !strings.Contains(string(data), required) {
 			t.Errorf("compose live integration target is missing %q", required)
