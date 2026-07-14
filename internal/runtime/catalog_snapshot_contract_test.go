@@ -245,13 +245,13 @@ func TestCompileRoutesRejectsBrokenReferencesAndIdentity(t *testing.T) {
 
 func TestCompileBudgetPoliciesMapsAndValidatesWindows(t *testing.T) {
 	value := config.Config{Limits: config.LimitsConfig{MaxBudgetBucketsPerWindow: 64}, Budgets: config.BudgetsConfig{Policies: []config.BudgetPolicy{{
-		ID: "tenant-policy", Match: config.BudgetMatch{Tenant: "tenant-a", Environment: "production"}, Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitMicroUSD: 12345}},
+		ID: "tenant-policy", Match: config.BudgetMatch{Tenant: "tenant-a", Project: "project-a", ActorPrefix: "svc-", Environment: "production", LogicalModel: "logical-model", EndpointID: "endpoint-a", ServiceClass: llm.ServiceClassPriority}, Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitMicroUSD: 12345}},
 	}}}}
 	policies, err := compileBudgetPolicies(value)
 	if err != nil || len(policies) != 1 {
 		t.Fatalf("compileBudgetPolicies() = %#v, %v", policies, err)
 	}
-	if policies[0].ID != "tenant-policy" || policies[0].Match.Tenant != "tenant-a" || policies[0].Match.Environment != "production" || policies[0].Windows[0].ID != "tenant-policy/0" || policies[0].Windows[0].Limit != 12345 {
+	if policies[0].ID != "tenant-policy" || policies[0].Match.Tenant != "tenant-a" || policies[0].Match.Project != "project-a" || policies[0].Match.ActorPrefix != "svc-" || policies[0].Match.Environment != "production" || policies[0].Match.LogicalModel != "logical-model" || policies[0].Match.EndpointID != "endpoint-a" || policies[0].Match.ServiceClass != llm.ServiceClassPriority || policies[0].Windows[0].ID != "tenant-policy/0" || policies[0].Windows[0].Limit != 12345 {
 		t.Fatalf("compiled budget policy = %#v", policies[0])
 	}
 
