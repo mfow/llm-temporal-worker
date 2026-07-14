@@ -138,9 +138,14 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_operation_state_total{state}`;
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
-- `llmtw_config_reload_total{outcome}`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat).
+
+Reload failures are returned to the internal reload caller and leave the active
+snapshot and readiness state unchanged. The production CLI has no reload
+trigger, and the registered `llmtw_config_reload_total` counter is not currently
+recorded; an embedding that adds a reload trigger must provide its own error
+reporting and alerting.
 
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
