@@ -197,9 +197,13 @@ func (engine *Engine) handleCancellation(ctx context.Context, operation admissio
 		defer cancel()
 		_ = engine.dependencies.Admission.MarkDispatching(finalCtx, admission.DispatchRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, LeaseUntil: engine.dependencies.Clock()})
 		_ = engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: admission.NotDispatched, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, Reason: "canceled before dispatch"})
-		return engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause)
+		failure := engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause)
+		failure.OperationID = operation.ID
+		return failure
 	}
-	return engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "request canceled after possible provider write", cause)
+	failure := engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "request canceled after possible provider write", cause)
+	failure.OperationID = operation.ID
+	return failure
 }
 
 func classifyProviderError(err error, marked bool) *provider.Error {

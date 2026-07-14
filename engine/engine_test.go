@@ -32,13 +32,20 @@ type fakeAdapter struct {
 func (adapter *fakeAdapter) Name() string { return adapter.name }
 
 func (adapter *fakeAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
+	adapter.mu.Lock()
+	adapter.capabilities++
+	adapter.mu.Unlock()
 	return provider.CapabilitySet{Version: "provider-cap-1", Features: map[provider.Feature]provider.Capability{
-		provider.FeatureText:  {State: provider.CapabilityNative},
-		provider.FeatureUsage: {State: provider.CapabilityNative},
+		provider.FeatureText:      {State: provider.CapabilityNative},
+		provider.FeatureStreaming: {State: provider.CapabilityNative},
+		provider.FeatureUsage:     {State: provider.CapabilityNative},
 	}}, nil
 }
 
 func (adapter *fakeAdapter) Compile(_ context.Context, input provider.CompileInput) (provider.Call, error) {
+	adapter.mu.Lock()
+	adapter.compiles++
+	adapter.mu.Unlock()
 	return provider.Call{EndpointID: input.Query.EndpointID, Family: input.Query.Family, Model: input.Query.Model, OperationKey: input.Request.OperationKey, ServiceClass: input.Query.ServiceClass, Metadata: input.Metadata}, nil
 }
 
@@ -105,11 +112,10 @@ type testHarness struct {
 	engine    *Engine
 	admission *memory.AdmissionStore
 	results   *fakeResultStore
-	adapter   *fakeAdapter
 	clock     time.Time
 }
 
-func newHarness(t *testing.T, adapter *fakeAdapter) testHarness {
+func newHarness(t *testing.T, adapter provider.Adapter) testHarness {
 	t.Helper()
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	classes := []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
@@ -150,7 +156,7 @@ func newHarness(t *testing.T, adapter *fakeAdapter) testHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return testHarness{engine: engineValue, admission: admissionStore, results: results, adapter: adapter, clock: now}
+	return testHarness{engine: engineValue, admission: admissionStore, results: results, clock: now}
 }
 
 func baseRequest(operationKey string) llm.Request {

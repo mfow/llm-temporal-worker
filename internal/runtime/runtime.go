@@ -580,6 +580,66 @@ func (engine *snapshotEngine) Generate(ctx context.Context, request llm.Request)
 	return clients.Engine().Generate(ctx, request)
 }
 
+// Stream captures the same immutable runtime snapshot as Generate so a
+// configuration reload cannot change routing or provider ownership midway
+// through an Activity's stream.
+func (engine *snapshotEngine) Stream(ctx context.Context, request llm.Request) (llm.EventStream, error) {
+	if engine == nil || engine.application == nil {
+		return nil, provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "runtime engine is unavailable")
+	}
+	lease, err := engine.application.Acquire()
+	if err != nil {
+		return nil, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime snapshot is unavailable")
+	}
+	clients, ok := lease.Snapshot().Clients.(*snapshotClients)
+	if !ok || clients.Engine() == nil {
+		lease.Release()
+		return nil, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime engine is unavailable")
+	}
+	stream, err := clients.Engine().Stream(ctx, request)
+	if err != nil {
+		lease.Release()
+		return nil, err
+	}
+	return &leasedEventStream{EventStream: stream, release: lease.Release}, nil
+}
+
+// leasedEventStream retains the configuration snapshot until the caller sees
+// a terminal event, observes an error, or explicitly stops early, matching
+// the stream's ownership lifecycle without leaking a reload lease.
+type leasedEventStream struct {
+	llm.EventStream
+	releaseOnce sync.Once
+	release     func()
+}
+
+func (stream *leasedEventStream) Next(ctx context.Context) (llm.Event, error) {
+	if stream == nil || stream.EventStream == nil {
+		return nil, provider.NewError(provider.CodeInternal, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "runtime stream is unavailable")
+	}
+	event, err := stream.EventStream.Next(ctx)
+	if err != nil || llm.IsTerminalEvent(event) {
+		stream.releaseLease()
+	}
+	return event, err
+}
+
+func (stream *leasedEventStream) Close() error {
+	if stream == nil || stream.EventStream == nil {
+		return nil
+	}
+	err := stream.EventStream.Close()
+	stream.releaseLease()
+	return err
+}
+
+func (stream *leasedEventStream) releaseLease() {
+	if stream == nil || stream.release == nil {
+		return
+	}
+	stream.releaseOnce.Do(stream.release)
+}
+
 var _ llm.Engine = (*snapshotEngine)(nil)
 
 // engineFactoryError deliberately hides an injectable factory's Error text.

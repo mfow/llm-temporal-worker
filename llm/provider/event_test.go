@@ -78,6 +78,59 @@ func TestAssemblerRejectsInvalidOrderAndTerminalReuse(t *testing.T) {
 	}
 }
 
+func TestAssemblerRejectsDuplicateTerminalAndPreservesOpaqueState(t *testing.T) {
+	assembler := provider.NewAssembler("operation-1")
+	opaque := []byte{0x00, 0xff, 0x7f}
+	for _, event := range []provider.Event{
+		provider.OutputStarted{Index: 0},
+		provider.ProviderStateDelta{Index: 0, State: llm.ProviderState{Provider: "provider-1", EndpointFamily: "family-1", MediaType: "application/octet-stream", Opaque: opaque}},
+		provider.OutputFinished{Index: 0},
+		provider.StreamCompleted{},
+	} {
+		if err := assembler.Add(event); err != nil {
+			t.Fatalf("add %T: %v", event, err)
+		}
+	}
+	if err := assembler.Add(provider.StreamCompleted{}); err == nil {
+		t.Fatal("accepted duplicate terminal")
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, ok := response.Output[0].(llm.Message)
+	if !ok || len(message.Content) != 1 {
+		t.Fatalf("assembled opaque output = %#v", response.Output)
+	}
+	state, ok := message.Content[0].(llm.ProviderStatePart)
+	if !ok || string(state.Opaque) != string(opaque) {
+		t.Fatalf("opaque state = %#v, want exact bytes %#v", state, opaque)
+	}
+}
+
+func TestAssemblerAllowsDeferredToolIdentityOutsideStreamingPort(t *testing.T) {
+	assembler := provider.NewAssembler("operation-1")
+	for _, event := range []provider.Event{
+		provider.OutputStarted{Index: 0},
+		provider.ToolArgumentsDelta{Index: 0, Fragment: `{"argument":`},
+		provider.ToolArgumentsDelta{Index: 0, CallID: "call-1", Name: "lookup", Fragment: "true}"},
+		provider.OutputFinished{Index: 0},
+		provider.StreamCompleted{},
+	} {
+		if err := assembler.Add(event); err != nil {
+			t.Fatalf("add %T: %v", event, err)
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, ok := response.Output[0].(llm.ToolCall)
+	if !ok || tool.ID != "call-1" || tool.Name != "lookup" || string(tool.Arguments) != `{"argument":true}` {
+		t.Fatalf("assembled deferred-identity tool = %#v", response.Output[0])
+	}
+}
+
 func TestAssemblerRejectsInvalidUTF8AndUnfinishedOutput(t *testing.T) {
 	assembler := provider.NewAssembler("operation-1")
 	if err := assembler.Add(provider.OutputStarted{Index: 0}); err != nil {

@@ -63,9 +63,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (llm.Re
 	if err := engine.beat(ctx, Progress{Phase: string(provider.PhasePlan), At: now}); err != nil {
 		return llm.Response{}, err
 	}
-	plan, err := engine.dependencies.Planner.Plan(ctx, routing.Input{
-		Request: normalized, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health,
-	})
+	plan, err := engine.dependencies.Planner.Plan(ctx, routingInput(normalized, snapshot, constraints))
 	if err != nil {
 		return llm.Response{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
 	}
