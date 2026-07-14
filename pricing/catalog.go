@@ -4,12 +4,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 )
+
+var ErrNoActivePrice = errors.New("no active price")
 
 type Catalog struct {
 	Version  string
@@ -120,5 +123,5 @@ func (catalog Catalog) Resolve(query Query) (Quote, error) {
 			return Quote{Entry: entry, CatalogVersion: catalog.Version, CatalogDigest: catalog.DigestHex()}, nil
 		}
 	}
-	return Quote{}, fmt.Errorf("no active price for %s/%s/%s/%s/%s/%s", query.Provider, query.Family, query.EndpointID, query.Region, query.Model, query.ProviderTier)
+	return Quote{}, fmt.Errorf("%w for %s/%s/%s/%s/%s/%s", ErrNoActivePrice, query.Provider, query.Family, query.EndpointID, query.Region, query.Model, query.ProviderTier)
 }

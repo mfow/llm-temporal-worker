@@ -100,7 +100,7 @@ func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
 	if !ok || len(model.Routes) != 1 || model.Routes[0].Provider != "provider-mock" || model.Routes[0].PriceVersion != "local-v1" {
 		t.Fatalf("loaded route snapshot = %#v", loaded.Routes)
 	}
-	if loaded.Prices == nil || len(loaded.BudgetPolicies) != 1 || !loaded.RequireBudgetMatch || loaded.Environment != "development" {
+	if loaded.Prices == nil || len(loaded.BudgetPolicies) != 1 || !loaded.RequireBudgetMatch || !loaded.RequirePriceWhenBudgeted || loaded.Environment != "development" {
 		t.Fatalf("loaded runtime snapshot = %#v", loaded)
 	}
 	if _, err := loaded.Prices.Resolve(pricing.Query{Provider: "provider-mock", Family: "openai_chat", EndpointID: "provider-mock", Region: "local", Model: "demo-model", ProviderTier: "standard", At: now}); err != nil {
@@ -225,7 +225,7 @@ func TestCompileRoutesKeepsAnthropicAWSAndBedrockCatalogStateSeparate(t *testing
 	entry := bundle.Pricing["prices"].Catalog.Entries[0]
 	entry.Family = string(provider.FamilyBedrockMessages)
 	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{entry})
-	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "no active price entry") {
+	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "no price entry") {
 		t.Fatalf("Bedrock price entry accepted for Anthropic AWS route: %v", err)
 	}
 }
@@ -256,6 +256,42 @@ func anthropicAWSRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
 	}
 }
 
+func TestCompileRoutesAllowsUnpricedClassWhenAnotherClassHasAnActivePrice(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	endpoint := value.Endpoints["endpoint-a"]
+	endpoint.ServiceClasses[llm.ServiceClassPriority] = config.TierConfig{ProviderValue: "priority"}
+	value.Endpoints["endpoint-a"] = endpoint
+	model := value.Models["logical-model"]
+	model.Routes[0].Classes = []llm.ServiceClass{llm.ServiceClassPriority, llm.ServiceClassStandard}
+	value.Models["logical-model"] = model
+
+	routes, err := compileRoutes(value, bundle, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("compileRoutes() error = %v", err)
+	}
+	route := routes.Models["logical-model"].Routes[0]
+	if route.PriceAvailable || route.PriceVersion != "prices-v1" {
+		t.Fatalf("route price metadata = %#v, want partial availability and prices-v1", route)
+	}
+}
+
+func TestCompileRoutesAllowsUnpricedRouteWithVerifiedEndpointIdentity(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	when := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	stale := testPriceEntry("endpoint-a", "gpt-test", "standard")
+	stale.EffectiveUntil = when.Add(-time.Second)
+	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{stale})
+
+	routes, err := compileRoutes(value, bundle, when)
+	if err != nil {
+		t.Fatalf("compileRoutes() error = %v", err)
+	}
+	route := routes.Models["logical-model"].Routes[0]
+	if route.Provider != "test-provider" || route.Region != "australiaeast" || route.PriceAvailable || route.PriceVersion != "" {
+		t.Fatalf("route identity = %#v, want verified unpriced route", route)
+	}
+}
+
 func TestCompileRoutesRejectsBrokenReferencesAndIdentity(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -283,7 +319,7 @@ func TestCompileRoutesRejectsBrokenReferencesAndIdentity(t *testing.T) {
 		}, want: "does not match capability profile"},
 		{name: "missing price", mutate: func(_ config.Config, bundle catalog.Bundle) {
 			bundle.Pricing["prices"] = catalog.PricingCatalog{Catalog: pricing.Catalog{Currency: "USD"}}
-		}, want: "no active price entry"},
+		}, want: "no price entry"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

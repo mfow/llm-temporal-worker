@@ -57,7 +57,9 @@ flowchart LR
    service class, portability mode, and explicit class fallbacks. It produces
    ordered candidates and diagnostics without contacting a provider.
 4. **Resolve price.** Each candidate is tied to one immutable price-catalog
-   version. Candidates without a valid price are excluded when budgets apply.
+   version when a current quote exists. A candidate without one is excluded
+   when it matches a budget, and otherwise is eligible only under the explicit
+   unpriced policy with `cost_status=unknown`.
 5. **Estimate and admit.** The estimator computes the maximum single-attempt
    bound across the authorized plan. One store operation creates or finds the
    operation ledger entry and reserves that amount against the union of budget

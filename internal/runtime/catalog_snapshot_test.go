@@ -32,12 +32,12 @@ func TestRoutePriceIdentityUsesEndpointIdentity(t *testing.T) {
 		}},
 	}}
 
-	providerName, region, version, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassStandard}, when)
+	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassStandard}, when)
 	if err != nil {
 		t.Fatalf("routePriceIdentity() error = %v", err)
 	}
-	if providerName != "right-provider" || region != "australiaeast" || version != "right" {
-		t.Fatalf("identity = (%q, %q, %q), want target endpoint quote", providerName, region, version)
+	if providerName != "right-provider" || region != "australiaeast" || version != "right" || !available {
+		t.Fatalf("identity = (%q, %q, %q, %t), want target endpoint quote", providerName, region, version, available)
 	}
 }
 
@@ -54,11 +54,35 @@ func TestRoutePriceIdentityRejectsMissingEndpointQuote(t *testing.T) {
 			Provider: "provider", Family: "openai_responses", EndpointID: "other", Model: "model", ProviderTier: "priority",
 		}}}},
 	}}
-	_, _, _, err := routePriceIdentity(bundle, "target", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, time.Now())
+	_, _, _, _, err := routePriceIdentity(bundle, "target", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, time.Now())
 	if err == nil {
 		t.Fatal("routePriceIdentity() succeeded without endpoint-specific quote")
 	}
-	if got := err.Error(); got == "" || !strings.Contains(got, "no active price entry") {
+	if got := err.Error(); got == "" || !strings.Contains(got, "no price entry") {
 		t.Fatalf("error = %q, want missing quote", got)
+	}
+}
+
+func TestRoutePriceIdentityUsesVerifiedIdentityWithoutCurrentQuote(t *testing.T) {
+	when := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	endpoint := config.EndpointConfig{
+		Family:       "openai_responses",
+		Region:       "australiaeast",
+		PriceCatalog: "prices",
+		ServiceClasses: map[llm.ServiceClass]config.TierConfig{
+			llm.ServiceClassPriority: {ProviderValue: "priority"},
+		},
+	}
+	stale := pricing.Entry{Provider: "verified-provider", Family: "openai_responses", EndpointID: "target-endpoint", Region: "australiaeast", Model: "model", ProviderTier: "priority", Version: "old-v1", EffectiveUntil: when.Add(-time.Second)}
+	bundle := catalog.Bundle{Pricing: map[string]catalog.PricingCatalog{
+		"prices": {Version: "prices-v1", Catalog: pricing.Catalog{Version: "prices-v1", Currency: "USD", Entries: []pricing.Entry{stale}}},
+	}}
+
+	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, when)
+	if err != nil {
+		t.Fatalf("routePriceIdentity() error = %v", err)
+	}
+	if providerName != "verified-provider" || region != "australiaeast" || version != "" || available {
+		t.Fatalf("identity = (%q, %q, %q, %t), want verified unpriced endpoint identity", providerName, region, version, available)
 	}
 }

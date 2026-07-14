@@ -197,6 +197,7 @@
       "additionalProperties": false,
       "required": ["currency", "reserved_microusd", "actual_microusd", "method", "catalog_version"],
       "properties": {
+        "cost_status": {"enum": ["known", "unknown"]},
         "currency": {"type": "string"},
         "reserved_microusd": {"type": "integer", "minimum": 0},
         "actual_microusd": {"type": "integer", "minimum": 0},

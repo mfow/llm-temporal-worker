@@ -257,7 +257,24 @@ func decodeUsage(data []byte) (Usage, error) {
 	return usage, nil
 }
 
+type CostStatus string
+
+const (
+	CostStatusKnown   CostStatus = "known"
+	CostStatusUnknown CostStatus = "unknown"
+)
+
+func (status CostStatus) Valid() bool {
+	switch status {
+	case CostStatusKnown, CostStatusUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 type Cost struct {
+	Status           CostStatus
 	Currency         string
 	ReservedMicroUSD int64
 	ActualMicroUSD   int64
@@ -269,12 +286,18 @@ func (cost Cost) MarshalJSON() ([]byte, error) {
 	if cost.ReservedMicroUSD < 0 || cost.ActualMicroUSD < 0 {
 		return nil, fmt.Errorf("cost values must not be negative")
 	}
+	if cost.Status != "" && !cost.Status.Valid() {
+		return nil, fmt.Errorf("cost status %q is invalid", cost.Status)
+	}
 	fields := map[string]any{
 		"currency":          cost.Currency,
 		"reserved_microusd": cost.ReservedMicroUSD,
 		"actual_microusd":   cost.ActualMicroUSD,
 		"method":            cost.Method,
 		"catalog_version":   cost.CatalogVersion,
+	}
+	if cost.Status != "" {
+		fields["cost_status"] = cost.Status
 	}
 	return marshalObject(fields)
 }
@@ -284,10 +307,18 @@ func decodeCost(data []byte) (Cost, error) {
 	if err != nil {
 		return Cost{}, err
 	}
-	if err := checkUnknownFields(fields, "currency", "reserved_microusd", "actual_microusd", "method", "catalog_version"); err != nil {
+	if err := checkUnknownFields(fields, "cost_status", "currency", "reserved_microusd", "actual_microusd", "method", "catalog_version"); err != nil {
 		return Cost{}, err
 	}
 	cost := Cost{}
+	status, _, err := optionalString(fields, "cost_status")
+	if err != nil {
+		return Cost{}, err
+	}
+	cost.Status = CostStatus(status)
+	if cost.Status != "" && !cost.Status.Valid() {
+		return Cost{}, fmt.Errorf("cost status %q is invalid", cost.Status)
+	}
 	if cost.Currency, _, err = optionalString(fields, "currency"); err != nil {
 		return Cost{}, err
 	}
