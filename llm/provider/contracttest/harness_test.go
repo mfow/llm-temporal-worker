@@ -208,6 +208,42 @@ generated_field_exemptions: []
 	}
 }
 
+func TestContainsUnsafeFixtureBytesDetectsCredentialFieldsAcrossSyntaxes(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+	}{
+		{
+			name:    "quoted JSON authorization",
+			fixture: `{"authorization":"Bearer sk-live-0123456789abcdef"}`,
+		},
+		{
+			name:    "escaped JSON authorization",
+			fixture: `{\"authorization\":\"Bearer sk-live-0123456789abcdef\"}`,
+		},
+		{
+			name:    "quoted JSON API key",
+			fixture: `{"api_key":"sk-live-0123456789abcdef"}`,
+		},
+		{
+			name:    "YAML access token",
+			fixture: "access_token: token-value-0123456789abcdef",
+		},
+		{
+			name:    "equals secret key",
+			fixture: "secret-key=token-value-0123456789abcdef",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !containsUnsafeFixtureBytes([]byte(test.fixture)) {
+				t.Fatal("credential-like field was not detected")
+			}
+		})
+	}
+}
+
 func TestValidateRepositoryRejectsIncompleteEnforcedProfile(t *testing.T) {
 	root := t.TempDir()
 	profileDir := filepath.Join(root, "llm", "provider", "example", "testdata", "contracts", "example")

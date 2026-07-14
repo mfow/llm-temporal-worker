@@ -25,7 +25,7 @@ var (
 	awsAccessKeyPattern    = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
 	githubTokenPattern     = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b`)
 	slackTokenPattern      = regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`)
-	credentialFieldPattern = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|access[_-]?token|secret[_-]?key)\s*[":=]\s*(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
+	credentialFieldPattern = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|access[_-]?token|secret[_-]?key)\s*(?:\\?["']\s*)?[:=]\s*(?:\\?["']\s*)?(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
 	profileIDPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	publicServiceClasses   = []string{"economy", "standard", "priority"}
 )
