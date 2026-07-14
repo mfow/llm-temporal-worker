@@ -47,9 +47,9 @@ func (function EngineFactoryFunc) Build(ctx context.Context, snapshot *config.Sn
 	return function(ctx, snapshot)
 }
 
-// UnavailableEngineFactory makes the missing production provider wiring
-// explicit. It is the default used by the CLI until a deployment supplies a
-// provider-backed factory through the process composition layer.
+// UnavailableEngineFactory deliberately models missing provider/state wiring
+// for tests and custom embeddings. The CLI uses ProductionEngineFactory;
+// retaining this implementation keeps the injectable fail-closed seam small.
 type UnavailableEngineFactory struct{}
 
 func (UnavailableEngineFactory) Build(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {

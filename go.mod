@@ -2,7 +2,7 @@ module github.com/mfow/llm-temporal-worker
 
 go 1.26
 
-	require (
+require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.17.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.7.0
 	github.com/anthropics/anthropic-sdk-go v1.57.0
