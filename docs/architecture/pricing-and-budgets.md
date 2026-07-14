@@ -71,13 +71,15 @@ estimated input tokens at a conservative tokenizer ratio
 + maximum configured output tokens
 + maximum billable reasoning tokens where separate
 + cache-write assumption when cache behavior is uncertain
-+ fixed request and media charges
++ fixed per-request charge
 ```
 
 Endpoint/model-specific tokenizers may tighten the estimate only after
 conformance tests. The fallback estimator uses UTF-8 byte length plus structural
 overhead and a configurable safety factor. It must never use the model's average
-completion length.
+completion length. The current catalog has no media-unit price, so media content
+does not create a separate estimate component until that pricing contract is
+added explicitly.
 
 The request reservation is the maximum single-attempt estimate across every
 candidate the router is authorized to attempt, including all explicit
@@ -102,8 +104,11 @@ Final cost uses this precedence:
 3. locally reconstructed usage priced by the pinned catalog;
 4. full reservation when the outcome or usage is ambiguous.
 
-The response includes estimated, reserved, actual/retained, method, currency,
-catalog version, and provider raw cost in a redacted typed field.
+The public `llm.Cost` response includes reserved and actual/retained microUSD,
+method, currency, and catalog version. The estimate is used for admission but
+is not serialized as a separate response cost field. When an adapter receives
+an authoritative provider cost, the raw value remains in the safe provider or
+usage raw-facts maps; it is not copied into `llm.Cost`.
 
 If measured cost exceeds the conservative reservation, completion still records
 the full cost because it was already incurred. It atomically adds the excess,
