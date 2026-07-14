@@ -3,6 +3,7 @@ package config_test
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -95,6 +96,22 @@ func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	}
 }
 
+func TestLoadCanonicalizesOutboundProviderHosts(t *testing.T) {
+	data := strings.Replace(
+		string(exampleYAML(t)),
+		"outbound_hosts: [api.openai.com]",
+		"outbound_hosts: [API.OPENAI.COM.]",
+		1,
+	)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loaded.Endpoints["openai-prod"].OutboundHosts, []string{"api.openai.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outbound hosts = %#v, want %#v", got, want)
+	}
+}
+
 func TestLoadRejectsUnknownDuplicateAndFourthClass(t *testing.T) {
 	unknown := append(exampleYAML(t), []byte("\nunknown_field: true\n")...)
 	if _, err := config.Load(unknown); err == nil {
@@ -122,6 +139,10 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
 		"reference":                  strings.Replace(string(exampleYAML(t)), "endpoint: openai-prod", "endpoint: missing-endpoint", 1),
 		"literal secret":             strings.Replace(string(exampleYAML(t)), "password:\n      kind: file\n      path: /var/run/secrets/redis-password", "password: plaintext-secret", 1),
+		"missing outbound hosts":     strings.Replace(string(exampleYAML(t)), "    outbound_hosts: [api.openai.com]\n", "", 1),
+		"unlisted base URL host":     strings.Replace(string(exampleYAML(t)), "outbound_hosts: [api.openai.com]", "outbound_hosts: [other.example]", 1),
+		"literal outbound address":   strings.Replace(string(exampleYAML(t)), "outbound_hosts: [api.openai.com]", "outbound_hosts: [127.0.0.1]", 1),
+		"outbound userinfo":          strings.Replace(string(exampleYAML(t)), "outbound_hosts: [api.openai.com]", "outbound_hosts: [user@api.openai.com]", 1),
 	}
 	for name, data := range cases {
 		if _, err := config.Load([]byte(data)); err == nil {

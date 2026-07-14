@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/admission"
 	"github.com/mfow/llm-temporal-worker/budget"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
@@ -18,15 +19,20 @@ import (
 )
 
 type fakeAdapter struct {
-	mu           sync.Mutex
-	name         string
-	rejectFirst  bool
-	ambiguous    bool
-	capabilities int
-	compiles     int
-	invokes      int
-	calls        []provider.Call
-	response     llm.Response
+	mu                  sync.Mutex
+	name                string
+	rejectFirst         bool
+	redirectFirst       bool
+	egressFirst         bool
+	preDispatchFirst    bool
+	preDispatchDeadline bool
+	rawDeadlineFirst    bool
+	ambiguous           bool
+	capabilities        int
+	compiles            int
+	invokes             int
+	calls               []provider.Call
+	response            llm.Response
 }
 
 func (adapter *fakeAdapter) Name() string { return adapter.name }
@@ -64,6 +70,21 @@ func (adapter *fakeAdapter) Invoke(ctx context.Context, call provider.Call, obse
 	}
 	if adapter.rejectFirst && index == 1 {
 		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "provider rejected dispatch")
+	}
+	if adapter.redirectFirst && index == 1 {
+		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous")
+	}
+	if adapter.egressFirst && index == 1 {
+		return provider.Result{}, provider.NewEgressDeniedError(provider.ErrProviderEgressDenied)
+	}
+	if adapter.preDispatchFirst && index == 1 {
+		return provider.Result{}, provider.NewPreDispatchUnavailableError(provider.ErrProviderPreDispatch)
+	}
+	if adapter.preDispatchDeadline && index == 1 {
+		return provider.Result{}, provider.NewPreDispatchContextError(context.DeadlineExceeded)
+	}
+	if adapter.rawDeadlineFirst && index == 1 {
+		return provider.Result{}, context.DeadlineExceeded
 	}
 	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
 	return provider.Result{Response: response}, nil
@@ -205,6 +226,182 @@ func TestGenerateFallbackDoesNotReplayRejectedDispatch(t *testing.T) {
 	}
 	if operation.State != admissionStateCompleted {
 		t.Fatalf("operation state = %s, want completed", operation.State)
+	}
+}
+
+func TestGenerateCertifiedPreDispatchFailureAfterMarkFallsBackWithoutAmbiguity(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		egress      bool
+		preDispatch bool
+	}{
+		{name: "policy denial", egress: true},
+		{name: "availability", preDispatch: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &fakeAdapter{name: "fake", egressFirst: test.egress, preDispatchFirst: test.preDispatch, response: successfulResponse()}
+			harness := newHarness(t, adapter)
+			request := baseRequest("egress-fallback-" + test.name)
+			request.ServiceClass = llm.ServiceClassPriority
+			request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+			response, err := harness.engine.Generate(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
+				t.Fatalf("service facts = %#v, want standard fallback", response.Service)
+			}
+			adapter.mu.Lock()
+			invokes := adapter.invokes
+			adapter.mu.Unlock()
+			if invokes != 2 {
+				t.Fatalf("provider invoke count = %d, want two attempts", invokes)
+			}
+			operation, err := harness.admission.Get(context.Background(), response.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation.State != admission.StateCompleted || operation.Attempt.Dispatch != admission.Accepted {
+				t.Fatalf("operation after fallback = %#v, want completed accepted operation", operation)
+			}
+			if got, want := int64(operation.IncurredMicroUSD), response.Cost.ActualMicroUSD; got != want {
+				t.Fatalf("incurred cost = %d, want fallback actual cost %d", got, want)
+			}
+		})
+	}
+}
+
+func TestGenerateCertifiedPreDispatchFailureAfterMarkRecordsNoCost(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		egress      bool
+		preDispatch bool
+	}{
+		{name: "policy denial", egress: true},
+		{name: "availability", preDispatch: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &fakeAdapter{name: "fake", egressFirst: test.egress, preDispatchFirst: test.preDispatch, response: successfulResponse()}
+			harness := newHarness(t, adapter)
+			_, err := harness.engine.Generate(context.Background(), baseRequest("egress-no-cost-"+test.name))
+			if err == nil {
+				t.Fatal("egress-denied request unexpectedly succeeded")
+			}
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) {
+				t.Fatalf("error = %T, want *provider.Error", err)
+			}
+			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+				t.Fatalf("mapped egress error = %#v", mapped)
+			}
+			if test.egress && !errors.Is(mapped, provider.ErrProviderEgressDenied) {
+				t.Fatal("mapped policy error did not retain its marker")
+			}
+			if test.preDispatch && !errors.Is(mapped, provider.ErrProviderPreDispatch) {
+				t.Fatal("mapped pre-dispatch error did not retain its marker")
+			}
+			operation, err := harness.admission.Get(context.Background(), mapped.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation.State != admission.StateDefiniteFailed || operation.Attempt.Dispatch != admission.NotDispatched || operation.IncurredMicroUSD != 0 || operation.FinalMicroUSD != 0 {
+				t.Fatalf("operation after egress denial = %#v, want definite zero-cost no-dispatch failure", operation)
+			}
+		})
+	}
+}
+
+func TestGenerateCertifiedPreDispatchCallerDeadlineAfterMarkDoesNotFallback(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", preDispatchDeadline: true, response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	request := baseRequest("pre-dispatch-caller-deadline")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+
+	_, err := harness.engine.Generate(context.Background(), request)
+	if err == nil {
+		t.Fatal("certified caller deadline unexpectedly succeeded")
+	}
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("error = %T, want *provider.Error", err)
+	}
+	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped caller deadline = %#v, want non-retryable not-dispatched deadline", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
+		t.Fatalf("mapped caller deadline = %v, want certified pre-dispatch deadline cause", mapped)
+	}
+	adapter.mu.Lock()
+	invokes := adapter.invokes
+	adapter.mu.Unlock()
+	if invokes != 1 {
+		t.Fatalf("provider invoke count = %d, want one without fallback", invokes)
+	}
+	operation, getErr := harness.admission.Get(context.Background(), mapped.OperationID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if operation.State != admission.StateDefiniteFailed || operation.Attempt.Dispatch != admission.NotDispatched || operation.IncurredMicroUSD != 0 || operation.FinalMicroUSD != 0 {
+		t.Fatalf("operation after certified caller deadline = %#v, want definite zero-cost no-dispatch failure", operation)
+	}
+}
+
+func TestGenerateRawDeadlineAfterMarkRemainsAmbiguous(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", rawDeadlineFirst: true, response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	request := baseRequest("raw-post-mark-deadline")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+
+	_, err := harness.engine.Generate(context.Background(), request)
+	if err == nil {
+		t.Fatal("raw post-mark deadline unexpectedly succeeded")
+	}
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("error = %T, want *provider.Error", err)
+	}
+	if mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped raw deadline = %#v, want ambiguous non-retryable result", mapped)
+	}
+	adapter.mu.Lock()
+	invokes := adapter.invokes
+	adapter.mu.Unlock()
+	if invokes != 1 {
+		t.Fatalf("provider invoke count = %d, want one without fallback", invokes)
+	}
+}
+
+func TestGenerateRedirectResponseAfterMarkDoesNotFallback(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", redirectFirst: true, response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	request := baseRequest("redirect-no-fallback")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	_, err := harness.engine.Generate(context.Background(), request)
+	if err == nil {
+		t.Fatal("redirect response unexpectedly succeeded")
+	}
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("error = %T, want *provider.Error", err)
+	}
+	if mapped.Code != provider.CodeAmbiguousDispatch || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect error = %#v, want ambiguous non-retriable dispatch error", mapped)
+	}
+	adapter.mu.Lock()
+	invokes := adapter.invokes
+	adapter.mu.Unlock()
+	if invokes != 1 {
+		t.Fatalf("provider invoke count = %d, want one without fallback resend", invokes)
+	}
+	operation, getErr := harness.admission.Get(context.Background(), mapped.OperationID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if operation.State != admission.StateAmbiguous || operation.Attempt.Dispatch != admission.Ambiguous {
+		t.Fatalf("operation after redirect = %#v, want ambiguous operation", operation)
 	}
 }
 

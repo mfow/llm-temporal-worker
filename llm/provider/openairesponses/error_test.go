@@ -36,6 +36,16 @@ func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 	}
 }
 
+func TestMapAPIErrorTreatsRedirectResponseAsAmbiguous(t *testing.T) {
+	mapped := mapAPIError(&openai.Error{
+		StatusCode: http.StatusTemporaryRedirect,
+		Response:   &http.Response{Header: http.Header{"Location": []string{"https://redirect.example/secret"}}},
+	})
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+}
+
 func TestMapErrorClassifiesContextAndTransportFailures(t *testing.T) {
 	for _, test := range []struct {
 		err  error
@@ -49,5 +59,42 @@ func TestMapErrorClassifiesContextAndTransportFailures(t *testing.T) {
 		if mapped.Code != test.code {
 			t.Errorf("%v -> %s, want %s", test.err, mapped.Code, test.code)
 		}
+	}
+}
+
+func TestMapErrorClassifiesEgressDenialBeforeDispatch(t *testing.T) {
+	mapped := mapError(provider.ErrProviderEgressDenied)
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped = %#v", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderEgressDenied) {
+		t.Fatal("mapped error did not preserve the egress marker")
+	}
+}
+
+func TestMapErrorClassifiesCertifiedPreDispatchAvailability(t *testing.T) {
+	mapped := mapError(provider.ErrProviderPreDispatch)
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped = %#v", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) {
+		t.Fatal("mapped error did not preserve the pre-dispatch marker")
+	}
+}
+
+func TestMapErrorRedactsTransportCause(t *testing.T) {
+	transportCause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
+	mapped := mapError(transportCause)
+	encoded, err := json.Marshal(mapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"provider-secret", "private-content", "opaque-handle", "provider-raw"} {
+		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
+			t.Fatalf("safe provider error leaked %q: %s", raw, encoded)
+		}
+	}
+	if !errors.Is(mapped, transportCause) {
+		t.Fatal("mapped error did not preserve the local diagnostic cause")
 	}
 }

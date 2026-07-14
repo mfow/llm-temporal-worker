@@ -41,6 +41,14 @@ func canonicalize(config *Config) {
 		return
 	}
 	config.State.Redis.AdmissionDigest = strings.ToLower(config.State.Redis.AdmissionDigest)
+	for name, endpoint := range config.Endpoints {
+		for index, rawHost := range endpoint.OutboundHosts {
+			if host, err := NormalizeOutboundHost(rawHost); err == nil {
+				endpoint.OutboundHosts[index] = host
+			}
+		}
+		config.Endpoints[name] = endpoint
+	}
 }
 
 // Parse is an explicit alias for Load for callers that use parse/compile

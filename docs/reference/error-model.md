@@ -57,10 +57,10 @@ Phases are `decode`, `normalize`, `state_load`, `plan`, `price`,
 | `operation_conflict` | operation key reused with different digest | never |
 | `ambiguous_dispatch` | provider may have accepted request | never automatically |
 | `provider_rate_limited` | definite provider rate/resource rejection | after provider hint |
-| `provider_unavailable` | definite safe transient endpoint failure | bounded retry/fallback |
+| `provider_unavailable` | explicit egress-policy denial or guarded endpoint failure before a writable connection | bounded retry/fallback |
 | `provider_invalid_response` | malformed or semantically invalid output | route policy dependent, never if acceptance/cost ambiguity remains |
-| `deadline_exceeded` | bounded operation deadline exhausted | only if not dispatched |
-| `canceled` | caller cancellation | caller controlled |
+| `deadline_exceeded` | caller or bounded operation deadline | only if guarded proof establishes not dispatched |
+| `canceled` | caller cancellation | caller controlled; never rerouted once classified |
 | `state_unavailable` | Redis/blob dependency unavailable | retryable, fail closed |
 | `state_corrupt` | MAC/digest/schema/invariant failure | never; alert |
 | `configuration` | invalid or expired compiled snapshot | never within same snapshot |
@@ -73,7 +73,8 @@ retained in `ProviderFacts.Code`, not added to the public enum for every API.
 
 Transport instrumentation marks:
 
-- `not_dispatched` before a socket/stream can write request bytes;
+- `not_dispatched` only when the transport/adapter proves no writable provider
+  connection was acquired (or another affirmative no-dispatch fact exists);
 - `rejected` only from affirmative provider/transport evidence that no billable
   request was accepted;
 - `accepted` when response headers/body/job ID prove acceptance;

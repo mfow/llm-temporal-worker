@@ -672,6 +672,13 @@ drain, and rejected invalid reload behavior.
    `make compose-live-integration` target. The latter names its Docker
    prerequisite and fails closed without explicit authorization.
 
+> **Task 2 compatibility note:** the provider egress policy deliberately
+> rejects the Docker-private `provider-mock` address in every environment.
+> Until a separately reviewed design provides a safe test mechanism, this
+> self-contained live mock Activity requirement is unresolved. The current
+> Compose fixture must remain parser/configuration/readiness-only; do not add a
+> development bypass to the production transport policy.
+
 **Acceptance evidence**
 
 ```sh

@@ -83,6 +83,8 @@ type ProductionFactoryOptions struct {
 	SnapshotLoader SnapshotLoader
 	Profiles       map[string]EndpointProfile
 	HTTPClient     *http.Client
+	EgressResolver ProviderEgressResolver
+	EgressDial     ProviderEgressDialContext
 	Clock          func() time.Time
 	Planner        routing.Planner
 
@@ -383,7 +385,10 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	if err != nil {
 		return nil, err
 	}
-	client := endpointHTTPClient(factory.options.HTTPClient, time.Duration(endpoint.Timeout))
+	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %q: provider egress policy: %w", endpointID, err)
+	}
 	profile := factory.options.Profiles[endpointID]
 	switch endpoint.Family {
 	case "openai_responses":
@@ -488,14 +493,6 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	default:
 		return nil, fmt.Errorf("endpoint %q: unsupported provider family %q", endpointID, endpoint.Family)
 	}
-}
-
-func endpointHTTPClient(base *http.Client, timeout time.Duration) *http.Client {
-	copy := *base
-	if timeout > 0 {
-		copy.Timeout = timeout
-	}
-	return &copy
 }
 
 func endpointCapabilities(snapshot engine.Snapshot, endpointID string) (provider.CapabilitySet, error) {

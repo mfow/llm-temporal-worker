@@ -114,6 +114,9 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		if certainty == admission.Accepted || certainty == admission.Ambiguous {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, candidate.estimate.MicroUSD)
 		}
+		if mapped.Retry == provider.RetryNever {
+			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
+		}
 		remaining := quoted.candidates[index+1:]
 		if len(remaining) == 0 {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
@@ -210,6 +213,23 @@ func classifyProviderError(err error, marked bool) *provider.Error {
 	var mapped *provider.Error
 	if errors.As(err, &mapped) {
 		copy := *mapped
+		if errors.Is(err, provider.ErrProviderEgressDenied) {
+			// The egress transport rejects the request before it can reach a
+			// provider socket. Adapters normally preserve this marker as
+			// not-dispatched, but retain that fact here even though their
+			// BeforePossibleWrite observer has already marked admission.
+			copy.Code = provider.CodeProviderUnavailable
+			copy.Phase = provider.PhaseDispatch
+			copy.Dispatch = provider.DispatchNotDispatched
+			copy.Retry = provider.RetryNextRoute
+			return &copy
+		}
+		if errors.Is(err, provider.ErrProviderPreDispatch) {
+			// The guarded provider transport proved that no writable connection
+			// was acquired. Retain the adapter's availability or caller-context
+			// result even though the observer marked admission before transport.
+			return &copy
+		}
 		if marked && copy.Dispatch == provider.DispatchNotDispatched {
 			copy.Dispatch = provider.DispatchAmbiguous
 		}
@@ -218,6 +238,12 @@ func classifyProviderError(err error, marked bool) *provider.Error {
 			copy.Retry = provider.RetryNever
 		}
 		return &copy
+	}
+	if errors.Is(err, provider.ErrProviderEgressDenied) {
+		return provider.NewEgressDeniedError(err)
+	}
+	if errors.Is(err, provider.ErrProviderPreDispatch) {
+		return provider.NewPreDispatchUnavailableError(err)
 	}
 	if marked {
 		return engineError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request outcome is ambiguous", err)
