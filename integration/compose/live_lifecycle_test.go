@@ -9,20 +9,66 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/config"
+	"go.yaml.in/yaml/v4"
 )
 
 const (
-	composeStatusPollInterval   = 100 * time.Millisecond
-	composeStatusRequestTimeout = time.Second
+	composeStatusPollInterval            = 100 * time.Millisecond
+	composeStatusRequestTimeout          = time.Second
+	composeContainerHealthPollInterval   = 100 * time.Millisecond
+	composeContainerHealthInspectTimeout = time.Second
+	// This idle Compose recovery test exercises the Temporal SDK v1.43.0
+	// AggregatedWorker's two remote-poller stop phases: workflow then activity.
+	// Each may consume WorkerStopTimeout, which this application maps from
+	// GracefulStopTimeout. Active local work has a separate drain path and is
+	// intentionally outside this readiness-recovery contract.
+	composeTemporalRemotePollerStopPhaseCount = 2
 	// The Compose worker factory installs Redis and blob-store probes. Runtime
 	// checks required probes serially with an independent timeout for each.
 	composeRequiredDependencyProbeCount = 2
 )
+
+type composeHealthcheckTiming struct {
+	interval    time.Duration
+	timeout     time.Duration
+	startPeriod time.Duration
+	retries     int
+}
+
+func TestComposeContainerHealthTransitionTimeoutUsesHealthcheckContract(t *testing.T) {
+	healthcheck := composeHealthcheckTiming{
+		interval:    5 * time.Second,
+		timeout:     3 * time.Second,
+		startPeriod: 2 * time.Second,
+		retries:     3,
+	}
+
+	if got, want := composeContainerHealthTransitionTimeout(healthcheck), 27*time.Second+100*time.Millisecond; got != want {
+		t.Fatalf("Compose container health transition timeout = %s, want %s", got, want)
+	}
+}
+
+func TestComposeRedisHealthcheckTimingComesFromManifest(t *testing.T) {
+	healthcheck := composeRedisHealthcheckTiming(t)
+	if got, want := healthcheck.interval, 5*time.Second; got != want {
+		t.Fatalf("Redis healthcheck interval = %s, want %s", got, want)
+	}
+	if got, want := healthcheck.timeout, 3*time.Second; got != want {
+		t.Fatalf("Redis healthcheck timeout = %s, want %s", got, want)
+	}
+	if got, want := healthcheck.retries, 24; got != want {
+		t.Fatalf("Redis healthcheck retries = %d, want %d", got, want)
+	}
+	if got, want := composeContainerHealthTransitionTimeout(healthcheck), 193*time.Second+100*time.Millisecond; got != want {
+		t.Fatalf("Redis health transition timeout = %s, want %s", got, want)
+	}
+}
 
 func TestComposeReadinessTransitionTimeoutUsesWorkerAndProbeConfiguration(t *testing.T) {
 	configuration := config.Config{
@@ -37,7 +83,7 @@ func TestComposeReadinessTransitionTimeoutUsesWorkerAndProbeConfiguration(t *tes
 		},
 	}
 
-	if got, want := composeReadinessTransitionTimeoutForConfig(configuration), 39*time.Second+composeStatusRequestTimeout+composeStatusPollInterval; got != want {
+	if got, want := composeReadinessTransitionTimeoutForConfig(configuration), 70*time.Second+100*time.Millisecond; got != want {
 		t.Fatalf("compose readiness transition timeout = %s, want %s", got, want)
 	}
 }
@@ -71,6 +117,7 @@ func TestComposeWorkerReadinessTracksRedis(t *testing.T) {
 
 	runComposeDocker(t, "start", container)
 	stopped = false
+	waitForComposeContainerHealthy(t, container, composeContainerHealthTransitionTimeout(composeRedisHealthcheckTiming(t)))
 	waitForComposeStatus(t, address, "/health/ready", http.StatusOK, readinessTransitionTimeout)
 	assertComposeStatus(t, address, "/health/live", http.StatusOK)
 }
@@ -99,14 +146,70 @@ func composeReadinessTransitionTimeout(t *testing.T) time.Duration {
 	return composeReadinessTransitionTimeoutForConfig(configuration)
 }
 
+func composeRedisHealthcheckTiming(t *testing.T) composeHealthcheckTiming {
+	t.Helper()
+	document, _ := readCompose(t)
+	redis, ok := document.Services["redis"]
+	if !ok {
+		t.Fatal("Compose fixture is missing Redis")
+	}
+	return composeHealthcheckTimingFromManifest(t, "Redis", redis.Healthcheck)
+}
+
+func composeHealthcheckTimingFromManifest(t *testing.T, service string, healthcheck map[string]yaml.Node) composeHealthcheckTiming {
+	t.Helper()
+	if healthcheck == nil {
+		t.Fatalf("%s service is missing a healthcheck", service)
+	}
+	interval := composeHealthcheckDuration(t, service, "interval", healthcheck["interval"].Value, false)
+	timeout := composeHealthcheckDuration(t, service, "timeout", healthcheck["timeout"].Value, false)
+	startPeriod := composeHealthcheckDuration(t, service, "start_period", healthcheck["start_period"].Value, true)
+	retries, err := strconv.Atoi(healthcheck["retries"].Value)
+	if err != nil || retries < 1 {
+		t.Fatalf("%s healthcheck retries = %q, want a positive integer", service, healthcheck["retries"].Value)
+	}
+	return composeHealthcheckTiming{
+		interval:    interval,
+		timeout:     timeout,
+		startPeriod: startPeriod,
+		retries:     retries,
+	}
+}
+
+func composeHealthcheckDuration(t *testing.T, service, field, raw string, optional bool) time.Duration {
+	t.Helper()
+	if raw == "" && optional {
+		return 0
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		t.Fatalf("%s healthcheck %s = %q, want a positive Go duration", service, field, raw)
+	}
+	return duration
+}
+
+// composeContainerHealthTransitionTimeout bounds the Docker health verdict
+// after docker start returns. Docker runs the first check after interval and
+// subsequent checks after each previous check completes. A passing check marks
+// the container healthy; retries consecutive failed checks mark it unhealthy,
+// which this test reports immediately rather than waiting for arbitrary later
+// recovery. The final terms bound this test's own inspect call and polling
+// interval rather than adding a sleep.
+func composeContainerHealthTransitionTimeout(healthcheck composeHealthcheckTiming) time.Duration {
+	return healthcheck.startPeriod + time.Duration(healthcheck.retries)*(healthcheck.interval+healthcheck.timeout) +
+		composeContainerHealthInspectTimeout + composeContainerHealthPollInterval
+}
+
 // composeReadinessTransitionTimeoutForConfig covers the longest worker
-// recovery path: a configured graceful poller drain, one readiness monitor
-// interval, and every required dependency probe. The probe count is explicit
-// because CheckDependencyProbes applies an individual timeout serially. The
-// final terms bound this test's own HTTP request and status polling rather
-// than adding arbitrary headroom.
+// recovery path: each synchronous remote-poller graceful-stop phase exercised
+// by this idle Compose test, one readiness monitor interval, and every
+// required dependency probe. The phase and probe counts are explicit because
+// the Temporal SDK and
+// CheckDependencyProbes execute them serially. The final terms bound this
+// test's own HTTP request and status polling rather than adding arbitrary
+// headroom.
 func composeReadinessTransitionTimeoutForConfig(configuration config.Config) time.Duration {
-	return time.Duration(configuration.Temporal.Worker.GracefulStopTimeout) +
+	return time.Duration(composeTemporalRemotePollerStopPhaseCount)*time.Duration(configuration.Temporal.Worker.GracefulStopTimeout) +
 		time.Duration(configuration.Server.ReadinessProbeInterval) +
 		time.Duration(composeRequiredDependencyProbeCount)*time.Duration(configuration.Server.ReadinessProbeTimeout) +
 		composeStatusRequestTimeout + composeStatusPollInterval
@@ -129,6 +232,36 @@ func waitForComposeStatus(t *testing.T, address, path string, want int, timeout 
 		time.Sleep(composeStatusPollInterval)
 	}
 	t.Fatalf("%s did not reach HTTP %d within %s: %v", path, want, timeout, last)
+}
+
+func waitForComposeContainerHealthy(t *testing.T, container string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	last := "no Docker health status"
+	for time.Now().Before(deadline) {
+		status, err := composeContainerHealthStatus(container)
+		if err != nil {
+			last = fmt.Sprintf("inspect error: %v", err)
+		} else if status == "healthy" {
+			return
+		} else if status == "unhealthy" {
+			t.Fatalf("Redis container reported Docker health status unhealthy before readiness recovered")
+		} else {
+			last = fmt.Sprintf("Docker health status %q", status)
+		}
+		time.Sleep(composeContainerHealthPollInterval)
+	}
+	t.Fatalf("Redis container did not reach Docker health status healthy within %s: %s", timeout, last)
+}
+
+func composeContainerHealthStatus(container string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), composeContainerHealthInspectTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}", container).Output()
+	if err != nil {
+		return "", fmt.Errorf("docker inspect Redis health: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func assertComposeStatus(t *testing.T, address, path string, want int) {
