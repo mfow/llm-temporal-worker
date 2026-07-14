@@ -113,6 +113,20 @@ and safe details. A local Temporal integration test verifies real task polling,
 worker restart after dispatch, schedule/start/heartbeat timeouts, and graceful
 shutdown.
 
+The offline lifecycle gate in `integration/temporal_lifecycle_test.go` covers the
+same process boundary without credentials or a running Temporal service. It
+captures the SDK Activity registry to assert the exact `llm.generate.v1` name,
+round-trips the versioned payload, invokes the real Activity and engine twice to
+prove completed replay performs one provider dispatch and one result write, and
+checks the `economy | standard | priority` contract (omission defaults to
+`standard`). It also starts the worker through its lifecycle seam, checks
+readiness and polling transitions, bounds shutdown while a fake poller drains,
+and scans logs, traces, and metrics for tenant/content markers. Run it with:
+
+```sh
+go test -race ./integration
+```
+
 ### Deployment tests
 
 - strict configuration schema/golden effective config;
