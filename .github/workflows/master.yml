@@ -128,6 +128,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -race ./...
 
+      - name: Compile guarded live-provider harness
+        if: steps.go.outputs.present == 'true'
+        run: go test -tags=live ./integration/live -run '^$'
+
       - name: Verify source safety and supply chain
         id: security_verify
         if: steps.go.outputs.present == 'true'

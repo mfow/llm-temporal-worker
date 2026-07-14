@@ -199,6 +199,15 @@ func preDispatchProviderFailure(classification string) error {
 	return providerPreDispatchError{classification: classification}
 }
 
+// NewProviderEgressHTTPClient applies the production provider egress policy
+// using the default DNS resolver and dialer. Callers that need deterministic
+// seams for tests use the private constructor below through the runtime
+// factory; all other clients get the same host, address, redirect, and timeout
+// protections as configured production endpoints.
+func NewProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig) (*http.Client, error) {
+	return newProviderEgressHTTPClient(base, endpoint, nil, nil)
+}
+
 func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, resolver ProviderEgressResolver, dial ProviderEgressDialContext) (*http.Client, error) {
 	timeout := boundedProviderRequestTimeout(time.Duration(endpoint.Timeout))
 	policy, err := newProviderEgressPolicy(endpoint, resolver, dial, boundedProviderConnectTimeout(timeout))

@@ -6,12 +6,16 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/mfow/llm-temporal-worker/config"
+	"github.com/mfow/llm-temporal-worker/internal/runtime"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"github.com/mfow/llm-temporal-worker/llm/provider/anthropicmessages"
@@ -32,6 +36,12 @@ const (
 	liveAWSRegion                        = "us-east-1"
 	liveHTTPTimeout                      = 45 * time.Second
 )
+
+var liveAzureOpenAIHostSuffixes = []string{
+	".openai.azure.com",
+	".openai.azure.us",
+	".openai.azure.cn",
+}
 
 func familyFor(profile Profile) provider.Family {
 	switch profile.ID {
@@ -235,6 +245,28 @@ func runProfile(ctx context.Context, profile Profile, lookup func(string) (strin
 }
 
 func adapterFor(ctx context.Context, candidate Profile, lookup func(string) (string, bool)) (provider.Adapter, error) {
+	return adapterForWithAzureDependencies(ctx, candidate, lookup, defaultAzureAdapterDependencies())
+}
+
+type azureAdapterDependencies struct {
+	newAzureEgressHTTPClient func(config.EndpointConfig) (*http.Client, error)
+	newAzureCredential       func() (azcore.TokenCredential, error)
+	newAzureTokenClient      func(openairesponses.AzureTokenClientConfig) (*openairesponses.Client, error)
+}
+
+func defaultAzureAdapterDependencies() azureAdapterDependencies {
+	return azureAdapterDependencies{
+		newAzureEgressHTTPClient: func(endpoint config.EndpointConfig) (*http.Client, error) {
+			return runtime.NewProviderEgressHTTPClient(&http.Client{Timeout: liveHTTPTimeout}, endpoint)
+		},
+		newAzureCredential: func() (azcore.TokenCredential, error) {
+			return azidentity.NewDefaultAzureCredential(nil)
+		},
+		newAzureTokenClient: openairesponses.NewAzureTokenClient,
+	}
+}
+
+func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, lookup func(string) (string, bool), azureDependencies azureAdapterDependencies) (provider.Adapter, error) {
 	profile, ok := pinnedProfile(candidate)
 	if !ok {
 		return nil, fmt.Errorf("live profile is not pinned")
@@ -259,11 +291,22 @@ func adapterFor(ctx context.Context, candidate Profile, lookup func(string) (str
 		if err != nil {
 			return nil, err
 		}
-		credential, err := azidentity.NewDefaultAzureCredential(nil)
+		endpointConfig, err := liveAzureOpenAIEndpointConfig(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		if azureDependencies.newAzureEgressHTTPClient == nil || azureDependencies.newAzureCredential == nil || azureDependencies.newAzureTokenClient == nil {
+			return nil, fmt.Errorf("live adapter construction failed")
+		}
+		httpClient, err := azureDependencies.newAzureEgressHTTPClient(endpointConfig)
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
-		client, err := openairesponses.NewAzureTokenClient(openairesponses.AzureTokenClientConfig{Endpoint: endpoint, APIVersion: liveAzureAPIVersion, TokenCredential: credential, HTTPClient: newLiveHTTPClient()})
+		credential, err := azureDependencies.newAzureCredential()
+		if err != nil {
+			return nil, fmt.Errorf("live adapter construction failed")
+		}
+		client, err := azureDependencies.newAzureTokenClient(openairesponses.AzureTokenClientConfig{Endpoint: endpointConfig.BaseURL, APIVersion: liveAzureAPIVersion, TokenCredential: credential, HTTPClient: httpClient})
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
@@ -369,6 +412,38 @@ func adapterFor(ctx context.Context, candidate Profile, lookup func(string) (str
 	default:
 		return nil, fmt.Errorf("live profile is not supported")
 	}
+}
+
+// liveAzureOpenAIEndpointConfig accepts only HTTPS Azure OpenAI resource
+// endpoints. The subsequent client construction uses the production egress
+// guard, so this identity check cannot turn a caller-controlled hostname into
+// an allowed destination or bypass address and redirect policy.
+func liveAzureOpenAIEndpointConfig(value string) (config.EndpointConfig, error) {
+	endpoint, err := url.ParseRequestURI(value)
+	if err != nil || endpoint == nil || !strings.EqualFold(endpoint.Scheme, "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return config.EndpointConfig{}, fmt.Errorf("live Azure endpoint is not an approved Azure OpenAI endpoint")
+	}
+	if port := endpoint.Port(); port != "" && port != "443" {
+		return config.EndpointConfig{}, fmt.Errorf("live Azure endpoint is not an approved Azure OpenAI endpoint")
+	}
+	host, err := config.NormalizeOutboundHost(endpoint.Hostname())
+	if err != nil || !isLiveAzureOpenAIHost(host) {
+		return config.EndpointConfig{}, fmt.Errorf("live Azure endpoint is not an approved Azure OpenAI endpoint")
+	}
+	return config.EndpointConfig{
+		BaseURL:       endpoint.String(),
+		OutboundHosts: []string{host},
+		Timeout:       config.Duration(liveHTTPTimeout),
+	}, nil
+}
+
+func isLiveAzureOpenAIHost(host string) bool {
+	for _, suffix := range liveAzureOpenAIHostSuffixes {
+		if len(host) > len(suffix) && strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func openRouterProfileConfig(profile Profile) openaichat.OpenRouterProfileConfig {

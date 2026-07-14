@@ -30,10 +30,12 @@ request:
 go test -tags=live ./integration/live -run '^$'
 ```
 
-The workflow may use that command in uncredentialed jobs. A protected manual
-run selects one profile by adding its flag and the two suite gates; it runs
-`TestLiveProviderContracts` with scoped credentials. The harness does not
-read a provider's environment variables until those gates pass.
+Both checked-in CI workflows run that command without live environment values
+or provider credentials; on master this includes the daily scheduled run. A
+protected manual run selects one profile by adding its flag and the two suite
+gates; it runs `TestLiveProviderContracts` with scoped credentials. The
+harness does not read a provider's environment variables until those gates
+pass.
 
 ## Pinned profiles
 
@@ -45,7 +47,7 @@ endpoints are checked in rather than supplied by an environment variable.
 | Profile | Protocol and pinned model | Profile gate | Credential source and additional configuration | Continuation |
 | --- | --- | --- | --- | --- |
 | `openai-responses` | OpenAI Responses; `gpt-4.1-mini` | `LLMTW_LIVE_OPENAI_RESPONSES` | `OPENAI_API_KEY`; OpenAI v1 endpoint | Pinned |
-| `azure-responses` | Azure OpenAI Responses; `gpt-4.1-mini` | `LLMTW_LIVE_AZURE_RESPONSES` | Azure Default Credential; `LLMTW_LIVE_AZURE_OPENAI_ENDPOINT` | Pinned |
+| `azure-responses` | Azure OpenAI Responses; `gpt-4.1-mini` | `LLMTW_LIVE_AZURE_RESPONSES` | Azure Default Credential; `LLMTW_LIVE_AZURE_OPENAI_ENDPOINT` must be an HTTPS Azure OpenAI resource endpoint (`*.openai.azure.com`, `*.openai.azure.us`, or `*.openai.azure.cn`) | Pinned |
 | `openai-chat` | OpenAI Chat Completions; `gpt-4.1-mini` | `LLMTW_LIVE_OPENAI_CHAT` | `OPENAI_API_KEY`; OpenAI v1 endpoint | Rejected before invocation |
 | `openrouter-chat` | OpenRouter Chat Completions; `openai/gpt-4.1-mini` | `LLMTW_LIVE_OPENROUTER_CHAT` | `OPENROUTER_API_KEY`; OpenRouter API endpoint | Rejected before invocation |
 | `exa-chat` | Exa Chat; `exa` | `LLMTW_LIVE_EXA_CHAT` | `EXA_API_KEY`; Exa API endpoint | Rejected before invocation |
@@ -93,9 +95,11 @@ capabilities, price catalogs, limits, or fixtures.
 
 ## Release workflow handoff
 
-Task 24 owns workflow implementation. Its protected `workflow_dispatch` path
-should select exactly one profile, expose that profile's 25,000-microUSD
-ceiling in the workflow summary, run the scoped test, and retain its redacted
-test log as release evidence. It must not add this suite to PR or scheduled
-workflows, and it must not turn a test failure into an automatic retry,
-catalog update, or price change.
+Task 24 owns protected workflow implementation. Its protected
+`workflow_dispatch` path should select exactly one profile, expose that
+profile's 25,000-microUSD ceiling in the workflow summary, run the scoped
+test, and retain its redacted test log as release evidence. It must not run
+`TestLiveProviderContracts`, set its live gates, or inject provider credentials
+on pull-request or scheduled workflows; those workflows run this harness only
+through the compile-only command above. It must not turn a test failure into an
+automatic retry, catalog update, or price change.

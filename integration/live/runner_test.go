@@ -6,10 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
+	"github.com/mfow/llm-temporal-worker/llm/provider/openairesponses"
 )
 
 func TestFamilyForProfilePinsTheProtocol(t *testing.T) {
@@ -287,6 +291,56 @@ func TestAdapterForRejectsMutatedProfileBeforeCredentialLookup(t *testing.T) {
 	}
 }
 
+func TestAdapterForRejectsUntrustedAzureEndpointBeforeCredentialOrClientConstruction(t *testing.T) {
+	var profile Profile
+	for _, candidate := range Profiles() {
+		if candidate.ID == "azure-responses" {
+			profile = candidate
+			break
+		}
+	}
+	if profile.ID == "" {
+		t.Fatal("azure live profile is unavailable")
+	}
+
+	for _, endpoint := range []string{
+		liveOpenAIBaseURL,
+		"https://attacker.example",
+		"https://resource.openai.azure.com.attacker.example",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			credentialFactoryCalls := 0
+			clientFactoryCalls := 0
+			dependencies := defaultAzureAdapterDependencies()
+			dependencies.newAzureCredential = func() (azcore.TokenCredential, error) {
+				credentialFactoryCalls++
+				return fakeAzureTokenCredential{}, nil
+			}
+			dependencies.newAzureTokenClient = func(openairesponses.AzureTokenClientConfig) (*openairesponses.Client, error) {
+				clientFactoryCalls++
+				return nil, errors.New("client factory must not run")
+			}
+			lookup := func(name string) (string, bool) {
+				if name == liveAzureEndpointEnv {
+					return endpoint, true
+				}
+				return "", false
+			}
+
+			_, err := adapterForWithAzureDependencies(context.Background(), profile, lookup, dependencies)
+			if err == nil {
+				t.Fatal("untrusted Azure endpoint unexpectedly constructed an adapter")
+			}
+			if strings.Contains(err.Error(), endpoint) {
+				t.Fatal("untrusted Azure endpoint appeared in the adapter error")
+			}
+			if credentialFactoryCalls != 0 || clientFactoryCalls != 0 {
+				t.Fatalf("credential/client factory calls = %d/%d, want 0/0", credentialFactoryCalls, clientFactoryCalls)
+			}
+		})
+	}
+}
+
 type recordingAdapter struct {
 	capabilityCalls    int
 	compileCalls       int
@@ -352,4 +406,10 @@ func completedPinnedResult(profile Profile) provider.Result {
 			Pinned:     true,
 		},
 	}}
+}
+
+type fakeAzureTokenCredential struct{}
+
+func (fakeAzureTokenCredential) GetToken(context.Context, policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{}, nil
 }

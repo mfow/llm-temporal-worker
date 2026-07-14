@@ -102,6 +102,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -race ./...
 
+      - name: Compile guarded live-provider harness
+        if: steps.go.outputs.present == 'true'
+        run: go test -tags=live ./integration/live -run '^$'
+
       - name: Replay semantic fuzz seeds and mutation invariants
         if: steps.go.outputs.present == 'true'
         run: |

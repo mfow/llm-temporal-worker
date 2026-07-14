@@ -71,8 +71,11 @@ requires immutable action commits with readable major-version comments,
 read-only pull-request permissions with no provider credentials, and master
 push/manual triggers plus the exact 05:00 `Australia/Sydney` schedule. It also
 requires both workflows to run the same verification target before the Go
-release gates. This target validates only checked-in workflow definitions; it
-does not deploy, publish, or contact a provider.
+release gates and to compile the build-tagged provider contract harness with
+`go test -tags=live ./integration/live -run '^$'`. That compile-only step has
+no live gates or provider credentials; the master schedule runs the same safe
+check. This target validates only checked-in workflow definitions; it does not
+deploy, publish, or contact a provider.
 
 The release plan may list additional future gates; the commands above are the
 currently implemented targets. Both CI workflows call the same formatting
