@@ -116,19 +116,22 @@ transforms compare the documented transformed form plus diagnostics.
 
 ## Fixture paths
 
+Fixtures are owned by the adapter package that knows how to interpret them:
+
 ```text
-testdata/contracts/common/
-testdata/contracts/openai-responses/
-testdata/contracts/azure-responses/
-testdata/contracts/openrouter-chat/
-testdata/contracts/exa-chat/
-testdata/contracts/anthropic-direct/
-testdata/contracts/anthropic-aws/
-testdata/contracts/bedrock-anthropic/
-testdata/contracts/errors/
-testdata/contracts/security/
+llm/provider/openaichat/testdata/contracts/common/chat/
+llm/provider/openaichat/testdata/contracts/azure-responses/
+llm/provider/openaichat/testdata/contracts/openrouter-chat/
+llm/provider/openaichat/testdata/contracts/exa-chat/
+llm/provider/openairesponses/testdata/contracts/openai-responses/
+llm/provider/anthropicmessages/testdata/contracts/anthropic-direct/
+llm/provider/anthropicmessages/testdata/contracts/anthropic-aws/
+llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic/
 ```
 
-Each profile has a `manifest.yaml` listing every required matrix case. A test
+Each listed profile has a `manifest.yaml` listing its required matrix cases.
+Error fixtures live beside the provider profile that emits them, and security
+cases are package tests rather than a root-level fixture directory. A test
 compares manifests to a code-owned required-case list, so adding a new semantic
-field or enum fails every adapter until support/rejection fixtures are added.
+field or enum fails the owning adapter until support/rejection fixtures are
+added.
