@@ -1,0 +1,322 @@
+package engine
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/admission"
+	"github.com/mfow/llm-temporal-worker/budget"
+	"github.com/mfow/llm-temporal-worker/llm"
+	"github.com/mfow/llm-temporal-worker/llm/provider"
+	"github.com/mfow/llm-temporal-worker/pricing"
+	"github.com/mfow/llm-temporal-worker/routing"
+	"github.com/mfow/llm-temporal-worker/state"
+)
+
+const (
+	operationDomain        = "llmtw/operation/v1\x00"
+	providerHandleMedia    = "application/vnd.llmtw.provider-handle"
+	defaultLease           = time.Minute
+	defaultRetention       = 24 * time.Hour
+	defaultContinuationTTL = 24 * time.Hour
+)
+
+type quotedCandidate struct {
+	candidate    routing.Candidate
+	entry        pricing.Entry
+	estimate     budget.Estimate
+	reservations []admission.WindowReservation
+}
+
+type quotedPlan struct {
+	candidates []quotedCandidate
+	maximum    pricing.MicroUSD
+}
+
+func (engine *Engine) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+	if engine == nil {
+		return llm.Response{}, engineError(provider.CodeInternal, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "engine is nil", nil)
+	}
+	if err := ctx.Err(); err != nil {
+		return llm.Response{}, engineError(provider.CodeCanceled, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", err)
+	}
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request normalization failed", err)
+	}
+	digest, err := llm.RequestDigest(normalized)
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request digest failed", err)
+	}
+	snapshot, err := engine.dependencies.Snapshots.Current(ctx)
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
+	}
+	now := engine.dependencies.Clock()
+	providerRequest, constraints, parent, err := engine.loadContinuation(ctx, normalized, now)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	if err := engine.beat(ctx, Progress{Phase: string(provider.PhasePlan), At: now}); err != nil {
+		return llm.Response{}, err
+	}
+	plan, err := engine.dependencies.Planner.Plan(ctx, routing.Input{
+		Request: normalized, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health,
+	})
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
+	}
+	quoted, err := engine.quotePlan(ctx, normalized, plan, snapshot, now)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	operationID, scopeKey := operationIdentity(normalized, digest)
+	operation, existing, err := engine.beginOrResume(ctx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	if existing {
+		response, resumed, err := engine.resolveExisting(ctx, operation, now)
+		if err != nil {
+			return llm.Response{}, err
+		}
+		if response != nil {
+			return *response, nil
+		}
+		if !resumed {
+			return llm.Response{}, engineError(provider.CodeOperationConflict, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetrySameOperation, "operation is already in progress", nil)
+		}
+	}
+	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "admitted", At: now}); err != nil {
+		return llm.Response{}, err
+	}
+	return engine.dispatchPlan(ctx, normalized, providerRequest, snapshot, quoted, operation, parent)
+}
+
+func (engine *Engine) loadContinuation(ctx context.Context, request llm.Request, now time.Time) (llm.Request, state.Constraints, *state.Continuation, error) {
+	if request.Continuation == nil {
+		return request, state.Constraints{}, nil, nil
+	}
+	if engine.dependencies.Continuations == nil {
+		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeStateUnavailable, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetrySameOperation, "continuation store is unavailable", nil)
+	}
+	handle := state.Handle(request.Continuation.Handle)
+	if handle == "" {
+		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation handle is empty", nil)
+	}
+	continuation, err := engine.dependencies.Continuations.Get(ctx, handle)
+	if err != nil {
+		code := provider.CodeStateUnavailable
+		if errors.Is(err, state.ErrInvalidHandle) || errors.Is(err, state.ErrNotFound) || errors.Is(err, state.ErrTenantMismatch) || errors.Is(err, state.ErrExpired) {
+			code = provider.CodeInvalidArgument
+		}
+		return llm.Request{}, state.Constraints{}, nil, engineError(code, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation could not be loaded", err)
+	}
+	if request.Context.Tenant != "" && continuation.Tenant != request.Context.Tenant {
+		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation tenant does not match request tenant", state.ErrTenantMismatch)
+	}
+	if err := continuation.Validate(now); err != nil {
+		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeStateCorrupt, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation is invalid", err)
+	}
+	providerValue := toProviderContinuation(continuation)
+	request.Continuation = providerValue
+	return request, continuation.Constraints(request.Portability), continuationPointer(continuation), nil
+}
+
+func continuationPointer(value state.Continuation) *state.Continuation {
+	clone := value.Clone()
+	return &clone
+}
+
+func toProviderContinuation(continuation state.Continuation) *llm.Continuation {
+	result := &llm.Continuation{EndpointID: continuation.Pinning.EndpointID, Model: continuation.Pinning.ModelLineage, Pinned: !continuation.Pinning.Empty()}
+	for _, value := range continuation.ProviderState {
+		if value.Media == providerHandleMedia {
+			result.Handle = string(value.Data)
+			continue
+		}
+		result.ProviderStates = append(result.ProviderStates, llm.ProviderState{Provider: value.Provider, EndpointFamily: value.Family, MediaType: value.Media, Opaque: append([]byte(nil), value.Data...)})
+	}
+	return result
+}
+
+func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan routing.Plan, snapshot Snapshot, now time.Time) (quotedPlan, error) {
+	if snapshot.Prices == nil {
+		return quotedPlan{}, engineError(provider.CodeConfiguration, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing resolver is unavailable", nil)
+	}
+	quoted := quotedPlan{candidates: make([]quotedCandidate, 0, len(plan.Candidates))}
+	for _, candidate := range plan.Candidates {
+		if err := ctx.Err(); err != nil {
+			return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing canceled", err)
+		}
+		quote, err := snapshot.Prices.Resolve(pricing.Query{
+			Provider: candidate.Provider, Family: candidate.Family, EndpointID: candidate.EndpointID,
+			Region: candidate.Region, Model: candidate.Model, ProviderTier: candidate.ProviderTier, At: now,
+		})
+		if err != nil {
+			return quotedPlan{}, engineError(provider.CodeConfiguration, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate has no active price", err)
+		}
+		entry := quote.Entry
+		if entry.Version == "" {
+			entry.Version = quote.CatalogVersion
+		}
+		estimate, err := engine.dependencies.Estimator.EstimateCandidate(request, candidate, entry)
+		if err != nil {
+			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate cost estimate failed", err)
+		}
+		reservations := engine.reservations(request, candidate, estimate.MicroUSD, snapshot.BudgetPolicies, snapshot.Environment, now)
+		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: entry, estimate: estimate, reservations: reservations})
+		if estimate.MicroUSD > quoted.maximum {
+			quoted.maximum = estimate.MicroUSD
+		}
+	}
+	return quoted, nil
+}
+
+func (engine *Engine) reservations(request llm.Request, candidate routing.Candidate, amount pricing.MicroUSD, policies []budget.Policy, environment string, now time.Time) []admission.WindowReservation {
+	matched := budget.MatchPolicies(policies, budget.ContextFor(request, candidate, environment))
+	result := make([]admission.WindowReservation, 0, len(matched))
+	for _, value := range matched {
+		_, bucket := value.Window.Range(now)
+		result = append(result, admission.WindowReservation{
+			PolicyID: value.PolicyID, WindowID: value.Window.ID, Bucket: bucket, Amount: amount,
+			Limit: value.Window.Limit, BucketNanos: value.Window.Bucket.Nanoseconds(), DurationNanos: value.Window.Duration.Nanoseconds(),
+		})
+	}
+	return result
+}
+
+func (engine *Engine) beginOrResume(ctx context.Context, request llm.Request, snapshot Snapshot, operationID, scopeKey string, digest [32]byte, quoted quotedPlan, now time.Time) (admission.Operation, bool, error) {
+	lease := snapshot.ReservationLease
+	if lease <= 0 {
+		lease = defaultLease
+	}
+	retention := snapshot.OperationRetention
+	if retention <= 0 {
+		retention = defaultRetention
+	}
+	reservations := aggregateReservations(quoted.candidates)
+	result, err := engine.dependencies.Admission.Begin(ctx, admission.BeginRequest{
+		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest, Reservation: quoted.maximum,
+		Reservations: reservations, ConfigVersion: snapshot.Version, PriceVersion: priceVersion(quoted.candidates),
+		LeaseUntil: now.Add(lease), ExpiresAt: now.Add(retention),
+	})
+	if err != nil {
+		if errors.Is(err, admission.ErrOperationConflict) {
+			return admission.Operation{}, false, engineError(provider.CodeOperationConflict, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "operation key is already bound to another request", err)
+		}
+		return admission.Operation{}, false, engineError(provider.CodeStateUnavailable, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetrySameOperation, "admission failed", err)
+	}
+	if result.Denied != nil {
+		mapped := engineError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryAfter, "budget reservation denied", nil)
+		mapped.RetryAfter = result.Denied.RetryAfter
+		mapped.SafeDetails = map[string]string{"policy_id": result.Denied.PolicyID, "window_id": result.Denied.WindowID}
+		return admission.Operation{}, false, mapped
+	}
+	return result.Operation, result.Existing, nil
+}
+
+func (engine *Engine) resolveExisting(ctx context.Context, operation admission.Operation, now time.Time) (*llm.Response, bool, error) {
+	switch operation.State {
+	case admission.StateCompleted:
+		response, err := engine.dependencies.Results.Get(ctx, operation.ID)
+		if err != nil {
+			return nil, false, engineError(provider.CodeStateCorrupt, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "completed operation result is unavailable", err)
+		}
+		return &response, false, nil
+	case admission.StateDispatching:
+		response, err := engine.dependencies.Results.Get(ctx, operation.ID)
+		if err == nil {
+			actual := pricing.MicroUSD(response.Cost.ActualMicroUSD)
+			if !actual.Valid() {
+				return nil, false, engineError(provider.CodeStateCorrupt, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "stored result cost is invalid", nil)
+			}
+			finalCtx, cancel := engine.finalizationContext(ctx)
+			defer cancel()
+			if completeErr := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual, Attempt: operation.Attempt}); completeErr != nil {
+				return nil, false, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation finalization failed", completeErr)
+			}
+			return &response, false, nil
+		}
+		if !errors.Is(err, ErrResultNotFound) {
+			return nil, false, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "in-flight result lookup failed", err)
+		}
+		return nil, false, engineError(provider.CodeAmbiguousDispatch, provider.PhaseAdmission, provider.DispatchAmbiguous, provider.RetryNever, "operation may have reached the provider", nil)
+	case admission.StateAmbiguous:
+		return nil, false, engineError(provider.CodeAmbiguousDispatch, provider.PhaseAdmission, provider.DispatchAmbiguous, provider.RetryNever, "operation may have reached the provider", nil)
+	case admission.StateReserved:
+		if !operation.LeaseUntil.IsZero() && now.Before(operation.LeaseUntil) {
+			return nil, false, nil
+		}
+		return nil, true, nil
+	case admission.StateDefiniteFailed, admission.StateCanceled:
+		return nil, false, engineError(provider.CodeOperationConflict, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "operation is already terminal", nil)
+	default:
+		return nil, false, engineError(provider.CodeStateCorrupt, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "operation state is unknown", nil)
+	}
+}
+
+func operationIdentity(request llm.Request, digest [32]byte) (string, string) {
+	scope := request.Context.Tenant + "\x00" + request.OperationKey
+	data := make([]byte, 0, len(operationDomain)+len(scope)+len(digest))
+	data = append(data, operationDomain...)
+	data = append(data, scope...)
+	data = append(data, digest[:]...)
+	identity := sha256.Sum256(data)
+	return hex.EncodeToString(identity[:]), scope
+}
+
+func priceVersion(candidates []quotedCandidate) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	first := candidates[0].entry.Version
+	for _, candidate := range candidates[1:] {
+		if candidate.entry.Version != first {
+			return "mixed"
+		}
+	}
+	return first
+}
+
+func aggregateReservations(candidates []quotedCandidate) []admission.WindowReservation {
+	type key struct{ policy, window string }
+	byKey := make(map[key]admission.WindowReservation)
+	for _, candidate := range candidates {
+		for _, reservation := range candidate.reservations {
+			id := key{policy: reservation.PolicyID, window: reservation.WindowID}
+			current, ok := byKey[id]
+			if !ok || reservation.Amount > current.Amount {
+				byKey[id] = reservation
+			}
+		}
+	}
+	result := make([]admission.WindowReservation, 0, len(byKey))
+	for _, reservation := range byKey {
+		result = append(result, reservation)
+	}
+	// Map iteration must not affect admission payloads or digests.
+	sortReservations(result)
+	return result
+}
+
+func sortReservations(values []admission.WindowReservation) {
+	for i := 1; i < len(values); i++ {
+		value := values[i]
+		j := i - 1
+		for j >= 0 && (values[j].PolicyID > value.PolicyID || (values[j].PolicyID == value.PolicyID && values[j].WindowID > value.WindowID)) {
+			values[j+1] = values[j]
+			j--
+		}
+		values[j+1] = value
+	}
+}
+
+func engineError(code provider.Code, phase provider.Phase, dispatch provider.DispatchCertainty, retry provider.RetryDisposition, message string, cause error) *provider.Error {
+	result := provider.NewError(code, phase, dispatch, retry, message)
+	result.Cause = cause
+	return result
+}

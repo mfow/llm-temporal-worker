@@ -148,7 +148,7 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	if err != nil {
 		return reject(RejectInvalid, "candidate", err.Error())
 	}
-	return Candidate{ID: id, RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: route.Family, Model: route.Model, ModelLineage: lineage, RequestedClass: requested, AttemptedClass: attempted, FallbackIndex: fallbackIndex, RouteIndex: routeIndex, ProviderTier: tier, CapabilityVersion: route.Capabilities.Version, PriceVersion: route.PriceVersion, ExtensionDigest: extensionDigest, Pinning: pin}, Rejection{}, true
+	return Candidate{ID: id, RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: route.Family, Region: route.Region, Model: route.Model, ModelLineage: lineage, RequestedClass: requested, AttemptedClass: attempted, FallbackIndex: fallbackIndex, RouteIndex: routeIndex, ProviderTier: tier, CapabilityVersion: route.Capabilities.Version, PriceVersion: route.PriceVersion, ExtensionDigest: extensionDigest, Pinning: pin}, Rejection{}, true
 }
 
 func requiredFeatures(request llm.Request, continuation state.Constraints) []Feature {

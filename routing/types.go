@@ -63,6 +63,7 @@ type Candidate struct {
 	EndpointID        string
 	Provider          string
 	Family            string
+	Region            string
 	Model             string
 	ModelLineage      string
 	RequestedClass    llm.ServiceClass
