@@ -346,21 +346,24 @@ review; they never refresh silently from an untrusted endpoint.
 
 ## Validation
 
-`validate-config` performs all checks without starting a worker:
+`validate-config` performs the local checks in `config.Load` without starting a
+worker:
 
-- schema version, unknown/duplicate fields, duration and URL syntax;
-- secrets references structurally valid (and optionally resolvable);
-- Temporal, state, blob, and endpoint timeouts compose safely;
-- each route references an endpoint, capability profile, exact price path, and
-  supported class;
-- no route/model alias cycles or duplicate IDs;
-- no endpoint class outside the public three;
-- strict capabilities known for configured claims;
-- every budget window/bucket/count and Redis integer bound is safe;
-- all matching admission keys can share the configured hash slot;
-- operation/continuation/blob retention inequalities hold;
-- worker shutdown fits Kubernetes termination grace;
-- provider SDK retries remain hard-disabled in constructors;
-- logs cannot enable content in production.
+- schema version, unknown/duplicate fields, documented defaults, duration and
+  URL syntax;
+- secret references are structurally valid, without reading their values;
+- Temporal, state, blob, endpoint, and provider timeout bounds are valid;
+- routes reference declared endpoints and only use the three public service
+  classes mapped by those endpoints;
+- budget windows, continuation keys, Redis numeric bounds, and retention
+  inequalities are safe;
+- telemetry settings obey their environment and content-logging rules.
+
+It does not read catalog files or compare their digests, resolve environment or
+file secret contents, construct provider/Temporal/Redis/S3 clients, inspect
+Redis hash-slot or Function state, verify SDK retry options, or validate
+Kubernetes deployment settings. The production `worker` command performs the
+reference and client-construction checks during runtime composition; catalog
+and deployment verification are separate gates.
 
 Reload performs the same checks and publishes only a complete valid snapshot.
