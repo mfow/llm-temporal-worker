@@ -177,8 +177,16 @@ func TestComposeTemporalHealthcheckUsesEntrypointBoundSemanticReadiness(t *testi
 	if got, want := healthcheckTest.Content[0].Value, "CMD-SHELL"; got != want {
 		t.Fatalf("Temporal healthcheck mode = %q, want %q", got, want)
 	}
-	if got, want := healthcheckTest.Content[1].Value, `TEMPORAL_ADDRESS="$$(getent hosts "$$(hostname)" | awk '{print $$1;}'):7233" temporal operator cluster health | grep -q SERVING`; got != want {
+	if got, want := healthcheckTest.Content[1].Value, `BIND_ON_IP="$$(getent hosts "$$(hostname)" | awk '{print $$1;}')"; case "$$BIND_ON_IP" in *:*) TEMPORAL_ADDRESS="[$$BIND_ON_IP]:7233" ;; *) TEMPORAL_ADDRESS="$$BIND_ON_IP:7233" ;; esac; TEMPORAL_ADDRESS="$$TEMPORAL_ADDRESS" temporal operator cluster health | grep -q SERVING`; got != want {
 		t.Fatalf("Temporal healthcheck command = %q, want %q", got, want)
+	}
+	for name, required := range map[string]string{
+		"bracketed IPv6": `*:*) TEMPORAL_ADDRESS="[$$BIND_ON_IP]:7233" ;;`,
+		"IPv4":           `*) TEMPORAL_ADDRESS="$$BIND_ON_IP:7233" ;;`,
+	} {
+		if !strings.Contains(healthcheckTest.Content[1].Value, required) {
+			t.Errorf("Temporal healthcheck is missing %s address handling %q", name, required)
+		}
 	}
 }
 

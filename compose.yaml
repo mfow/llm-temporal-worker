@@ -34,7 +34,7 @@ services:
       # Docker healthchecks do not inherit entrypoint exports. Recompute the
       # address exactly as the pinned image's entrypoint does, then use its
       # semantic server-readiness predicate.
-      test: ["CMD-SHELL", "TEMPORAL_ADDRESS=\"$$(getent hosts \"$$(hostname)\" | awk '{print $$1;}'):7233\" temporal operator cluster health | grep -q SERVING"]
+      test: ["CMD-SHELL", "BIND_ON_IP=\"$$(getent hosts \"$$(hostname)\" | awk '{print $$1;}')\"; case \"$$BIND_ON_IP\" in *:*) TEMPORAL_ADDRESS=\"[$$BIND_ON_IP]:7233\" ;; *) TEMPORAL_ADDRESS=\"$$BIND_ON_IP:7233\" ;; esac; TEMPORAL_ADDRESS=\"$$TEMPORAL_ADDRESS\" temporal operator cluster health | grep -q SERVING"]
       interval: 5s
       timeout: 3s
       retries: 24
