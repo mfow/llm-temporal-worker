@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -157,5 +160,24 @@ func TestInitialDependencyVerificationFailureClosesClients(t *testing.T) {
 	}
 	if clients.Count() != 1 {
 		t.Fatalf("unpublished initial client close count = %d, want 1", clients.Count())
+	}
+}
+
+func TestReloadFileRejectsOversizedReplacementWithoutPublishingIt(t *testing.T) {
+	application, err := New(context.Background(), Options{InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := application.Current().Config.ConfigVersion()
+	path := filepath.Join(t.TempDir(), "oversized.yaml")
+	if err := os.WriteFile(path, make([]byte, maxReloadFileBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = application.ReloadFile(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "exceeds safe size") {
+		t.Fatalf("reload error = %v", err)
+	}
+	if current := application.Current(); current == nil || current.Config.ConfigVersion() != before {
+		t.Fatal("oversized replacement changed the published snapshot")
 	}
 }

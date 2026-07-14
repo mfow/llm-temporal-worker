@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/activity"
@@ -72,6 +75,11 @@ type Options struct {
 
 	Health  *httpserver.HealthState
 	Metrics *observability.Metrics
+	Tracer  *observability.Tracer
+	Logger  *observability.Logger
+
+	TraceExporterFactory TraceExporterFactory
+	LogOutput            io.Writer
 
 	// Identity overrides the generated Temporal identity.
 	Identity string
@@ -86,6 +94,8 @@ type Runtime struct {
 	Worker   *app.TemporalWorker
 	Health   *httpserver.HealthState
 	Metrics  *observability.Metrics
+	Tracer   *observability.Tracer
+	Logger   *observability.Logger
 
 	HealthServer  *httpserver.Server
 	MetricsServer *httpserver.Server
@@ -170,14 +180,11 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if health == nil {
 		health = httpserver.NewHealthState()
 	}
-	metrics := options.Metrics
-	if metrics == nil {
-		metrics, err = newMetrics(configuration)
-		if err != nil {
-			temporalClient.Close()
-			_ = application.Close(context.Background())
-			return nil, fmt.Errorf("construct metrics: %w", err)
-		}
+	metrics, tracer, logger, err := newRuntimeTelemetry(ctx, configuration, options)
+	if err != nil {
+		temporalClient.Close()
+		_ = application.Close(context.Background())
+		return nil, err
 	}
 	dynamic := &snapshotEngine{application: application}
 	identity := options.Identity
@@ -192,8 +199,11 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		MaxConcurrentActivityTaskPolls: configuration.Temporal.Worker.MaxConcurrentActivityTaskPolls,
 		GracefulStopTimeout:            time.Duration(configuration.Temporal.Worker.GracefulStopTimeout),
 		Activities: &activity.Activities{
-			Engine:        dynamic,
-			Heartbeater:   &activity.TemporalHeartbeater{},
+			Engine: dynamic,
+			HeartbeaterFactory: func() activity.Heartbeater {
+				return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
+			},
+			Tracer:        tracer,
 			PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
 		},
 		Health:  health,
@@ -201,6 +211,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		Factory: options.WorkerFactory,
 	})
 	if err != nil {
+		_ = tracer.Shutdown(context.Background())
 		temporalClient.Close()
 		_ = application.Close(context.Background())
 		return nil, err
@@ -211,6 +222,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		Metrics: metrics.Handler(),
 	})
 	if err != nil {
+		_ = tracer.Shutdown(context.Background())
 		temporalClient.Close()
 		_ = application.Close(context.Background())
 		return nil, fmt.Errorf("construct health server: %w", err)
@@ -223,6 +235,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			Metrics: metrics.Handler(),
 		})
 		if err != nil {
+			_ = tracer.Shutdown(context.Background())
 			temporalClient.Close()
 			_ = application.Close(context.Background())
 			return nil, fmt.Errorf("construct metrics server: %w", err)
@@ -235,17 +248,21 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		CloseApp: func(closeContext context.Context) error {
 			return closeResources(closeContext, application, temporalClient, healthServer, metricsServer, health)
 		},
-		Telemetry: []app.TelemetryFlusher{app.FlushFunc(func(context.Context) error { return nil })},
-		Timeout:   timeout,
+		Telemetry: []app.TelemetryFlusher{
+			app.FlushFunc(tracer.Shutdown),
+			logger,
+		},
+		Timeout: timeout,
 	})
 	if err != nil {
+		_ = tracer.Shutdown(context.Background())
 		temporalClient.Close()
 		_ = application.Close(context.Background())
 		return nil, err
 	}
 	return &Runtime{
 		App: application, Temporal: temporalClient, Worker: worker,
-		Health: health, Metrics: metrics,
+		Health: health, Metrics: metrics, Tracer: tracer, Logger: logger,
 		HealthServer: healthServer, MetricsServer: metricsServer,
 		shutdown: coordinator, timeout: timeout,
 		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
@@ -254,6 +271,9 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 }
 
 func newMetrics(configuration config.Config) (*observability.Metrics, error) {
+	if !configuration.Telemetry.Metrics.Enabled {
+		return nil, nil
+	}
 	endpoints := make([]string, 0, len(configuration.Endpoints))
 	models := make([]string, 0, len(configuration.Models))
 	policies := make([]string, 0, len(configuration.Budgets.Policies))
@@ -266,7 +286,16 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	for _, policy := range configuration.Budgets.Policies {
 		policies = append(policies, policy.ID)
 	}
-	return observability.NewMetrics(observability.AllowedValues{Endpoints: endpoints, Models: models, Policies: policies})
+	return observability.NewMetrics(observability.AllowedValues{
+		Endpoints: endpoints, Models: models, Policies: policies,
+		Outcomes:              []string{"success", "failure", "accepted", "rejected", "denied"},
+		Phases:                []string{"planning", "admission", "pre_write", "streaming", "finalization", "continuation_write"},
+		Statuses:              []string{"completed", "failed", "canceled"},
+		ErrorClasses:          []string{"none", "internal", "provider_unavailable", "budget_denied"},
+		Methods:               []string{"provider_reported", "usage"},
+		OperationStates:       []string{"reserved", "dispatching", "completed", "failed", "ambiguous"},
+		ContinuationDecisions: []string{"created", "reused", "dropped"},
+	})
 }
 
 // Start starts probe listeners before Temporal polling. Required dependency
@@ -323,6 +352,20 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 // Run starts the process and blocks until cancellation or a probe listener
 // fails. Cancellation is a successful graceful exit when shutdown succeeds.
 func (runtime *Runtime) Run(ctx context.Context) error {
+	return runtime.run(ctx, "", nil)
+}
+
+// RunWithReload adds an explicit, already-sanitized reload trigger to the
+// normal worker lifecycle. A rejected replacement is recorded and leaves the
+// worker running on its current immutable snapshot.
+func (runtime *Runtime) RunWithReload(ctx context.Context, path string, reloads <-chan struct{}) error {
+	if path == "" {
+		return errors.New("configuration path is required")
+	}
+	return runtime.run(ctx, path, reloads)
+}
+
+func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-chan struct{}) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -337,10 +380,16 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if runtime.MetricsServer != nil {
 		metricsErrors = runtime.MetricsServer.Errors()
 	}
-	for healthErrors != nil || metricsErrors != nil {
+	for healthErrors != nil || metricsErrors != nil || reloads != nil {
 		select {
 		case <-ctx.Done():
 			return runtime.gracefulShutdown()
+		case _, ok := <-reloads:
+			if !ok {
+				reloads = nil
+				continue
+			}
+			runtime.reloadFromTrigger(reloadPath)
 		case err, ok := <-healthErrors:
 			if !ok {
 				healthErrors = nil
@@ -362,6 +411,19 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		}
 	}
 	return runtime.gracefulShutdown()
+}
+
+func (runtime *Runtime) reloadFromTrigger(path string) {
+	if runtime == nil || path == "" {
+		return
+	}
+	timeout := runtime.timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_ = runtime.ReloadFile(ctx, path)
 }
 
 func (runtime *Runtime) gracefulShutdown() error {
@@ -396,11 +458,44 @@ func closeResources(ctx context.Context, application *app.App, temporalClient cl
 	return errors.Join(errs...)
 }
 
-// RunWorker is the CLI-facing entry point. It builds the production provider
-// and state composition from the validated configuration and then runs the
-// Temporal worker until cancellation. Secret values remain in the resolver and
-// provider clients; they are never copied into a published config snapshot.
+// RunWorker is the CLI-facing entry point for embeddings that provide their
+// own lifecycle trigger. It does not install a process-wide signal handler.
 func RunWorker(ctx context.Context, data []byte, _ io.Writer) error {
+	runtime, err := newProductionRuntime(ctx, data)
+	if err != nil {
+		return err
+	}
+	return runtime.Run(ctx)
+}
+
+// RunWorkerFile runs the production worker with both SIGHUP and safe file
+// replacement triggers. It begins from the already validated bytes supplied by
+// the command boundary; subsequent reloads always read the same file path.
+func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtime, err := newProductionRuntime(ctx, data)
+	if err != nil {
+		return err
+	}
+	watcher, err := newConfigFileWatcher(path, defaultConfigWatchInterval)
+	if err != nil {
+		_ = runtime.gracefulShutdown()
+		return errors.New("watch configuration file failed")
+	}
+	defer watcher.Close()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	reloadContext, cancelReloads := context.WithCancel(ctx)
+	defer cancelReloads()
+	reloads := combineReloadTriggers(reloadContext, watcher.Changes(), signals)
+	return runtime.RunWithReload(ctx, path, reloads)
+}
+
+func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 	secretResolver := secrets.New(secrets.Options{})
 	references := secrets.ConfigResolver{Resolver: secretResolver}
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
@@ -408,7 +503,7 @@ func RunWorker(ctx context.Context, data []byte, _ io.Writer) error {
 		SnapshotLoader: CatalogSnapshotLoader{},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	runtime, err := New(ctx, data, Options{
 		Resolver:       references,
@@ -416,9 +511,9 @@ func RunWorker(ctx context.Context, data []byte, _ io.Writer) error {
 		EngineFactory:  factory,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return runtime.Run(ctx)
+	return runtime, nil
 }
 
 type snapshotClients struct {

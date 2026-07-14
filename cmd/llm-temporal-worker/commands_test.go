@@ -108,35 +108,43 @@ func TestConfigCommandsDoNotPrintSecretValues(t *testing.T) {
 	}
 }
 
-func TestWorkerAndReconcileCommandsUseScopedDependencies(t *testing.T) {
+func TestWorkerCommandUsesPathAwareRuntime(t *testing.T) {
 	path := exampleConfigPath(t)
 	workerCalled := false
-	reconcileCalled := ""
 	var output, errorsOut bytes.Buffer
 	code := Execute(context.Background(), []string{"worker", "--config", path}, CommandOptions{
 		Out: &output, ErrOut: &errorsOut,
-		RunWorker: func(_ context.Context, data []byte, _ io.Writer) error {
-			workerCalled = len(data) > 0
+		RunWorkerFile: func(_ context.Context, gotPath string, data []byte, _ io.Writer) error {
+			workerCalled = gotPath == path && len(data) > 0
 			return nil
 		},
 	})
 	if code != 0 || !workerCalled {
 		t.Fatalf("worker code=%d called=%v errors=%s", code, workerCalled, errorsOut.String())
 	}
-	code = Execute(context.Background(), []string{"reconcile", "--operation-id", "op-safe"}, CommandOptions{
-		Out: &output, ErrOut: &errorsOut,
-		Reconcile: func(_ context.Context, operationID string) error { reconcileCalled = operationID; return nil },
+}
+
+func TestReconcileCommandUsesScopedCallback(t *testing.T) {
+	var output, errorsOut bytes.Buffer
+	called := ""
+	code := Execute(context.Background(), []string{"reconcile", "--operation-id", "op-safe"}, CommandOptions{
+		Out:    &output,
+		ErrOut: &errorsOut,
+		Reconcile: func(_ context.Context, operationID string) error {
+			called = operationID
+			return nil
+		},
 	})
-	if code != 0 || reconcileCalled != "op-safe" || !strings.Contains(output.String(), "reconcile complete") {
-		t.Fatalf("reconcile code=%d id=%q output=%q", code, reconcileCalled, output.String())
+	if code != 0 || called != "op-safe" || !strings.Contains(output.String(), "reconcile complete") {
+		t.Fatalf("reconcile command code=%d called=%q output=%q errors=%q", code, called, output.String(), errorsOut.String())
 	}
 }
 
 func TestCommandFailuresAreRedacted(t *testing.T) {
 	var output, errorsOut bytes.Buffer
-	code := Execute(context.Background(), []string{"reconcile", "--operation-id", "op-safe"}, CommandOptions{
+	code := Execute(context.Background(), []string{"worker", "--config", exampleConfigPath(t)}, CommandOptions{
 		Out: &output, ErrOut: &errorsOut,
-		Reconcile: func(context.Context, string) error { return errors.New("secret-token-value") },
+		RunWorker: func(context.Context, []byte, io.Writer) error { return errors.New("secret-token-value") },
 	})
 	if code != 1 || strings.Contains(errorsOut.String(), "secret-token-value") {
 		t.Fatalf("failure code=%d output=%q", code, errorsOut.String())

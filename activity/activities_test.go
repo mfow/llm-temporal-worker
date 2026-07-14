@@ -122,6 +122,36 @@ func (*temporalActivityCaptureRegistry) RegisterDynamicActivity(any, sdkactivity
 
 var _ worker.ActivityRegistry = (*temporalActivityCaptureRegistry)(nil)
 
+func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T) {
+	response := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
+	var created []*fakeHeartbeater
+	activities := Activities{
+		Engine: fakeEngine{response: response, events: []llm.Event{
+			llm.ResponseStarted{EventHeader: llm.EventHeader{Sequence: 1, OperationID: response.OperationID}},
+			llm.ResponseCompleted{EventHeader: llm.EventHeader{Sequence: 2, OperationID: response.OperationID}, Response: response},
+		}},
+		HeartbeaterFactory: func() Heartbeater {
+			heartbeater := &fakeHeartbeater{}
+			created = append(created, heartbeater)
+			return heartbeater
+		},
+	}
+	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}}
+	if _, err := activities.Generate(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.Request.OperationKey = "operation-2"
+	if _, err := activities.Generate(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 2 || created[0] == created[1] {
+		t.Fatalf("created heartbeater instances = %#v, want two distinct per-Activity instances", created)
+	}
+	if len(created[0].progress) == 0 || len(created[1].progress) == 0 {
+		t.Fatalf("per-Activity heartbeat progress = %d, %d; want bounded lifecycle progress on each", len(created[0].progress), len(created[1].progress))
+	}
+}
+
 func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	heartbeater := &fakeHeartbeater{}
 	activities := Activities{Engine: fakeEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}, Heartbeater: heartbeater}
@@ -129,7 +159,7 @@ func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Metadata.OperationID != "operation-id" || len(heartbeater.progress) != 3 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "streaming" || heartbeater.progress[2].Phase != "finalizing" {
+	if response.Metadata.OperationID != "operation-id" || len(heartbeater.progress) != 3 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "streaming" || heartbeater.progress[2].Phase != "finalization" {
 		t.Fatalf("response=%#v heartbeats=%#v", response, heartbeater.progress)
 	}
 }
@@ -250,8 +280,8 @@ func TestGenerateActivityFallsBackForPreAdmissionStreamingUnsupported(t *testing
 	if response.Metadata.OperationID != "operation-id" || native.streamCalls != 1 || native.generateCalls != 1 {
 		t.Fatalf("response=%#v stream calls=%d generate calls=%d", response, native.streamCalls, native.generateCalls)
 	}
-	if len(heartbeater.progress) != 2 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "finalizing" {
-		t.Fatalf("fallback heartbeats = %#v, want planning/finalizing only", heartbeater.progress)
+	if len(heartbeater.progress) != 2 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "finalization" {
+		t.Fatalf("fallback heartbeats = %#v, want planning/finalization only", heartbeater.progress)
 	}
 }
 

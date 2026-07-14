@@ -29,6 +29,13 @@ type CommandOptions struct {
 	ErrOut    io.Writer
 	Resolver  config.ReferenceResolver
 	RunWorker func(context.Context, []byte, io.Writer) error
+	// RunWorkerFile receives the source path as well as its initially
+	// validated bytes so the production runtime can watch the same file for
+	// SIGHUP and atomic replacement reloads. RunWorker remains a compatibility
+	// seam for small embeddings that own their lifecycle trigger.
+	RunWorkerFile func(context.Context, string, []byte, io.Writer) error
+	// Reconcile is a narrowly scoped, read-only callback for an existing
+	// operation ID. The command layer cannot issue provider submissions.
 	Reconcile func(context.Context, string) error
 }
 
@@ -210,37 +217,20 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}
-	if options.RunWorker == nil {
+	if options.RunWorkerFile == nil && options.RunWorker == nil {
 		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
 		return 1
 	}
-	if err := options.RunWorker(ctx, data, options.Out); err != nil {
-		writeCommandError(options.ErrOut, err)
+	var runErr error
+	if options.RunWorkerFile != nil {
+		runErr = options.RunWorkerFile(ctx, *path, data, options.Out)
+	} else {
+		runErr = options.RunWorker(ctx, data, options.Out)
+	}
+	if runErr != nil {
+		writeCommandError(options.ErrOut, runErr)
 		return 1
 	}
-	return 0
-}
-
-func executeReconcileCommand(ctx context.Context, args []string, options CommandOptions) int {
-	flags := flag.NewFlagSet("reconcile", flag.ContinueOnError)
-	flags.SetOutput(options.ErrOut)
-	operationID := flags.String("operation-id", "", "safe operation ID")
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	if *operationID == "" || strings.ContainsAny(*operationID, "\r\n") || len(*operationID) > 256 {
-		writeCommandError(options.ErrOut, errors.New("operation-id is required"))
-		return 2
-	}
-	if options.Reconcile == nil {
-		writeCommandError(options.ErrOut, errors.New("reconcile backend is unavailable"))
-		return 1
-	}
-	if err := options.Reconcile(ctx, *operationID); err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
-	}
-	_, _ = io.WriteString(options.Out, "reconcile complete\n")
 	return 0
 }
 

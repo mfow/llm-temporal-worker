@@ -36,3 +36,23 @@ func TestTracerDropsUnsafeAttributesAndHashesTenant(t *testing.T) {
 		t.Fatal("tenant was not hashed")
 	}
 }
+
+func TestTracerContextUsesBoundTracerAndFlushes(t *testing.T) {
+	exporter := &observability.MemoryExporter{}
+	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	ctx := observability.WithTracer(context.Background(), tracer)
+	if observability.FromContext(ctx) != tracer {
+		t.Fatal("context did not retain the configured tracer")
+	}
+	_, span := observability.FromContext(ctx).Start(ctx, "runtime.reload", attribute.String("outcome", "success"))
+	span.End()
+	if err := tracer.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.Spans()) != 1 {
+		t.Fatalf("flushed span count = %d, want 1", len(exporter.Spans()))
+	}
+	if err := tracer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

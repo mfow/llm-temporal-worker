@@ -509,7 +509,7 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 		t.Fatal(err)
 	}
 	defer stream.Close()
-	waitChannel(t, heartbeat.entered, "admitted heartbeat")
+	waitChannel(t, heartbeat.entered, "admission heartbeat")
 	cancel()
 	events := readTerminalStream(t, stream)
 	failure, ok := events[len(events)-1].(llm.StreamErrored)
@@ -722,7 +722,7 @@ type cancelOnAdmissionHeartbeat struct {
 }
 
 func (heartbeat *cancelOnAdmissionHeartbeat) Beat(ctx context.Context, progress Progress) error {
-	if progress.Phase != "admitted" {
+	if progress.Phase != "admission" {
 		return nil
 	}
 	heartbeat.once.Do(func() { close(heartbeat.entered) })

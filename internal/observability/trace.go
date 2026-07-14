@@ -14,8 +14,10 @@ import (
 )
 
 type TraceOptions struct {
-	Enabled  bool
-	Exporter trace.SpanExporter
+	Enabled     bool
+	Exporter    trace.SpanExporter
+	SampleRatio *float64
+	Batch       bool
 }
 
 type Tracer struct {
@@ -24,13 +26,28 @@ type Tracer struct {
 }
 
 func NewTracer(options TraceOptions) *Tracer {
-	providerOptions := make([]trace.TracerProviderOption, 0, 1)
+	providerOptions := make([]trace.TracerProviderOption, 0, 2)
 	if options.Enabled && options.Exporter != nil {
-		providerOptions = append(providerOptions, trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(options.Exporter)))
+		if options.SampleRatio != nil {
+			ratio := *options.SampleRatio
+			if ratio < 0 {
+				ratio = 0
+			} else if ratio > 1 {
+				ratio = 1
+			}
+			providerOptions = append(providerOptions, trace.WithSampler(trace.ParentBased(trace.TraceIDRatioBased(ratio))))
+		}
+		if options.Batch {
+			providerOptions = append(providerOptions, trace.WithBatcher(options.Exporter))
+		} else {
+			providerOptions = append(providerOptions, trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(options.Exporter)))
+		}
 	}
 	provider := trace.NewTracerProvider(providerOptions...)
 	return &Tracer{provider: provider, tracer: provider.Tracer("github.com/mfow/llm-temporal-worker")}
 }
+
+var noopTracer = NewTracer(TraceOptions{})
 
 func (tracer *Tracer) Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, oteltrace.Span) {
 	if tracer == nil || tracer.tracer == nil {
@@ -62,6 +79,39 @@ func (tracer *Tracer) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return tracer.provider.Shutdown(ctx)
+}
+
+// Flush delivers all completed spans within the caller's shutdown deadline.
+// Runtime uses Shutdown afterwards to release the exporter transport.
+func (tracer *Tracer) Flush(ctx context.Context) error {
+	if tracer == nil || tracer.provider == nil {
+		return nil
+	}
+	return tracer.provider.ForceFlush(ctx)
+}
+
+type tracerContextKey struct{}
+
+// WithTracer binds one configured tracer to a request context without making
+// the provider-neutral engine depend on process-global OpenTelemetry state.
+func WithTracer(ctx context.Context, tracer *Tracer) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if tracer == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, tracerContextKey{}, tracer)
+}
+
+// FromContext returns a no-op-safe tracer when the runtime has not bound one.
+func FromContext(ctx context.Context) *Tracer {
+	if ctx != nil {
+		if tracer, ok := ctx.Value(tracerContextKey{}).(*Tracer); ok && tracer != nil {
+			return tracer
+		}
+	}
+	return noopTracer
 }
 
 func safeSpanName(name string) string {

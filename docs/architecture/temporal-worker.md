@@ -212,6 +212,9 @@ On `SIGTERM`/`SIGINT`, readiness turns false first. The process stops polling,
 allows the Temporal worker's configured graceful stop timeout, flushes telemetry
 within a bound, and exits nonzero when shutdown integrity fails. Kubernetes
 termination grace must exceed worker graceful stop plus telemetry flush.
+`SIGHUP` is distinct from termination: it requests a validated configuration
+reload and keeps the current snapshot serving if replacement validation or
+dependency verification fails.
 
 `cmd/llm-temporal-worker` installs a signal-aware context and delegates the
 worker command to `internal/runtime`. Runtime shutdown closes probe listeners,

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 
 	"github.com/mfow/llm-temporal-worker/engine"
+	"github.com/mfow/llm-temporal-worker/internal/observability"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -13,21 +15,27 @@ import (
 )
 
 type Activities struct {
-	Engine        llm.Engine
-	Heartbeater   Heartbeater
-	PayloadLimits PayloadLimits
+	Engine             llm.Engine
+	Heartbeater        Heartbeater
+	HeartbeaterFactory func() Heartbeater
+	Tracer             *observability.Tracer
+	PayloadLimits      PayloadLimits
 }
 
 func (activities *Activities) Generate(ctx context.Context, payload GenerateRequest) (GenerateResponse, error) {
 	if activities == nil || activities.Engine == nil {
 		return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "Activity engine is unavailable"))
 	}
+	ctx = observability.WithTracer(ctx, activities.Tracer)
 	request, err := payload.Validate(activities.PayloadLimits.inlineBytes())
 	if err != nil {
 		return GenerateResponse{}, ToTemporalError(err)
 	}
-	if activities.Heartbeater != nil {
-		if err := activities.Heartbeater.Beat(ctx, engine.Progress{Phase: "planning"}); err != nil {
+	heartbeater := activities.newHeartbeater()
+	if heartbeater != nil {
+		heartbeater = &deduplicatingHeartbeater{target: heartbeater}
+		ctx = engine.WithHeartbeat(ctx, heartbeater)
+		if err := heartbeater.Beat(ctx, engine.Progress{Phase: "planning"}); err != nil {
 			return GenerateResponse{}, ToTemporalError(err)
 		}
 	}
@@ -38,7 +46,7 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 			if generateErr != nil {
 				return GenerateResponse{}, ToTemporalError(generateErr)
 			}
-			return activities.completeGenerate(ctx, response)
+			return activities.completeGenerate(ctx, response, heartbeater)
 		}
 		return GenerateResponse{}, ToTemporalError(err)
 	}
@@ -55,16 +63,16 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 		if _, ok := event.(llm.ContentCompleted); ok {
 			outputItems++
 		}
-		if activities.Heartbeater != nil {
+		if heartbeater != nil {
 			if progress, ok := StreamProgress(event, outputItems); ok {
-				if err := activities.Heartbeater.Beat(ctx, progress); err != nil {
+				if err := heartbeater.Beat(ctx, progress); err != nil {
 					return GenerateResponse{}, ToTemporalError(err)
 				}
 			}
 		}
 		switch terminal := event.(type) {
 		case llm.ResponseCompleted:
-			return activities.completeGenerate(ctx, terminal.Response)
+			return activities.completeGenerate(ctx, terminal.Response, heartbeater)
 		case llm.StreamErrored:
 			return GenerateResponse{}, ToTemporalError(terminal.Err)
 		}
@@ -81,13 +89,13 @@ func preAdmissionStreamingUnavailable(err error) bool {
 	return errors.As(err, &providerErr) && providerErr.Code == provider.CodeUnsupportedCapability && providerErr.Phase == provider.PhaseStream && providerErr.Dispatch == provider.DispatchNotDispatched && providerErr.OperationID == ""
 }
 
-func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response) (GenerateResponse, error) {
+func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response, heartbeater Heartbeater) (GenerateResponse, error) {
 	result := GenerateResponse{APIVersion: APIVersion, Response: response, Metadata: ResultMetadata{OperationID: response.OperationID}}
 	if err := result.Validate(activities.PayloadLimits.inlineBytes()); err != nil {
 		return GenerateResponse{}, ToTemporalError(err)
 	}
-	if activities.Heartbeater != nil {
-		if err := activities.Heartbeater.Beat(ctx, engine.Progress{OperationID: response.OperationID, Phase: "finalizing"}); err != nil {
+	if heartbeater != nil {
+		if err := heartbeater.Beat(ctx, engine.Progress{OperationID: response.OperationID, Phase: "finalization"}); err != nil {
 			return GenerateResponse{}, ToTemporalError(err)
 		}
 	}
@@ -103,6 +111,48 @@ func (activities *Activities) generateTemporal(ctx context.Context, payload Gene
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (activities *Activities) newHeartbeater() Heartbeater {
+	if activities == nil {
+		return nil
+	}
+	if activities.HeartbeaterFactory != nil {
+		return activities.HeartbeaterFactory()
+	}
+	return activities.Heartbeater
+}
+
+// deduplicatingHeartbeater suppresses duplicate lifecycle facts emitted by an
+// Activity and the engine it invokes. It is allocated for one Activity call,
+// so it cannot couple concurrent invocation timestamps or mutable state.
+type deduplicatingHeartbeater struct {
+	target Heartbeater
+
+	mu   sync.Mutex
+	last engine.Progress
+	set  bool
+}
+
+func (heartbeater *deduplicatingHeartbeater) Beat(ctx context.Context, progress engine.Progress) error {
+	if heartbeater == nil || heartbeater.target == nil {
+		return nil
+	}
+	heartbeater.mu.Lock()
+	duplicate := heartbeater.set && sameProgress(heartbeater.last, progress)
+	if !duplicate {
+		heartbeater.last = progress
+		heartbeater.set = true
+	}
+	heartbeater.mu.Unlock()
+	if duplicate {
+		return ctx.Err()
+	}
+	return heartbeater.target.Beat(ctx, progress)
+}
+
+func sameProgress(left, right engine.Progress) bool {
+	return left.OperationID == right.OperationID && left.Phase == right.Phase && left.RouteIndex == right.RouteIndex && left.ClassIndex == right.ClassIndex && left.OutputItems == right.OutputItems
 }
 
 // Register installs the exact versioned Activity name rather than relying on

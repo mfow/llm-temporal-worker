@@ -24,6 +24,18 @@ type Heartbeater interface {
 	Beat(context.Context, engine.Progress) error
 }
 
+// HeartbeatMetrics is the deliberately narrow metrics dependency needed by a
+// per-Activity heartbeater. It keeps the Activity package independent of a
+// particular Prometheus implementation.
+type HeartbeatMetrics interface {
+	SetHeartbeatAge(time.Duration)
+}
+
+type TemporalHeartbeaterOptions struct {
+	Clock   func() time.Time
+	Metrics HeartbeatMetrics
+}
+
 // StreamProgress translates only bounded, redacted stream facts into an
 // Activity heartbeat. Text, JSON, tool arguments, opaque provider state, and
 // other raw delta payloads intentionally never enter Temporal history.
@@ -45,6 +57,15 @@ func StreamProgress(event llm.Event, outputItems int) (engine.Progress, bool) {
 type TemporalHeartbeater struct {
 	mu      sync.Mutex
 	started time.Time
+	clock   func() time.Time
+	metrics HeartbeatMetrics
+}
+
+func NewTemporalHeartbeater(options TemporalHeartbeaterOptions) *TemporalHeartbeater {
+	if options.Clock == nil {
+		options.Clock = time.Now
+	}
+	return &TemporalHeartbeater{clock: options.Clock, metrics: options.Metrics}
 }
 
 func (heartbeater *TemporalHeartbeater) Beat(ctx context.Context, progress engine.Progress) error {
@@ -58,15 +79,25 @@ func (heartbeater *TemporalHeartbeater) Beat(ctx context.Context, progress engin
 	if heartbeater.started.IsZero() {
 		heartbeater.started = progress.At
 		if heartbeater.started.IsZero() {
-			heartbeater.started = time.Now().UTC()
+			heartbeater.started = heartbeater.now()
 		}
 	}
 	started := heartbeater.started
 	heartbeater.mu.Unlock()
 	last := progress.At
 	if last.IsZero() {
-		last = time.Now().UTC()
+		last = heartbeater.now()
+	}
+	if heartbeater.metrics != nil {
+		heartbeater.metrics.SetHeartbeatAge(last.Sub(started))
 	}
 	sdkactivity.RecordHeartbeat(ctx, HeartbeatDetails{OperationID: progress.OperationID, Phase: progress.Phase, RouteIndex: progress.RouteIndex, ClassIndex: progress.ClassIndex, StartedAt: started, LastEventAt: last, OutputItems: progress.OutputItems})
 	return ctx.Err()
+}
+
+func (heartbeater *TemporalHeartbeater) now() time.Time {
+	if heartbeater != nil && heartbeater.clock != nil {
+		return heartbeater.clock().UTC()
+	}
+	return time.Now().UTC()
 }

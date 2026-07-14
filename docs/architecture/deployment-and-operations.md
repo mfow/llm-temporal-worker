@@ -18,11 +18,6 @@ the full production composition and starts Temporal polling. See the
 [command-line reference](../reference/cli.md) for exact behavior and exit
 statuses.
 
-The dispatcher also contains a `reconcile --operation-id` seam for tests and
-custom embeddings, but the production binary does not provide a reconciliation
-backend and exits with `reconcile backend is unavailable`. It is not an
-operator runbook command yet.
-
 ## Container
 
 The multi-stage Docker build:
@@ -134,10 +129,16 @@ The internal application package supports an atomic reload API:
 6. atomically publish the snapshot;
 7. drain old clients after their captured Activities finish.
 
-A bad reload leaves the old snapshot serving. The production CLI does not yet
-wire that API to `SIGHUP` or a file watcher, so operators must restart the
-worker to apply a changed configuration; replacing the file alone does not
-reload a running process. Environment variables are not hot-reloaded.
+A bad reload leaves the old snapshot serving. The production `worker` wires
+both `SIGHUP` and a bounded metadata watcher for its `--config` path into this
+same path; an atomic file replacement is therefore read as one complete
+candidate before validation. Repeated notifications are coalesced. Environment
+variables are not hot-reloaded.
+
+Reload updates the request snapshot and its provider/state clients only.
+Listener addresses, Temporal client/task-queue and worker settings, monitor
+cadence, and telemetry process wiring remain process-lifetime settings and
+require a restart when changed.
 
 ## Required metrics
 
@@ -154,29 +155,33 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_operation_state_total{state}`;
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
+- `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat).
 
-Reload failures are returned to the internal reload caller and leave the active
-snapshot and readiness state unchanged. The production CLI has no reload
-trigger, and the registered `llmtw_config_reload_total` counter is not currently
-recorded; an embedding that adds a reload trigger must provide its own error
-reporting and alerting.
+Reload failures leave the active snapshot and readiness state unchanged, record
+the bounded failure outcome, and log only a safe error classification. Success
+records the matching bounded success outcome. Alert on failures rather than
+attempting to parse logs for configuration content.
 
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
 
 ## Logs and traces
 
-Structured logs include timestamp, level, trace/span, Temporal workflow/run and
-Activity IDs, operation ID, route IDs, configured tenant hash, status, and safe
-error code. Prompt/output/tool content, continuation handles, authorization,
-provider-state bytes, and raw provider bodies are denied fields.
+Structured logs use the configured JSON or text format and only admit the
+bounded correlation and lifecycle fields supplied by callers: Temporal
+workflow/run and Activity IDs, operation ID, route IDs, configured tenant hash,
+status, and safe error code. Prompt/output/tool content, continuation handles,
+authorization, provider-state bytes, and raw provider bodies are denied fields.
 
 Tracing spans cover normalization, state load, planning, admission, each
-provider attempt, finalization, and continuation write. Trace propagation to
-providers is opt-in because custom headers may be unsupported or disclose
-internal identifiers.
+provider attempt, finalization, and continuation write. When tracing is
+enabled, runtime constructs the configured OTLP/gRPC exporter with its secure
+transport default and applies the configured sample ratio; exporter shutdown
+flushes within the worker shutdown deadline. Trace propagation to providers is
+opt-in because custom headers may be unsupported or disclose internal
+identifiers.
 
 ## Alerts
 
