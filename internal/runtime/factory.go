@@ -105,6 +105,28 @@ type ProductionEngineFactory struct {
 	options ProductionFactoryOptions
 }
 
+// productionClientSet owns the SDK clients built for one immutable snapshot
+// and exposes only the runtime's narrow dependency probe capability. The app
+// package still sees it solely as a ClientSet.
+type productionClientSet struct {
+	close  func(context.Context) error
+	probes []DependencyProbe
+}
+
+func (set *productionClientSet) Close(ctx context.Context) error {
+	if set == nil || set.close == nil {
+		return nil
+	}
+	return set.close(ctx)
+}
+
+func (set *productionClientSet) DependencyProbes() []DependencyProbe {
+	if set == nil {
+		return nil
+	}
+	return append([]DependencyProbe(nil), set.probes...)
+}
+
 func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEngineFactory, error) {
 	if options.SnapshotLoader == nil {
 		return nil, fmt.Errorf("%w: snapshot loader is required", ErrProductionFactoryInvalid)
@@ -169,10 +191,15 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	clock := factory.options.Clock
-	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Keys: redisstore.KeyOptions{Prefix: "llmtw", HashTag: value.State.Redis.AdmissionHashTag, KeySecret: keySecret}, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
+	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: redisstore.KeyOptions{Prefix: "llmtw", HashTag: value.State.Redis.AdmissionHashTag, KeySecret: keySecret}, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
 	if err != nil {
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
+	}
+	redisProbe, err := NewRedisDependencyProbe(redisClient, value.State.Redis)
+	if err != nil {
+		closeOwned()
+		return nil, nil, fmt.Errorf("construct Redis readiness probe: %w", err)
 	}
 	keyring, err := factory.continuationKeyring(ctx, value)
 	if err != nil {
@@ -194,6 +221,18 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			_ = blobCloser.Close()
 		}
 		closeOwned()
+	}
+	bucket, ok := blobStore.(interface {
+		ProbeBucket(context.Context) error
+	})
+	if !ok {
+		closeAll()
+		return nil, nil, fmt.Errorf("construct blob readiness probe: blob store does not support bucket probes")
+	}
+	blobProbe, err := NewBlobDependencyProbe(bucket)
+	if err != nil {
+		closeAll()
+		return nil, nil, fmt.Errorf("construct blob readiness probe: %w", err)
 	}
 	refResolver := factory.options.BlobRefResolver
 	if refResolver == nil && value.BlobStore.Kind == "s3" {
@@ -225,13 +264,16 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll()
 		return nil, nil, fmt.Errorf("construct engine: %w", err)
 	}
-	return engineValue, app.ClientSetFunc(func(closeContext context.Context) error {
-		if closeContext == nil {
-			closeContext = context.Background()
-		}
-		closeAll()
-		return nil
-	}), nil
+	return engineValue, &productionClientSet{
+		probes: []DependencyProbe{redisProbe, blobProbe},
+		close: func(closeContext context.Context) error {
+			if closeContext == nil {
+				closeContext = context.Background()
+			}
+			closeAll()
+			return nil
+		},
+	}, nil
 }
 
 func buildEstimator(value config.Config) (budget.Estimator, error) {

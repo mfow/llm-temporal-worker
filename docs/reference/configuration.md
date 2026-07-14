@@ -30,6 +30,8 @@ server:
   metrics_address: 0.0.0.0:9090
   shutdown_timeout: 45s
   finalization_timeout: 10s
+  readiness_probe_interval: 5s
+  readiness_probe_timeout: 2s
   inline_payload_bytes: 524288
 
 temporal:
@@ -65,7 +67,10 @@ state:
       server_name: redis.example.internal
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
+    admission_mode: function
     function_library: llmtw_admission_v1
+    admission_version: admission_v1
+    admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b
     max_connections: 96
     dial_timeout: 2s
     operation_timeout: 3s
@@ -279,6 +284,36 @@ telemetry:
     sample_ratio: "0.05"
   content_logging: disabled
 ```
+
+## Readiness and Redis admission policy
+
+`server.readiness_probe_interval` and
+`server.readiness_probe_timeout` are required positive durations; the timeout
+cannot exceed the interval. The worker checks its required state dependencies
+at initial construction, before a reload is published, and periodically while
+running. A failed check makes `/health/ready` return `503` and stops Temporal
+polling, while `/health/live` remains available for the process supervisor.
+Polling resumes only after every required dependency passes again.
+
+Readiness checks Redis with `PING`, `TIME`, the configured persistence and
+`noeviction` policy, plus the configured admission code identity. It checks
+the configured S3 bucket with bucket metadata only; it never reads or writes a
+tenant object. Provider endpoints are intentionally excluded because one route
+can be unavailable while another eligible route remains.
+
+`state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
+starting a worker, deployment automation must provision the exact versioned
+Function library and set `function_library`, `admission_version`, and
+`admission_digest` to its immutable identity. The running worker only verifies
+and calls that Function; it never loads, replaces, or rewrites shared Redis
+code. `admission_mode: lua` is an explicit compatibility fallback: its
+`admission_digest` must be the SHA-256 of the preloaded Lua source, and
+readiness requires Redis `SCRIPT EXISTS` for that source. The worker never
+falls back from a missing Lua script to `EVAL` or `SCRIPT LOAD`.
+
+`required_persistence` selects the deployment policy: `aof_and_rdb` requires
+both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only
+their named mechanism. Any mismatch fails readiness closed.
 
 ## Service-class rules
 

@@ -30,6 +30,13 @@ type HeadAPI interface {
 	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
+// BucketHeadAPI is deliberately separate from tenant object access. Runtime
+// readiness needs only to prove that the configured bucket is reachable; it
+// must not read or write any tenant key to do so.
+type BucketHeadAPI interface {
+	HeadBucket(context.Context, *s3.HeadBucketInput, ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+}
+
 type Options struct {
 	Client   API
 	Bucket   string
@@ -158,6 +165,26 @@ func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byt
 		return nil, err
 	}
 	return append([]byte(nil), data...), nil
+}
+
+// ProbeBucket checks access to the configured bucket without inspecting a
+// tenant object. It is intended for the runtime's fail-closed dependency
+// probe, not for request-path object validation.
+func (store *Store) ProbeBucket(ctx context.Context) error {
+	if store == nil || store.client == nil {
+		return fmt.Errorf("S3 blob store is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	client, ok := store.client.(BucketHeadAPI)
+	if !ok {
+		return fmt.Errorf("S3 client does not support bucket probes")
+	}
+	if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(store.bucket)}); err != nil {
+		return fmt.Errorf("head S3 bucket: %w", err)
+	}
+	return nil
 }
 
 func (store *Store) key(tenantPrefix, digest string) string {

@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -40,6 +41,44 @@ func TestLoadCompleteExample(t *testing.T) {
 	}
 }
 
+func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	server, _ := document["server"].(map[string]any)
+	for field, want := range map[string]string{
+		"readiness_probe_interval": "5s",
+		"readiness_probe_timeout":  "2s",
+	} {
+		if got, _ := server[field].(string); got != want {
+			t.Fatalf("server.%s = %q, want %q", field, got, want)
+		}
+	}
+	state, _ := document["state"].(map[string]any)
+	redis, _ := state["redis"].(map[string]any)
+	for field, want := range map[string]string{
+		"admission_mode":    "function",
+		"admission_version": "admission_v1",
+	} {
+		if got, _ := redis[field].(string); got != want {
+			t.Fatalf("state.redis.%s = %q, want %q", field, got, want)
+		}
+	}
+	digest, _ := redis["admission_digest"].(string)
+	if len(digest) != 64 {
+		t.Fatalf("state.redis.admission_digest = %q, want a SHA-256 hex digest", digest)
+	}
+}
+
 func TestLoadRejectsUnknownDuplicateAndFourthClass(t *testing.T) {
 	unknown := append(exampleYAML(t), []byte("\nunknown_field: true\n")...)
 	if _, err := config.Load(unknown); err == nil {
@@ -57,12 +96,16 @@ func TestLoadRejectsUnknownDuplicateAndFourthClass(t *testing.T) {
 
 func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 	cases := map[string]string{
-		"unsafe URL":     strings.Replace(string(exampleYAML(t)), "https://api.openai.com/v1", "http://api.openai.com/v1", 1),
-		"timeout":        strings.Replace(string(exampleYAML(t)), "timeout: 115s", "timeout: 121s", 1),
-		"retention":      strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
-		"overflow":       strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
-		"reference":      strings.Replace(string(exampleYAML(t)), "endpoint: openai-prod", "endpoint: missing-endpoint", 1),
-		"literal secret": strings.Replace(string(exampleYAML(t)), "password:\n      kind: file\n      path: /var/run/secrets/redis-password", "password: plaintext-secret", 1),
+		"unsafe URL":                 strings.Replace(string(exampleYAML(t)), "https://api.openai.com/v1", "http://api.openai.com/v1", 1),
+		"timeout":                    strings.Replace(string(exampleYAML(t)), "timeout: 115s", "timeout: 121s", 1),
+		"readiness interval":         strings.Replace(string(exampleYAML(t)), "readiness_probe_interval: 5s", "readiness_probe_interval: 0s", 1),
+		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
+		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
+		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b", "admission_digest: invalid", 1),
+		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
+		"reference":                  strings.Replace(string(exampleYAML(t)), "endpoint: openai-prod", "endpoint: missing-endpoint", 1),
+		"literal secret":             strings.Replace(string(exampleYAML(t)), "password:\n      kind: file\n      path: /var/run/secrets/redis-password", "password: plaintext-secret", 1),
 	}
 	for name, data := range cases {
 		if _, err := config.Load([]byte(data)); err == nil {

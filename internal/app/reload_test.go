@@ -101,3 +101,61 @@ func TestReloadClientConstructionFailureKeepsOldSnapshot(t *testing.T) {
 		t.Fatal("client construction failure replaced active snapshot")
 	}
 }
+
+func TestDependencyVerificationFailureNeverPublishesOrLeaksClients(t *testing.T) {
+	failure := errors.New("required dependency is unavailable")
+	created := make(chan *fakeClients, 2)
+	verificationCalls := 0
+	application, err := New(context.Background(), Options{
+		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
+			clients := &fakeClients{}
+			created <- clients
+			return clients, nil
+		},
+		Verify: func(context.Context, *config.Snapshot, ClientSet) error {
+			verificationCalls++
+			if verificationCalls > 1 {
+				return failure
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldClients := <-created
+	before := application.Current().Config.ConfigVersion()
+	if err := application.Reload(context.Background(), exampleConfig(t)); !errors.Is(err, failure) {
+		t.Fatalf("reload error = %v, want dependency verification failure", err)
+	}
+	newClients := <-created
+	if application.Current().Config.ConfigVersion() != before {
+		t.Fatal("dependency verification failure replaced active snapshot")
+	}
+	if oldClients.Count() != 0 {
+		t.Fatal("dependency verification closed the active snapshot")
+	}
+	if newClients.Count() != 1 {
+		t.Fatalf("unpublished client close count = %d, want 1", newClients.Count())
+	}
+}
+
+func TestInitialDependencyVerificationFailureClosesClients(t *testing.T) {
+	failure := errors.New("required dependency is unavailable")
+	clients := &fakeClients{}
+	application, err := New(context.Background(), Options{
+		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) { return clients, nil },
+		Verify:  func(context.Context, *config.Snapshot, ClientSet) error { return failure },
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("initialization error = %v, want dependency verification failure", err)
+	}
+	if application != nil {
+		t.Fatal("application published a snapshot after failed dependency verification")
+	}
+	if clients.Count() != 1 {
+		t.Fatalf("unpublished initial client close count = %d, want 1", clients.Count())
+	}
+}

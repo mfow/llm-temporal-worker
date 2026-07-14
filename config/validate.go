@@ -89,6 +89,15 @@ func (server ServerConfig) validate() error {
 	if err := validatePositiveDuration(server.FinalizationTimeout, "server.finalization_timeout"); err != nil {
 		return err
 	}
+	if err := validatePositiveDuration(server.ReadinessProbeInterval, "server.readiness_probe_interval"); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration(server.ReadinessProbeTimeout, "server.readiness_probe_timeout"); err != nil {
+		return err
+	}
+	if server.ReadinessProbeTimeout > server.ReadinessProbeInterval {
+		return fmt.Errorf("server.readiness_probe_timeout must not exceed readiness_probe_interval")
+	}
 	if server.InlinePayloadBytes <= 0 || server.InlinePayloadBytes > 16<<20 {
 		return fmt.Errorf("server.inline_payload_bytes must be between 1 and 16777216")
 	}
@@ -161,8 +170,19 @@ func (redis RedisConfig) validate() error {
 	if err := redis.Password.Validate("state.redis.password"); err != nil {
 		return err
 	}
-	if redis.AdmissionHashTag == "" || redis.FunctionLibrary == "" {
-		return fmt.Errorf("state.redis.admission_hash_tag and function_library are required")
+	if redis.AdmissionHashTag == "" || redis.FunctionLibrary == "" || redis.AdmissionVersion == "" {
+		return fmt.Errorf("state.redis.admission_hash_tag, function_library, and admission_version are required")
+	}
+	switch redis.AdmissionMode {
+	case "function", "lua":
+	default:
+		return fmt.Errorf("state.redis.admission_mode %q is unsupported", redis.AdmissionMode)
+	}
+	if len(redis.AdmissionDigest) != 64 {
+		return fmt.Errorf("state.redis.admission_digest must be 64 hex characters")
+	}
+	if _, err := hex.DecodeString(redis.AdmissionDigest); err != nil {
+		return fmt.Errorf("state.redis.admission_digest must be hex")
 	}
 	if redis.MaxConnections <= 0 || redis.MaxConnections > 100000 {
 		return fmt.Errorf("state.redis.max_connections is outside safe bounds")

@@ -3,8 +3,11 @@ SHELL := /bin/sh
 GO ?= go
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
+READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
+READINESS_REDIS_PORT ?= 16379
 
-.PHONY: fmt-check schema-verify docs-verify vet test build integration compose-smoke kustomize-verify verify
+.PHONY: fmt-check schema-verify docs-verify vet test build integration readiness-integration compose-smoke kustomize-verify verify
 
 fmt-check:
 	@test -z "$$(gofmt -l .)"
@@ -26,6 +29,31 @@ build:
 
 integration:
 	$(GO) test -race ./integration/...
+
+# Runs the readiness recovery gate against exactly one fresh, digest-pinned
+# Redis daemon. The test itself explicitly provisions the immutable Function;
+# the worker only verifies it and never writes shared Redis code.
+readiness-integration:
+	@command -v docker >/dev/null 2>&1 || { \
+		echo "readiness-integration requires Docker" >&2; \
+		exit 2; \
+	}
+	@docker info >/dev/null 2>&1 || { \
+		echo "readiness-integration requires a running Docker daemon" >&2; \
+		exit 2; \
+	}
+	@container="$(READINESS_REDIS_CONTAINER_PREFIX)-$$$$"; \
+	cleanup() { docker rm -f "$$container" >/dev/null 2>&1 || true; }; \
+	trap cleanup EXIT INT TERM; \
+	docker run --detach --name "$$container" --publish 127.0.0.1:$(READINESS_REDIS_PORT):6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --save 60 1 --maxmemory-policy noeviction >/dev/null; \
+	if ! LLMTW_READINESS_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_READINESS_REDIS_CONTAINER="$$container" $(GO) test -count=1 -tags=readinessintegration ./integration; then \
+		docker logs "$$container" >&2 || true; \
+		exit 1; \
+	fi; \
+	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedisAdmission$$'; then \
+		docker logs "$$container" >&2 || true; \
+		exit 1; \
+	fi
 
 compose-smoke:
 	@command -v "$(firstword $(COMPOSE))" >/dev/null 2>&1 || { \

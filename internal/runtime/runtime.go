@@ -65,6 +65,10 @@ type Options struct {
 	TemporalFactory TemporalClientFactory
 	EngineFactory   EngineFactory
 	WorkerFactory   app.WorkerFactory
+	// DependencyProbes supplements production snapshot probes for embeddings
+	// and tests. ProductionEngineFactory contributes Redis and bucket probes
+	// through its ClientSet; provider endpoints are never probes.
+	DependencyProbes []DependencyProbe
 
 	Health  *httpserver.HealthState
 	Metrics *observability.Metrics
@@ -88,6 +92,11 @@ type Runtime struct {
 
 	shutdown *app.ShutdownCoordinator
 	timeout  time.Duration
+
+	readinessProbeInterval time.Duration
+	readinessProbeTimeout  time.Duration
+	monitorCancel          context.CancelFunc
+	monitorDone            chan struct{}
 
 	mu      sync.Mutex
 	started bool
@@ -116,6 +125,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	}
 	builder := app.SnapshotBuilder{References: references}
 	var engineFactory = options.EngineFactory
+	configuredProbes := append([]DependencyProbe(nil), options.DependencyProbes...)
 	application, err := app.New(ctx, app.Options{
 		InitialConfig: data,
 		Builder:       builder,
@@ -127,8 +137,13 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			if engine == nil {
 				return nil, errors.New("engine factory returned no engine")
 			}
-			return &snapshotClients{engine: engine, clients: clients}, nil
+			probes := append([]DependencyProbe(nil), configuredProbes...)
+			if source, ok := clients.(dependencyProbeSource); ok {
+				probes = append(probes, source.DependencyProbes()...)
+			}
+			return &snapshotClients{engine: engine, clients: clients, probes: probes}, nil
 		},
+		Verify: verifySnapshotDependencies,
 	})
 	if err != nil {
 		var factoryError *engineFactoryError
@@ -233,6 +248,8 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		Health: health, Metrics: metrics,
 		HealthServer: healthServer, MetricsServer: metricsServer,
 		shutdown: coordinator, timeout: timeout,
+		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
+		readinessProbeTimeout:  time.Duration(configuration.Server.ReadinessProbeTimeout),
 	}, nil
 }
 
@@ -252,8 +269,9 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	return observability.NewMetrics(observability.AllowedValues{Endpoints: endpoints, Models: models, Policies: policies})
 }
 
-// Start starts probe listeners before Temporal polling. Readiness is set by
-// the worker only after its controller starts successfully.
+// Start starts probe listeners before Temporal polling. Required dependency
+// probes run before a controller may poll; a transient failure keeps liveness
+// up and lets the bounded monitor restore polling after recovery.
 func (runtime *Runtime) Start() error {
 	if runtime == nil || runtime.Worker == nil {
 		return errors.New("runtime is not initialized")
@@ -273,7 +291,7 @@ func (runtime *Runtime) Start() error {
 			return err
 		}
 	}
-	if err := runtime.Worker.Start(); err != nil {
+	if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
 		_ = runtime.HealthServer.Shutdown(context.Background())
 		if runtime.MetricsServer != nil {
 			_ = runtime.MetricsServer.Shutdown(context.Background())
@@ -283,6 +301,7 @@ func (runtime *Runtime) Start() error {
 	runtime.mu.Lock()
 	runtime.started = true
 	runtime.mu.Unlock()
+	runtime.startDependencyMonitor()
 	return nil
 }
 
@@ -295,6 +314,7 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runtime.stopDependencyMonitor(ctx)
 	err := runtime.shutdown.Shutdown(ctx)
 	runtime.Health.SetLive(false)
 	return err
@@ -404,6 +424,7 @@ func RunWorker(ctx context.Context, data []byte, _ io.Writer) error {
 type snapshotClients struct {
 	engine  llm.Engine
 	clients app.ClientSet
+	probes  []DependencyProbe
 }
 
 func (clients *snapshotClients) Engine() llm.Engine {
@@ -418,6 +439,127 @@ func (clients *snapshotClients) Close(ctx context.Context) error {
 		return nil
 	}
 	return clients.clients.Close(ctx)
+}
+
+type dependencyProbeSource interface {
+	DependencyProbes() []DependencyProbe
+}
+
+func (clients *snapshotClients) DependencyProbes() []DependencyProbe {
+	if clients == nil {
+		return nil
+	}
+	return append([]DependencyProbe(nil), clients.probes...)
+}
+
+func verifySnapshotDependencies(ctx context.Context, snapshot *config.Snapshot, clients app.ClientSet) error {
+	if snapshot == nil {
+		return errRequiredDependencyUnavailable
+	}
+	source, ok := clients.(dependencyProbeSource)
+	if !ok {
+		return nil
+	}
+	return CheckDependencyProbes(ctx, source.DependencyProbes(), time.Duration(snapshot.Config().Server.ReadinessProbeTimeout))
+}
+
+func (runtime *Runtime) dependencyProbes() []DependencyProbe {
+	if runtime == nil || runtime.App == nil {
+		return nil
+	}
+	current := runtime.App.Current()
+	if current == nil {
+		return nil
+	}
+	source, ok := current.Clients.(dependencyProbeSource)
+	if !ok {
+		return nil
+	}
+	return source.DependencyProbes()
+}
+
+// syncDependencyReadiness applies the fail-closed state transition in one
+// place. A failed probe pauses polling and leaves liveness alone; a successful
+// probe resumes only after every required probe passed.
+func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
+	if runtime == nil || runtime.Worker == nil {
+		return errors.New("runtime is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probes := runtime.dependencyProbes()
+	if len(probes) > 0 {
+		if err := CheckDependencyProbes(ctx, probes, runtime.readinessProbeTimeout); err != nil {
+			runtime.Health.SetReady(false)
+			runtime.Worker.Pause()
+			return nil
+		}
+	}
+	if runtime.Worker.Started() {
+		return nil
+	}
+	if err := runtime.Worker.Resume(); err != nil {
+		runtime.Health.SetReady(false)
+		return err
+	}
+	return nil
+}
+
+func (runtime *Runtime) startDependencyMonitor() {
+	if runtime == nil || len(runtime.dependencyProbes()) == 0 || runtime.readinessProbeInterval <= 0 {
+		return
+	}
+	runtime.mu.Lock()
+	if runtime.monitorCancel != nil {
+		runtime.mu.Unlock()
+		return
+	}
+	monitorContext, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	runtime.monitorCancel = cancel
+	runtime.monitorDone = done
+	interval := runtime.readinessProbeInterval
+	runtime.mu.Unlock()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-monitorContext.Done():
+				return
+			case <-ticker.C:
+				_ = runtime.syncDependencyReadiness(monitorContext)
+			}
+		}
+	}()
+}
+
+func (runtime *Runtime) stopDependencyMonitor(ctx context.Context) {
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	cancel := runtime.monitorCancel
+	done := runtime.monitorDone
+	runtime.monitorCancel = nil
+	runtime.monitorDone = nil
+	runtime.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	if done == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 type snapshotEngine struct{ application *app.App }

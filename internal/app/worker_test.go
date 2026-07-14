@@ -92,3 +92,37 @@ func TestWorkerStartErrorLeavesReadinessFalse(t *testing.T) {
 		t.Fatal("start error did not fail closed")
 	}
 }
+
+func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
+	health := httpserver.NewHealthState()
+	controllers := make([]*fakeWorker, 0, 2)
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+			controller := &fakeWorker{}
+			controllers = append(controllers, controller)
+			return controller, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	temporalWorker.Pause()
+	if health.Ready() || !controllers[0].stopped || temporalWorker.Started() {
+		t.Fatal("pause did not turn readiness off and stop polling")
+	}
+	if err := temporalWorker.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if len(controllers) != 2 || !controllers[1].started || !health.Ready() || !temporalWorker.Started() {
+		t.Fatalf("resume controllers=%d started=%v ready=%v", len(controllers), len(controllers) == 2 && controllers[1].started, health.Ready())
+	}
+	temporalWorker.Stop()
+	if !controllers[1].stopped || health.Ready() {
+		t.Fatal("permanent stop did not stop the resumed controller")
+	}
+}

@@ -1,0 +1,313 @@
+package runtime
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/config"
+	redisstore "github.com/mfow/llm-temporal-worker/storage/redis"
+	redisclient "github.com/redis/go-redis/v9"
+)
+
+func TestRedisDependencyProbeChecksEveryConfiguredPolicyWithoutMutation(t *testing.T) {
+	client := healthyRedisProbeClient()
+	probe, err := NewRedisDependencyProbe(client, testRedisProbeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Probe(context.Background())
+	if result.Dependency != DependencyRedis || result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+		t.Fatalf("healthy Redis result = %#v", result)
+	}
+	for _, setting := range []string{"maxmemory-policy", "appendonly", "save"} {
+		if client.configGetCalls[setting] != 1 {
+			t.Fatalf("CONFIG GET %q calls = %d, want 1", setting, client.configGetCalls[setting])
+		}
+	}
+	if client.pingCalls != 1 || client.timeCalls != 1 || client.functionListCalls != 1 {
+		t.Fatalf("Redis probe call counts ping=%d time=%d function-list=%d", client.pingCalls, client.timeCalls, client.functionListCalls)
+	}
+	if client.mutations != 0 {
+		t.Fatalf("readiness probe mutated Redis %d times", client.mutations)
+	}
+}
+
+func TestRedisDependencyProbeRejectsEveryConfiguredPolicyMismatch(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		config func(*config.RedisConfig)
+		client func(*fakeRedisProbeClient)
+	}{
+		{
+			name:   "eviction policy",
+			client: func(client *fakeRedisProbeClient) { client.settings["maxmemory-policy"] = "allkeys-lru" },
+		},
+		{
+			name:   "aof required",
+			config: func(value *config.RedisConfig) { value.RequiredPersistence = "aof" },
+			client: func(client *fakeRedisProbeClient) { client.settings["appendonly"] = "no" },
+		},
+		{
+			name:   "rdb required",
+			config: func(value *config.RedisConfig) { value.RequiredPersistence = "rdb" },
+			client: func(client *fakeRedisProbeClient) { client.settings["save"] = "" },
+		},
+		{
+			name: "function version",
+			client: func(client *fakeRedisProbeClient) {
+				client.libraries[0].Functions = []redisclient.Function{{Name: "admission/v0"}}
+			},
+		},
+		{
+			name:   "function digest",
+			client: func(client *fakeRedisProbeClient) { client.libraries[0].Code = "different" },
+		},
+		{
+			name: "lua digest",
+			config: func(value *config.RedisConfig) {
+				value.AdmissionMode = "lua"
+				value.AdmissionDigest = redisstore.AdmissionLuaDigest()
+			},
+			client: func(client *fakeRedisProbeClient) { client.scriptExists = []bool{false} },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := testRedisProbeConfig()
+			if test.config != nil {
+				test.config(&value)
+			}
+			client := healthyRedisProbeClient()
+			if test.client != nil {
+				test.client(client)
+			}
+			probe, err := NewRedisDependencyProbe(client, value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := probe.Probe(context.Background())
+			if result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
+				t.Fatalf("policy result = %#v", result)
+			}
+			if client.mutations != 0 {
+				t.Fatalf("policy rejection mutated Redis %d times", client.mutations)
+			}
+		})
+	}
+}
+
+func TestRedisDependencyProbeAcceptsEachConfiguredPersistencePolicy(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		persistence string
+		appendOnly  string
+		save        string
+	}{
+		{name: "AOF only", persistence: "aof", appendOnly: "yes", save: ""},
+		{name: "RDB only", persistence: "rdb", appendOnly: "no", save: "60 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := testRedisProbeConfig()
+			value.RequiredPersistence = test.persistence
+			client := healthyRedisProbeClient()
+			client.settings["appendonly"] = test.appendOnly
+			client.settings["save"] = test.save
+			probe, err := NewRedisDependencyProbe(client, value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+				t.Fatalf("%s probe result = %#v", test.persistence, result)
+			}
+		})
+	}
+}
+
+func TestRedisDependencyProbeLuaFallbackUsesPreloadedScript(t *testing.T) {
+	value := testRedisProbeConfig()
+	value.AdmissionMode = "lua"
+	value.AdmissionDigest = redisstore.AdmissionLuaDigest()
+	client := healthyRedisProbeClient()
+	client.scriptExists = []bool{true}
+	probe, err := NewRedisDependencyProbe(client, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Probe(context.Background())
+	if result.Status != ProbeStatusReady || client.scriptExistsCalls != 1 || client.functionListCalls != 0 {
+		t.Fatalf("Lua fallback result/calls = %#v script-exists=%d function-list=%d", result, client.scriptExistsCalls, client.functionListCalls)
+	}
+}
+
+func TestDependencyProbeReportsOnlySafeFailureReasons(t *testing.T) {
+	probe := DependencyProbeFunc(func(context.Context) ProbeResult {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
+	})
+	err := CheckDependencyProbes(context.Background(), []DependencyProbe{probe}, time.Second)
+	if err == nil {
+		t.Fatal("unavailable dependency unexpectedly passed")
+	}
+	if err.Error() != "required runtime dependency is unavailable" {
+		t.Fatalf("unsafe dependency error %q", err)
+	}
+}
+
+func TestDependencyProbesAcceptNilContext(t *testing.T) {
+	redisProbe, err := NewRedisDependencyProbe(healthyRedisProbeClient(), testRedisProbeConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := redisProbe.Probe(nil); result.Status != ProbeStatusReady {
+		t.Fatalf("Redis probe with nil context = %#v", result)
+	}
+	blobProbe, err := NewBlobDependencyProbe(&fakeBucketProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := blobProbe.Probe(nil); result.Status != ProbeStatusReady {
+		t.Fatalf("blob probe with nil context = %#v", result)
+	}
+}
+
+func TestDependencyProbesBoundEachProbeWithContextDeadline(t *testing.T) {
+	probe := DependencyProbeFunc(func(ctx context.Context) ProbeResult {
+		<-ctx.Done()
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusTimeout, Reason: ProbeReasonTimeout}
+	})
+	started := time.Now()
+	err := CheckDependencyProbes(context.Background(), []DependencyProbe{probe}, 10*time.Millisecond)
+	if !errors.Is(err, errRequiredDependencyUnavailable) {
+		t.Fatalf("bounded probe error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("probe timeout took %s", elapsed)
+	}
+}
+
+func TestBlobDependencyProbeUsesOnlyBucketCapabilityAndMasksErrors(t *testing.T) {
+	bucket := &fakeBucketProbe{err: errors.New("bucket secret marker")}
+	probe, err := NewBlobDependencyProbe(bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Probe(context.Background())
+	if bucket.calls != 1 || result.Dependency != DependencyBlobStore || result.Status != ProbeStatusUnavailable || result.Reason != ProbeReasonUnavailable {
+		t.Fatalf("bucket probe result = %#v calls=%d", result, bucket.calls)
+	}
+}
+
+type fakeBucketProbe struct {
+	calls int
+	err   error
+}
+
+func (probe *fakeBucketProbe) ProbeBucket(context.Context) error {
+	probe.calls++
+	return probe.err
+}
+
+type fakeRedisProbeClient struct {
+	pingErr           error
+	timeErr           error
+	functionListErr   error
+	scriptExistsErr   error
+	settings          map[string]string
+	libraries         []redisclient.Library
+	scriptExists      []bool
+	pingCalls         int
+	timeCalls         int
+	functionListCalls int
+	scriptExistsCalls int
+	configGetCalls    map[string]int
+	mutations         int
+}
+
+func healthyRedisProbeClient() *fakeRedisProbeClient {
+	return &fakeRedisProbeClient{
+		settings: map[string]string{
+			"maxmemory-policy": "noeviction",
+			"appendonly":       "yes",
+			"save":             "60 1",
+		},
+		libraries: []redisclient.Library{{
+			Name:      redisstore.AdmissionFunctionLibrary,
+			Engine:    "LUA",
+			Code:      redisstore.AdmissionFunctionSource(),
+			Functions: []redisclient.Function{{Name: redisstore.AdmissionFunctionVersion}},
+		}},
+		scriptExists:   []bool{true},
+		configGetCalls: make(map[string]int),
+	}
+}
+
+func testRedisProbeConfig() config.RedisConfig {
+	return config.RedisConfig{
+		AdmissionMode:       "function",
+		FunctionLibrary:     redisstore.AdmissionFunctionLibrary,
+		AdmissionVersion:    redisstore.AdmissionFunctionVersion,
+		AdmissionDigest:     redisstore.AdmissionFunctionDigest(),
+		RequiredPersistence: "aof_and_rdb",
+	}
+}
+
+func (client *fakeRedisProbeClient) Ping(ctx context.Context) *redisclient.StatusCmd {
+	client.pingCalls++
+	command := redisclient.NewStatusCmd(ctx)
+	command.SetVal("PONG")
+	command.SetErr(client.pingErr)
+	return command
+}
+
+func (client *fakeRedisProbeClient) Time(ctx context.Context) *redisclient.TimeCmd {
+	client.timeCalls++
+	command := redisclient.NewTimeCmd(ctx)
+	command.SetVal(time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	command.SetErr(client.timeErr)
+	return command
+}
+
+func (client *fakeRedisProbeClient) ConfigGet(ctx context.Context, setting string) *redisclient.MapStringStringCmd {
+	client.configGetCalls[setting]++
+	command := redisclient.NewMapStringStringCmd(ctx)
+	command.SetVal(map[string]string{setting: client.settings[setting]})
+	return command
+}
+
+func (client *fakeRedisProbeClient) FunctionList(ctx context.Context, _ redisclient.FunctionListQuery) *redisclient.FunctionListCmd {
+	client.functionListCalls++
+	command := redisclient.NewFunctionListCmd(ctx)
+	command.SetVal(client.libraries)
+	command.SetErr(client.functionListErr)
+	return command
+}
+
+func (client *fakeRedisProbeClient) ScriptExists(ctx context.Context, _ ...string) *redisclient.BoolSliceCmd {
+	client.scriptExistsCalls++
+	command := redisclient.NewBoolSliceCmd(ctx)
+	command.SetVal(client.scriptExists)
+	command.SetErr(client.scriptExistsErr)
+	return command
+}
+
+// The mutation methods deliberately exist on the fake so a future readiness
+// implementation cannot add a silent load/replace/config-set path unnoticed.
+func (client *fakeRedisProbeClient) FunctionLoad(context.Context, string) *redisclient.StringCmd {
+	client.mutations++
+	return redisclient.NewStringCmd(context.Background())
+}
+
+func (client *fakeRedisProbeClient) FunctionLoadReplace(context.Context, string) *redisclient.StringCmd {
+	client.mutations++
+	return redisclient.NewStringCmd(context.Background())
+}
+
+func (client *fakeRedisProbeClient) ScriptLoad(context.Context, string) *redisclient.StringCmd {
+	client.mutations++
+	return redisclient.NewStringCmd(context.Background())
+}
+
+func (client *fakeRedisProbeClient) ConfigSet(context.Context, string, string) *redisclient.StatusCmd {
+	client.mutations++
+	return redisclient.NewStatusCmd(context.Background())
+}
