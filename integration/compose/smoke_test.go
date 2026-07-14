@@ -141,7 +141,7 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 		"POSTGRES_USER: temporal",
 		"POSTGRES_PWD: ${LLMTW_POSTGRES_PASSWORD:-local-only}",
 		"POSTGRES_SEEDS: postgres",
-		"DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml",
+		"DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/docker.yaml",
 		"${LLMTW_POSTGRES_PASSWORD:-local-only}",
 		"temporal-postgres-data:/var/lib/postgresql/data",
 	} {
@@ -151,6 +151,9 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "DB: sqlite") {
 		t.Error("Temporal auto-setup must not use unsupported sqlite storage")
+	}
+	if strings.Contains(string(raw), "development-sql.yaml") {
+		t.Error("Temporal auto-setup image does not ship development-sql.yaml; use its docker.yaml dynamic config")
 	}
 	if got := strings.Count(string(raw), "${LLMTW_POSTGRES_PASSWORD:-local-only}"); got != 2 {
 		t.Fatalf("PostgreSQL password variable occurrences = %d, want the same variable on Postgres and Temporal", got)
@@ -362,13 +365,19 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"redis_port=0",
 		"health_port=0",
 		"metrics_port=0",
+		"postgres_password=\"$${LLMTW_POSTGRES_PASSWORD:-local-only}\"",
+		"mock_api_key=local-only",
 		"LLMTW_COMPOSE_TEMPORAL_UI_PORT",
+		"LLMTW_POSTGRES_PASSWORD=\"$$postgres_password\"",
 		"$(COMPOSE) port temporal 7233",
 		"$(COMPOSE) port temporal 8233",
 		"$(COMPOSE) port redis 6379",
 		"$(COMPOSE) port worker 8080",
 		"$(COMPOSE) port worker 9090",
-		"awk -v secret=\"$$redis_password\"",
+		"compose-live-integration service logs (redacted; service output only; no environment inspection):",
+		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock",
+		"awk -v redis_secret=\"$$redis_password\" -v postgres_secret=\"$$postgres_password\" -v mock_secret=\"$$mock_api_key\"",
+		"secrets[3] = mock_secret",
 		"[REDACTED]",
 		"LLMTW_TEMPORAL_ADDRESS=\"$$temporal_address\"",
 		"LLMTW_REDIS_ADDR=\"$$redis_address\"",

@@ -159,26 +159,35 @@ compose-live-integration:
 	redis_port=0; \
 	redis_username="$${LLMTW_REDIS_USERNAME:-local}"; \
 	redis_password="$${LLMTW_REDIS_PASSWORD:-local-only}"; \
+	postgres_password="$${LLMTW_POSTGRES_PASSWORD:-local-only}"; \
+	mock_api_key=local-only; \
 	health_port=0; \
 	metrics_port=0; \
 	key="$$tmpdir/continuation-hmac"; \
 	go_cache="$$tmpdir/gocache"; \
 	cleanup() { \
-		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
+		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
 		docker image rm -f "$$worker_image" "$$mock_image" >/dev/null 2>&1 || true; \
 		rm -rf "$$tmpdir"; \
 	}; \
 	trap cleanup EXIT HUP INT TERM; \
 	umask 077; \
 	dd if=/dev/urandom of="$$key" bs=32 count=1 status=none; \
-	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
+	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
 	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
 	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 180; then \
-		echo "compose-live-integration Redis logs (service output only; no environment inspection):" >&2; \
-		$(COMPOSE) logs --no-color redis 2>&1 | awk -v secret="$$redis_password" '{ \
-			while (length(secret) && index($$0, secret)) { \
-				position = index($$0, secret); \
-				$$0 = substr($$0, 1, position - 1) "[REDACTED]" substr($$0, position + length(secret)); \
+		echo "compose-live-integration service logs (redacted; service output only; no environment inspection):" >&2; \
+		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock 2>&1 | awk -v redis_secret="$$redis_password" -v postgres_secret="$$postgres_password" -v mock_secret="$$mock_api_key" 'BEGIN { \
+			secrets[1] = redis_secret; \
+			secrets[2] = postgres_secret; \
+			secrets[3] = mock_secret; \
+		} { \
+			for (i = 1; i <= 3; i++) { \
+				secret = secrets[i]; \
+				while (length(secret) && index($$0, secret)) { \
+					position = index($$0, secret); \
+					$$0 = substr($$0, 1, position - 1) "[REDACTED]" substr($$0, position + length(secret)); \
+				} \
 			} \
 			print; \
 		}' >&2 || true; \
