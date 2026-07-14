@@ -78,6 +78,114 @@ func TestConfigSchemaRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
 	}
 }
 
+func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		input func(*config.Config)
+	}{
+		{
+			name: "file_s3_values",
+			input: func(loaded *config.Config) {
+				loaded.BlobStore.S3.Bucket = "unexpected-s3-bucket"
+				loaded.BlobStore.S3.Region = "ap-southeast-2"
+				loaded.BlobStore.S3.Prefix = "v1"
+				loaded.BlobStore.S3.Auth.Kind = "aws_default_chain"
+			},
+		},
+		{
+			name: "file_s3_auth_metadata",
+			input: func(loaded *config.Config) {
+				loaded.BlobStore.S3.Auth.Path = "/unexpected/credentials"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loaded, err := config.Load(developmentFileBlobYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.input(&loaded)
+			encoded, err := json.Marshal(loaded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := compiled.Validate(encoded); err == nil {
+				t.Fatal("schema accepted populated s3 fields beside a file blob store")
+			}
+		})
+	}
+}
+
+func TestConfigValidationRejectsMixedBlobStoreBranches(t *testing.T) {
+	fileStore, err := config.Load(developmentFileBlobYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileStore.BlobStore.S3.Auth.Path = "/unexpected/credentials"
+	if err := fileStore.Validate(); err == nil {
+		t.Fatal("config validation accepted inactive s3 auth metadata beside a file blob store")
+	}
+
+	s3Store, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3Store.BlobStore.File.Root = " "
+	if err := s3Store.Validate(); err == nil {
+		t.Fatal("config validation accepted a non-empty inactive file root beside an s3 blob store")
+	}
+}
+
+func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"/", "relative/blobs", "/var/lib/../"} {
+		t.Run(root, func(t *testing.T) {
+			loaded, err := config.Load(developmentFileBlobYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded.BlobStore.File.Root = root
+			encoded, err := json.Marshal(loaded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := compiled.Validate(encoded); err == nil {
+				t.Fatalf("schema accepted unsafe file blob root %q", root)
+			}
+		})
+	}
+}
+
+func TestConfigValidationRejectsUnsafeFileBlobRoots(t *testing.T) {
+	for _, root := range []string{"/", "relative/blobs", "/var/lib/../"} {
+		t.Run(root, func(t *testing.T) {
+			loaded, err := config.Load(developmentFileBlobYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded.BlobStore.File.Root = root
+			if err := loaded.Validate(); err == nil {
+				t.Fatalf("config validation accepted unsafe file blob root %q", root)
+			}
+		})
+	}
+}
+
 func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
 	if err != nil {

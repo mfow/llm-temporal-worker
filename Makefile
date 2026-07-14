@@ -154,32 +154,54 @@ compose-live-integration:
 	project="llmtw-compose-live-$$$$"; \
 	worker_image="llmtw/worker:compose-live-$$$$"; \
 	mock_image="llmtw/provider-mock:compose-live-$$$$"; \
-	temporal_port="$${LLMTW_COMPOSE_TEMPORAL_PORT:-17233}"; \
-	redis_port="$${LLMTW_COMPOSE_REDIS_PORT:-16380}"; \
+	temporal_port=0; \
+	temporal_ui_port=0; \
+	redis_port=0; \
 	redis_username="$${LLMTW_REDIS_USERNAME:-local}"; \
 	redis_password="$${LLMTW_REDIS_PASSWORD:-local-only}"; \
-	health_port="$${LLMTW_COMPOSE_HEALTH_PORT:-18080}"; \
-	metrics_port="$${LLMTW_COMPOSE_METRICS_PORT:-19090}"; \
+	health_port=0; \
+	metrics_port=0; \
 	key="$$tmpdir/continuation-hmac"; \
 	go_cache="$$tmpdir/gocache"; \
 	cleanup() { \
-		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
+		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
 		docker image rm -f "$$worker_image" "$$mock_image" >/dev/null 2>&1 || true; \
 		rm -rf "$$tmpdir"; \
 	}; \
 	trap cleanup EXIT HUP INT TERM; \
 	umask 077; \
 	dd if=/dev/urandom of="$$key" bs=32 count=1 status=none; \
-	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
+	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
 	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
-	$(COMPOSE) --profile worker up --wait --wait-timeout 180; \
+	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 180; then \
+		echo "compose-live-integration Redis logs (service output only; no environment inspection):" >&2; \
+		$(COMPOSE) logs --no-color redis 2>&1 | awk -v secret="$$redis_password" '{ \
+			while (length(secret) && index($$0, secret)) { \
+				position = index($$0, secret); \
+				$$0 = substr($$0, 1, position - 1) "[REDACTED]" substr($$0, position + length(secret)); \
+			} \
+			print; \
+		}' >&2 || true; \
+		exit 1; \
+	fi; \
+	temporal_address="$$( $(COMPOSE) port temporal 7233 )"; \
+	temporal_ui_address="$$( $(COMPOSE) port temporal 8233 )"; \
+	redis_address="$$( $(COMPOSE) port redis 6379 )"; \
+	health_address="$$( $(COMPOSE) port worker 8080 )"; \
+	metrics_address="$$( $(COMPOSE) port worker 9090 )"; \
+	for address in "$$temporal_address" "$$temporal_ui_address" "$$redis_address" "$$health_address" "$$metrics_address"; do \
+		if [ -z "$$address" ]; then \
+			echo "compose-live-integration could not discover a Docker-assigned host port" >&2; \
+			exit 1; \
+		fi; \
+	done; \
 	redis_container="$$( $(COMPOSE) ps -q redis )"; \
 	if [ -z "$$redis_container" ]; then \
 		echo "compose-live-integration could not find the isolated Redis container" >&2; \
 		exit 1; \
 	fi; \
-	GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="127.0.0.1:$$health_port" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'; \
-	GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="127.0.0.1:$$temporal_port" LLMTW_REDIS_ADDR="127.0.0.1:$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'
+	GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'; \
+	GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestTemporalRecoveryWithSharedRedis$$'
 
 deployment-policy-verify:
 	KUBECTL= $(GO) test ./integration/kubernetes

@@ -209,7 +209,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 	}
 	switch blob.Kind {
 	case "s3":
-		if strings.TrimSpace(blob.File.Root) != "" {
+		if blob.File.Root != "" {
 			return fmt.Errorf("blob_store.file is only valid when blob_store.kind is file")
 		}
 		if blob.S3.Bucket == "" || blob.S3.Region == "" || blob.S3.Prefix == "" {
@@ -224,10 +224,15 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		if root == "" || !filepath.IsAbs(root) || strings.ContainsAny(root, "\r\n") {
 			return fmt.Errorf("blob_store.file.root must be an absolute path")
 		}
+		for _, segment := range strings.Split(root, string(filepath.Separator)) {
+			if segment == "." || segment == ".." {
+				return fmt.Errorf("blob_store.file.root must not contain dot path segments")
+			}
+		}
 		if filepath.Clean(root) == string(filepath.Separator) {
 			return fmt.Errorf("blob_store.file.root must not be the filesystem root")
 		}
-		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth.Kind != "" {
+		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
 			return fmt.Errorf("blob_store.s3 is only valid when blob_store.kind is s3")
 		}
 		return nil

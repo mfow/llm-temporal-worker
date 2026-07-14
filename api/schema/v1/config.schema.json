@@ -141,14 +141,41 @@
         "s3": {}, "file": {}
       },
       "oneOf": [
-        { "properties": { "kind": { "const": "s3" }, "s3": { "$ref": "#/$defs/s3" } }, "required": ["s3"] },
-        { "properties": { "kind": { "const": "file" }, "file": { "$ref": "#/$defs/file_blob" } }, "required": ["file"] }
+        {
+          "properties": {
+            "kind": { "const": "s3" },
+            "s3": { "$ref": "#/$defs/s3" },
+            "file": { "$ref": "#/$defs/inactive_file_blob" }
+          },
+          "required": ["s3"]
+        },
+        {
+          "properties": {
+            "kind": { "const": "file" },
+            "file": { "$ref": "#/$defs/file_blob" },
+            "s3": { "$ref": "#/$defs/inactive_s3" }
+          },
+          "required": ["file"]
+        }
       ]
     },
     "file_blob": {
       "type": "object", "additionalProperties": false,
       "required": ["root"],
-      "properties": { "root": { "type": "string", "minLength": 1 } }
+      "properties": {
+        "root": {
+          "type": "string", "minLength": 2, "pattern": "^/[^\\r\\n]*$",
+          "allOf": [
+            { "not": { "pattern": "(^|/)\\.(/|$)" } },
+            { "not": { "pattern": "(^|/)\\.\\.(/|$)" } }
+          ]
+        }
+      }
+    },
+    "inactive_file_blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root"],
+      "properties": { "root": { "const": "" } }
     },
     "s3": {
       "type": "object", "additionalProperties": false,
@@ -156,6 +183,21 @@
       "properties": {
         "bucket": { "type": "string", "minLength": 1 }, "region": { "type": "string", "minLength": 1 },
         "prefix": { "type": "string", "minLength": 1 }, "auth": { "$ref": "#/$defs/auth" }
+      }
+    },
+    "inactive_s3": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bucket", "region", "prefix", "auth"],
+      "properties": {
+        "bucket": { "const": "" }, "region": { "const": "" }, "prefix": { "const": "" },
+        "auth": { "$ref": "#/$defs/inactive_auth" }
+      }
+    },
+    "inactive_auth": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "path", "audience"],
+      "properties": {
+        "kind": { "const": "" }, "name": { "const": "" }, "path": { "const": "" }, "audience": { "const": "" }
       }
     },
     "limits": {

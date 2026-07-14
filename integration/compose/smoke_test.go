@@ -20,6 +20,9 @@ type composeService struct {
 	Image       string               `yaml:"image"`
 	Build       composeBuild         `yaml:"build"`
 	Profiles    []string             `yaml:"profiles"`
+	User        string               `yaml:"user"`
+	WorkingDir  string               `yaml:"working_dir"`
+	Entrypoint  yaml.Node            `yaml:"entrypoint"`
 	DependsOn   map[string]yaml.Node `yaml:"depends_on"`
 	Command     yaml.Node            `yaml:"command"`
 	ReadOnly    bool                 `yaml:"read_only"`
@@ -229,18 +232,55 @@ func TestRedisFunctionProvisionerEscapesShellVariablesFromCompose(t *testing.T) 
 }
 
 func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
-	_, raw := readCompose(t)
+	document, raw := readCompose(t)
+	redis := document.Services["redis"]
+	if redis.User != "" {
+		t.Fatalf("Redis ACL wrapper must invoke the image entrypoint as root so it can initialize /data, got user %q", redis.User)
+	}
+	if redis.WorkingDir != "/data" {
+		t.Fatalf("Redis ACL wrapper working directory = %q, want /data for entrypoint volume ownership initialization", redis.WorkingDir)
+	}
+	if redis.Entrypoint.Kind != yaml.SequenceNode || len(redis.Entrypoint.Content) != 3 {
+		t.Fatalf("Redis ACL wrapper entrypoint must be a three-argument shell invocation, got kind=%d len=%d", redis.Entrypoint.Kind, len(redis.Entrypoint.Content))
+	}
+	if redis.Command.Kind != yaml.SequenceNode || len(redis.Command.Content) != 0 {
+		t.Fatalf("Redis ACL wrapper must clear the image command, got kind=%d len=%d", redis.Command.Kind, len(redis.Command.Content))
+	}
+	aclScript := redis.Entrypoint.Content[2].Value
+	for _, required := range []string{
+		"chown redis /tmp/llmtw-users.acl",
+		"exec /docker-entrypoint.sh redis-server",
+	} {
+		if !strings.Contains(aclScript, required) {
+			t.Errorf("Redis ACL wrapper is missing %q", required)
+		}
+	}
 	for _, required := range []string{
 		"REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}",
 		"REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}",
-		"default off",
-		"$${REDIS_USERNAME} on >$${REDIS_PASSWORD} ~* +@all",
+		"umask 077",
+		"user default off",
+		"user %s on >%s ~* +@all",
+		"--aclfile /tmp/llmtw-users.acl",
+		"--save 60 1",
 		"redis-cli --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\" ping",
 		"redis-cli -h redis --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\"",
 	} {
 		if !strings.Contains(string(raw), required) {
 			t.Errorf("Compose Redis ACL fixture is missing %q", required)
 		}
+	}
+	if strings.Contains(string(raw), "--save \"60 1\"") {
+		t.Error("Redis save interval and change count must be separate command-line arguments")
+	}
+	for _, inlineRule := range []string{
+		"--user \"default off\"",
+		"--user \"$${REDIS_USERNAME} on >$${REDIS_PASSWORD} ~* +@all\"",
+	} {
+		if !strings.Contains(string(raw), inlineRule) {
+			continue
+		}
+		t.Error("Redis ACLs must use the generated aclfile rather than quoted command-line rules")
 	}
 }
 
@@ -309,13 +349,51 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"set -e;",
 		"--profile worker",
 		"build --no-cache --quiet",
-		"LLMTW_TEMPORAL_ADDRESS",
-		"LLMTW_REDIS_ADDR",
+		"temporal_port=0",
+		"temporal_ui_port=0",
+		"redis_port=0",
+		"health_port=0",
+		"metrics_port=0",
+		"LLMTW_COMPOSE_TEMPORAL_UI_PORT",
+		"$(COMPOSE) port temporal 7233",
+		"$(COMPOSE) port temporal 8233",
+		"$(COMPOSE) port redis 6379",
+		"$(COMPOSE) port worker 8080",
+		"$(COMPOSE) port worker 9090",
+		"awk -v secret=\"$$redis_password\"",
+		"[REDACTED]",
+		"LLMTW_TEMPORAL_ADDRESS=\"$$temporal_address\"",
+		"LLMTW_REDIS_ADDR=\"$$redis_address\"",
 		"LLMTW_REDIS_USERNAME",
 		"LLMTW_REDIS_PASSWORD",
 	} {
 		if !strings.Contains(string(data), required) {
 			t.Errorf("compose live integration target is missing %q", required)
+		}
+	}
+	for _, fixedPort := range []string{
+		"LLMTW_COMPOSE_TEMPORAL_PORT:-17233",
+		"LLMTW_COMPOSE_REDIS_PORT:-16380",
+		"LLMTW_COMPOSE_HEALTH_PORT:-18080",
+		"LLMTW_COMPOSE_METRICS_PORT:-19090",
+	} {
+		if strings.Contains(string(data), fixedPort) {
+			t.Errorf("compose live integration target retains fixed host port %q", fixedPort)
+		}
+	}
+}
+
+func TestComposePublishedPortsDefaultToDockerAllocatedPorts(t *testing.T) {
+	_, raw := readCompose(t)
+	for _, required := range []string{
+		"${LLMTW_COMPOSE_TEMPORAL_PORT:-0}:7233",
+		"${LLMTW_COMPOSE_TEMPORAL_UI_PORT:-0}:8233",
+		"${LLMTW_COMPOSE_REDIS_PORT:-0}:6379",
+		"${LLMTW_COMPOSE_HEALTH_PORT:-0}:8080",
+		"${LLMTW_COMPOSE_METRICS_PORT:-0}:9090",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("Compose fixture does not request a Docker-assigned host port for %q", required)
 		}
 	}
 }
