@@ -106,6 +106,22 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -race ./...
 
+      - name: Verify source safety and supply chain
+        id: security_verify
+        if: steps.go.outputs.present == 'true'
+        run: |
+          mkdir -p security-artifacts
+          SECURITY_REPORT=security-artifacts/security-verify.json make security-verify
+
+      - name: Upload redacted security verification report
+        if: failure() && steps.security_verify.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: security-verify-report
+          path: security-artifacts/security-verify.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Run live Redis conformance
         if: steps.go.outputs.present == 'true'
         run: make readiness-integration

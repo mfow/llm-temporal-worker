@@ -50,6 +50,34 @@ When upgrading a direct module, update this table in the same change and
 re-check the affected source contract, capability/price fixtures, wire
 fixtures, and retry/error/stream/usage assertions.
 
+## Verified supply-chain gate
+
+[`tools/supplychainverify/baseline.json`](../../tools/supplychainverify/baseline.json)
+is the machine-readable counterpart to this direct-module table. It records the
+approved SPDX identifiers, source references, and exact versions for every
+direct requirement. `make security-verify` rejects an added, removed, or
+changed direct module until that reviewed inventory is deliberately updated.
+The Go vulnerability scan still analyzes reachable code across the complete
+module graph, including indirect dependencies.
+
+The target pins `govulncheck` at `v1.6.0` and runs it with `go1.26.5`, the
+reviewed toolchain patch. Its JSON parser retains only unique `GO-*` finding
+identifiers. A `vulnerability_exceptions` entry is valid only when it gives an
+identified finding, owner, future RFC 3339 expiry, and HTTPS remediation
+reference. Expired, incomplete, unused, or unlisted exceptions fail the gate,
+so a baseline cannot conceal a new result.
+
+The PR workflow runs this target. On a trusted-master failure, CI uploads only
+its redacted report: component pass/fail state, direct-module identifiers/count,
+and finding identifiers. It deliberately excludes test output, source paths,
+scanner traces, provider data, and credential-like material.
+
+### Active vulnerability exception
+
+| Finding | Owner | Expires | Remediation reference | Bounded rationale |
+| --- | --- | --- | --- | --- |
+| `GO-2026-5932` | `platform-security` | 2026-08-14T00:00:00Z | [Go vulnerability report](https://pkg.go.dev/vuln/GO-2026-5932) | `azidentity` currently brings `golang.org/x/crypto` for `pkcs12`; the verifier reports this unmaintained `openpgp` advisory only at module level, with no reachable-function trace. No repository package imports `openpgp`. Re-evaluate the exception before expiry and remove it if the module is split or upstream removes the unused package. |
+
 ## Repository module
 
 | Field | Value |

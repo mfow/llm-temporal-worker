@@ -102,6 +102,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -race ./...
 
+      - name: Verify source safety and supply chain
+        if: steps.go.outputs.present == 'true'
+        run: make security-verify
+
       - name: Run live Redis conformance
         if: steps.go.outputs.present == 'true' && github.event.pull_request.head.repo.full_name == github.repository
         run: make readiness-integration
