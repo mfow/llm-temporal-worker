@@ -2,6 +2,7 @@ package openairesponses
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -63,6 +64,81 @@ func TestInvokeRunsOneRequestAndLiftsResponse(t *testing.T) {
 	}
 	if observer.before != 1 || observer.headers != 1 || observer.progress != 1 || observer.metadata.RequestID != "req-invoke" {
 		t.Fatalf("observer = %#v", observer)
+	}
+}
+
+func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
+	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newFixtureAdapter(t, responseBody)
+	first, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{
+			OperationKey: "op-first",
+			Model:        "gpt-contract",
+			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "first turn"}}}},
+			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)},
+		},
+		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		Strict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstResult, err := adapter.Invoke(context.Background(), first, provider.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstResult.Response.Continuation == nil {
+		t.Fatal("stored response did not yield a continuation")
+	}
+	followUp, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{
+			OperationKey: "op-follow-up",
+			Model:        "gpt-contract",
+			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
+			Continuation: firstResult.Response.Continuation,
+		},
+		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		Strict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, ok := followUp.SDKParams.(responses.ResponseNewParams)
+	if !ok {
+		t.Fatalf("follow-up SDK params type = %T", followUp.SDKParams)
+	}
+	if got := marshalParams(t, params)["previous_response_id"]; got != "resp-1" {
+		t.Fatalf("previous response ID = %#v, want resp-1", got)
+	}
+}
+
+func TestInvokeOmitsContinuationForUnstoredResponse(t *testing.T) {
+	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := newFixtureAdapter(t, responseBody)
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{
+			OperationKey: "op-unstored",
+			Model:        "gpt-contract",
+			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":false}`)},
+		},
+		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		Strict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Response.Continuation != nil {
+		t.Fatalf("unstored response continuation = %#v, want nil", result.Response.Continuation)
 	}
 }
 

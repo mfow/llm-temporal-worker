@@ -1,12 +1,5 @@
 {
   "api_version": "llm.temporal/v1",
-  "continuation": {
-    "endpoint_id": "openai-fixture",
-    "handle": "openai-responses:resp-1",
-    "model": "gpt-contract",
-    "pinned": true,
-    "provider_state": [{"endpoint_family": "responses", "kind": "provider_state", "media_type": "application/vnd.openai.response+json", "opaque": "cmVzcC0x", "provider": "openai"}]
-  },
   "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
   "diagnostics": [],
   "operation_key": "fixture-openai-response",

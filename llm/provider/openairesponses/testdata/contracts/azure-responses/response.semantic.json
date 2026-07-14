@@ -1,12 +1,5 @@
 {
   "api_version": "llm.temporal/v1",
-  "continuation": {
-    "endpoint_id": "azure-fixture",
-    "handle": "openai-responses:azure-resp-1",
-    "model": "azure-responses/fixture",
-    "pinned": true,
-    "provider_state": [{"endpoint_family": "responses", "kind": "provider_state", "media_type": "application/vnd.openai.response+json", "opaque": "YXp1cmUtcmVzcC0x", "provider": "openai"}]
-  },
   "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
   "diagnostics": [],
   "operation_key": "fixture-azure-response",

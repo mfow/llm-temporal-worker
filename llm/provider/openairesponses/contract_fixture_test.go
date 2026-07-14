@@ -61,6 +61,7 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 				Model:        string(response.Model),
 				OperationKey: normalized.OperationKey,
 				ServiceClass: serviceClass,
+				SDKParams:    params,
 			}
 			lifted, err := liftResponse(call, &response, profile.requestID)
 			if err != nil {
@@ -320,7 +321,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 }
 
-func TestCapabilitiesKeepStreamingAndContinuationUnsupportedUntilProven(t *testing.T) {
+func TestCapabilitiesKeepStreamingUnsupportedAndContinuationNative(t *testing.T) {
 	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
 	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses})
 	if err != nil {
@@ -329,8 +330,8 @@ func TestCapabilitiesKeepStreamingAndContinuationUnsupportedUntilProven(t *testi
 	if capability := set.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported {
 		t.Fatalf("streaming capability = %#v, want unsupported until a streaming adapter dispatches SDK streams", capability)
 	}
-	if capability := set.Features[provider.FeatureContinuation]; capability.State != provider.CapabilityUnsupported {
-		t.Fatalf("continuation capability = %#v, want unsupported until endpoint and deployment pinning is validated", capability)
+	if capability := set.Features[provider.FeatureContinuation]; capability.State != provider.CapabilityNative {
+		t.Fatalf("continuation capability = %#v, want native for stateful same-endpoint Responses chains", capability)
 	}
 }
 

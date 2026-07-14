@@ -24,10 +24,7 @@ func capabilities(version string) provider.CapabilitySet {
 			provider.FeatureToolCall:         {State: provider.CapabilityNative},
 			provider.FeatureStructuredOutput: {State: provider.CapabilityNative},
 			provider.FeatureReasoning:        {State: provider.CapabilityNative},
-			provider.FeatureContinuation: {
-				State:  provider.CapabilityUnsupported,
-				Reason: "continuation identity is not yet validated against the configured endpoint and deployment",
-			},
+			provider.FeatureContinuation:     {State: provider.CapabilityNative},
 			provider.FeatureStreaming: {
 				State:  provider.CapabilityUnsupported,
 				Reason: "the adapter has an SSE decoder but no typed stream port or official SDK stream dispatch",
