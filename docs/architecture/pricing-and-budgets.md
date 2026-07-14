@@ -57,10 +57,18 @@ Catalog precedence is explicit:
 2. verified built-in catalog entry;
 3. no price.
 
-There is no guessed price. When any matching monetary budget exists, a candidate
-without a current price is ineligible. With no monetary budget, an operator may
-allow an unpriced candidate, but its response is marked `cost_status=unknown`
-and metrics make that visible.
+There is no guessed price. A candidate with any matching monetary budget is
+ineligible without a current price. `pricing.require_price_when_budgeted: true`
+is the only configuration that permits an unpriced candidate, and only when it
+matches no monetary budget. `false` is strict: every candidate needs a current
+price. `budgets.require_match: true` excludes unmatched candidates before this
+decision, so that combination never dispatches an unpriced route.
+
+An allowed unpriced result reports `cost_status=unknown`; zero reserved and
+actual microUSD in that result mean “not priced”, not a zero-dollar claim.
+Currency, method, and catalog version are empty, no monetary reservation is
+created, and a provider-reported amount is not promoted to an auditable cost
+without a current catalog quote. Metrics make the condition visible.
 
 ## Estimation
 

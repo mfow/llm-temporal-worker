@@ -123,6 +123,29 @@ func TestResponseJSONFixtures(t *testing.T) {
 	}
 }
 
+func TestResponseCostStatus(t *testing.T) {
+	response := llm.Response{
+		OperationKey: "unknown-cost",
+		Status:       llm.ResponseStatusCompleted,
+		Cost:         llm.Cost{Status: llm.CostStatusUnknown},
+	}
+	encoded := mustMarshal(t, response)
+	if !bytes.Contains(encoded, []byte(`"cost_status":"unknown"`)) {
+		t.Fatalf("unknown-cost response omitted cost_status: %s", encoded)
+	}
+	var decoded llm.Response
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal unknown-cost response: %v", err)
+	}
+	if decoded.Cost.Status != llm.CostStatusUnknown {
+		t.Fatalf("cost status = %q, want unknown", decoded.Cost.Status)
+	}
+	invalid := bytes.Replace(encoded, []byte(`"cost_status":"unknown"`), []byte(`"cost_status":"estimated"`), 1)
+	if err := json.Unmarshal(invalid, &llm.Response{}); err == nil {
+		t.Fatalf("accepted invalid cost status: %s", invalid)
+	}
+}
+
 func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 	for _, name := range []string{"generate-request.schema.json", "generate-response.schema.json"} {
 		data, err := os.ReadFile(filepath.Join("..", "api", "schema", "v1", name))

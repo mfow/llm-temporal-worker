@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -16,8 +17,8 @@ func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 	if err != nil || quote.Entry.Version != "entry-v1" {
 		t.Fatalf("quote = %#v %v", quote, err)
 	}
-	if _, err := resolver.Resolve(Query{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "other", ProviderTier: "default", At: time.Unix(2, 0)}); err == nil {
-		t.Fatal("unknown price unexpectedly resolved")
+	if _, err := resolver.Resolve(Query{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "other", ProviderTier: "default", At: time.Unix(2, 0)}); !errors.Is(err, ErrNoActivePrice) {
+		t.Fatalf("unknown price error = %v, want ErrNoActivePrice", err)
 	}
 	price, err := CostFromUsage(entry, Usage{InputTokens: 1_000_000})
 	if err != nil || price.MicroUSD != 1_000_000 {

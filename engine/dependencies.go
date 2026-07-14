@@ -19,16 +19,17 @@ import (
 // A caller captures one value before planning; reloads never change an
 // in-flight request's route, capability, or price decision.
 type Snapshot struct {
-	Version               string
-	Routes                routing.Catalog
-	Health                routing.HealthView
-	Prices                pricing.Resolver
-	BudgetPolicies        []budget.Policy
-	RequireBudgetMatch    bool
-	Environment           string
-	ReservationLease      time.Duration
-	OperationRetention    time.Duration
-	ContinuationRetention time.Duration
+	Version                  string
+	Routes                   routing.Catalog
+	Health                   routing.HealthView
+	Prices                   pricing.Resolver
+	BudgetPolicies           []budget.Policy
+	RequireBudgetMatch       bool
+	RequirePriceWhenBudgeted bool
+	Environment              string
+	ReservationLease         time.Duration
+	OperationRetention       time.Duration
+	ContinuationRetention    time.Duration
 }
 
 // SnapshotSource publishes complete immutable snapshots.

@@ -18,6 +18,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		return llm.Response{}, engineError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "finalization candidate index is invalid", nil)
 	}
 	candidate := quoted.candidates[index]
+	candidate.candidate.PriceVersion = candidate.priceVersion()
 	response.APIVersion = llm.APIVersion
 	response.OperationKey = request.OperationKey
 	response.OperationID = operation.ID
@@ -28,11 +29,17 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	if response.Service.ProviderValue == "" {
 		response.Service.ProviderValue = call.Metadata.ProviderTier
 	}
-	actual, err := actualCost(candidate.entry, response)
-	if err != nil {
-		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "response usage could not be priced", err), candidate.estimate.MicroUSD)
+	actual := pricing.Cost{}
+	if candidate.priceKnown() {
+		var err error
+		actual, err = actualCost(*candidate.entry, response)
+		if err != nil {
+			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "response usage could not be priced", err), candidate.estimate.MicroUSD)
+		}
+		response.Cost = llm.Cost{Status: llm.CostStatusKnown, Currency: actual.Currency, ReservedMicroUSD: int64(operation.ReservedMicroUSD), ActualMicroUSD: int64(actual.MicroUSD), Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
+	} else {
+		response.Cost = llm.Cost{Status: llm.CostStatusUnknown, ReservedMicroUSD: int64(operation.ReservedMicroUSD)}
 	}
-	response.Cost = llm.Cost{Currency: actual.Currency, ReservedMicroUSD: int64(operation.ReservedMicroUSD), ActualMicroUSD: int64(actual.MicroUSD), Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
 	if response.Status == "" {
 		response.Status = llm.ResponseStatusCompleted
 	}
