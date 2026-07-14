@@ -719,57 +719,97 @@ make fuzz-smoke
 make mutation-verify
 ```
 
-## Task 19: Add security, deployment, and workflow verification gates
+## Task 19: Add static dependency, license, and leak verification
 
-**PR title:** `build(ci): enforce security and workflow policy`
+**PR title:** `test(security): add bounded source verification`
 
 **Files to change**
 
-- security, action, dependency, and deployment verification scripts under
-  `scripts/` or `tools/`
-- `Makefile`, `.github/workflows/pull-request.yml`, and
-  `.github/workflows/master.yml`
-- Kubernetes/Docker verification tests under `integration/` and `deploy/`
-- `docs/testing/strategy.md`, deployment documentation, and the release runbook
+- source security and dependency scripts under `scripts/` or `tools/`
+- `Makefile`, source-focused CI steps, and security documentation
+- raw fixture/log redaction tests where scanners expose a real gap
 
 **Implementation**
 
-1. Add action syntax/policy validation, Go vulnerability checking,
-   dependency/license inventory, secret/deny-field scans, and Docker/Kustomize
-   security assertions. Pin CI actions by immutable commit with readable
-   version comments where repository policy permits.
-2. Add a workflow-contract test that parses the checked-in PR and master
-   workflows. It requires PR read-only permissions and no provider secrets,
-   and requires master push, manual dispatch, and the exact daily
-   `0 5 * * *` schedule with `Australia/Sydney` timezone.
-3. Assert rendered deployment security context, non-root UID, read-only root
-   filesystem, bounded writable mount, health endpoints, and liveness/readiness
-   paths. Keep manifest rendering offline and separate it from any cluster
-   apply.
-4. Add `make security-verify` and `make workflow-verify`; each is bounded and
-   returns nonzero on a scan finding, action syntax error, schedule mismatch,
-   leaked deny-field, or deployment-policy violation.
+1. Add bounded Go vulnerability checks, dependency/license inventory, secret
+   detection, and decoded/raw deny-field scans for source, fixtures, and test
+   output.
+2. Make scanner baselines explicit and reviewed. A baseline suppresses only an
+   identified accepted finding with owner, expiry, and remediation reference;
+   it may not hide a new result.
+3. Add `make security-verify`, run it in PR CI, and retain a redacted artifact
+   for trusted-master failures.
 
 **Acceptance evidence**
 
 ```sh
 make security-verify
+```
+
+## Task 20: Enforce CI workflow policy and exact master scheduling
+
+**PR title:** `build(ci): verify workflow policy and schedule`
+
+**Files to change**
+
+- action/workflow validation scripts under `scripts/` or `tools/`
+- `.github/workflows/pull-request.yml` and `.github/workflows/master.yml`
+- `Makefile` and CI documentation
+
+**Implementation**
+
+1. Add action syntax and policy validation, then pin CI actions by immutable
+   commit with readable version comments where repository policy permits.
+2. Add a workflow-contract test that parses the checked-in PR and master
+   workflows. It requires PR read-only permissions and no provider secrets,
+   and requires master push, manual dispatch, and the exact daily
+   `0 5 * * *` schedule with `Australia/Sydney` timezone.
+3. Add `make workflow-verify` and run it in both the PR workflow and the
+   trusted master workflow.
+
+**Acceptance evidence**
+
+```sh
 make workflow-verify
+```
+
+## Task 21: Prove offline deployment policy and rendered manifest safety
+
+**PR title:** `test(deployment): enforce rendered workload policy`
+
+**Files to change**
+
+- Kubernetes/Docker policy tests under `integration/` and `deploy/`
+- `deploy/verify.sh`, `Makefile`, and deployment documentation
+- Kustomize fixtures only where a test reveals an incorrect policy
+
+**Implementation**
+
+1. Assert rendered deployment security context, numeric non-root UID,
+   read-only root filesystem, bounded writable mount, resource constraints,
+   service-account policy, and liveness/readiness paths.
+2. Check that Compose and Kubernetes reference the same live and ready
+   endpoints proven by Task 17. Keep rendering offline and separate it from
+   any cluster apply.
+3. Add `make deployment-policy-verify`, which performs only local render and
+   policy inspection, and retain `make kustomize-verify` as its pinned-kubectl
+   companion.
+
+**Acceptance evidence**
+
+```sh
+make deployment-policy-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
-## Task 20: Build release evidence, SBOM, provenance, and guarded live contracts
+## Task 22: Prove hardened image behavior and build metadata
 
-**PR title:** `build(release): add attestable v1 release evidence`
+**PR title:** `build(image): verify hardened worker runtime`
 
 **Files to change**
 
 - `Dockerfile`, build metadata sources, and image tests
-- release scripts and evidence schema under `scripts/release/` and `docs/release/`
-- `.github/workflows/release.yml` and trusted-workflow updates
-- `docs/architecture/deployment-and-operations.md`, release runbook, and
-  configuration reference
-- build-tagged live provider tests under `integration/live/`
+- `Makefile` and deployment operations documentation
 
 **Implementation**
 
@@ -778,35 +818,106 @@ KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 2. Add `make image-verify`: inspect the final image's numeric non-root user,
    start it with a read-only root and only the documented writable mount, and
    prove its health endpoint remains reachable with no shell or root fallback.
-3. Produce a machine-readable evidence record that links exact test/race/fuzz
-   summaries, fixture manifest/source dates, Redis/Temporal/Compose logs,
-   rendered manifests, image digest, SBOM, dependency/license output, and
-   vulnerability results.
-4. Generate an SPDX or CycloneDX SBOM, scan the final image, and configure
-   keyless provenance/signing through GitHub Actions OIDC in a protected manual
-   release workflow. The workflow verifies the published digest before marking
-   a release artifact successful.
-5. Add build-tagged live adapter contracts. Each profile needs an explicit
-   enable flag, allow-listed model, test tenant, maximum microUSD ceiling,
-   credential source, and tiny deterministic prompt. Fork PRs receive none of
-   these secrets and scheduled workflows never publish or spend money.
-6. Make release publication require a tagged commit, a protected environment,
-   human approval, and all preceding evidence gates. Do not claim a published
-   release until this protected job has passed with its configured identity.
+3. Make the test assert the build metadata is present and image labels match
+   the checked-out revision.
 
 **Acceptance evidence**
 
 ```sh
 make image-verify
-make release-verify
 docker build --build-arg VERSION=test --build-arg REVISION=test --build-arg BUILD_TIME=2026-07-14T00:00:00Z .
 ```
 
-The first two commands validate locally generated evidence without publishing.
-The protected workflow later records signed image and live-contract evidence
-using repository-managed credentials and identity.
+## Task 23: Produce a release-evidence record and final-image SBOM
 
-## Task 21: Final v1 traceability review and release candidate
+**PR title:** `build(release): generate evidence and SBOM`
+
+**Files to change**
+
+- release scripts and evidence schema under `scripts/release/` and `docs/release/`
+- final-image scan configuration and release runbook documentation
+- `Makefile` and trusted CI artifact handling
+
+**Implementation**
+
+1. Produce a machine-readable evidence record that links exact test/race/fuzz
+   summaries, fixture manifest/source dates, Redis/Temporal/Compose logs,
+   rendered manifests, image digest, dependency/license output, and
+   vulnerability results.
+2. Generate an SPDX or CycloneDX SBOM from the final image, scan that image,
+   validate the evidence schema locally, and retain redacted trusted-CI
+   artifacts without publishing them.
+3. Add `make release-verify`, which validates the locally generated record,
+   SBOM, and final-image scan without signing, contacting a provider, or
+   publishing an image.
+
+**Acceptance evidence**
+
+```sh
+make release-verify
+```
+
+## Task 24: Add guarded OIDC signing and publication controls
+
+**PR title:** `build(release): guard signed publication`
+
+**Files to change**
+
+- `.github/workflows/release.yml` and trusted-workflow policy tests
+- release publication scripts and runbook documentation
+
+**Implementation**
+
+1. Configure keyless provenance/signing through GitHub Actions OIDC in a
+   protected manual release workflow. The workflow verifies the published
+   digest before recording a successful artifact.
+2. Require a tagged commit, protected environment, human approval, and all
+   Task 19 through 23 evidence gates before the publication step can run.
+3. Ensure scheduled and pull-request workflows cannot publish, sign, or access
+   release credentials. Add a workflow test that proves those boundaries.
+
+**Acceptance evidence**
+
+```sh
+make workflow-verify
+make release-verify
+```
+
+The workflow definition is locally verifiable. Its first signing or publication
+run requires the protected repository identity and explicit human authorization.
+
+## Task 25: Add guarded live-provider contract tests
+
+**PR title:** `test(live): gate credentialed provider contracts`
+
+**Files to change**
+
+- build-tagged live provider tests under `integration/live/`
+- protected-workflow wiring and release runbook documentation
+- provider configuration examples only where a live test needs a safe reference
+
+**Implementation**
+
+1. Add one opt-in live contract per supported endpoint profile. Each needs an
+   explicit enable flag, allow-listed model, test tenant, maximum microUSD
+   ceiling, credential source, and tiny deterministic prompt.
+2. Verify only facts mocks cannot prove: authentication, current wire
+   acceptance, reported actual class, request ID, usage/cost, and continuation
+   behavior. A failure must not rewrite capabilities or prices.
+3. Ensure fork PRs receive none of these secrets and scheduled workflows never
+   spend money. The protected manual workflow records the per-profile ceiling
+   and actual spend in release evidence.
+
+**Acceptance evidence**
+
+```sh
+go test -tags=live ./integration/live -run '^$'
+```
+
+The command compiles the harness with no live calls. Each real invocation
+requires explicit protected-workflow authorization and scoped credentials.
+
+## Task 26: Final v1 traceability review and release candidate
 
 **PR title:** `docs(release): record v1 completion evidence`
 
@@ -844,6 +955,7 @@ make compose-live-integration
 make adapter-contracts
 make security-verify
 make workflow-verify
+make deployment-policy-verify
 make fuzz-smoke
 make mutation-verify
 make image-verify
@@ -853,13 +965,14 @@ KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 
 ## External authorization boundary
 
-Tasks 1 through 19 are implementable and testable locally or in trusted CI
-without a production provider account. Task 20 prepares all release machinery,
-but the first actual credentialed provider run, image publication, provenance
-signature, and release tag require the repository’s protected environment,
-OIDC permissions, registry destination, and deliberately scoped provider
-credentials. The implementer must stop at that boundary and request explicit
-authorization rather than infer permission from this plan.
+Tasks 1 through 23 are implementable and testable locally or in trusted CI
+without a production provider account. Tasks 24 and 25 prepare guarded
+publication and live-contract machinery, but the first actual credentialed
+provider run, image publication, provenance signature, and release tag require
+the repository’s protected environment, OIDC permissions, registry destination,
+and deliberately scoped provider credentials. The implementer must stop at that
+boundary and request explicit authorization rather than infer permission from
+this plan.
 
 ## Per-task merge protocol
 
