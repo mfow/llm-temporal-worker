@@ -47,6 +47,7 @@ work that follows the foundation.
 
 - [Package layout](architecture/package-layout.md)
 - [Configuration reference](reference/configuration.md)
+- [Catalog loader contract](reference/catalog-loaders.md)
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
