@@ -404,7 +404,7 @@ func (budgets BudgetsConfig) validate() error {
 		}
 		seen[policy.ID] = struct{}{}
 		match := policy.Match
-		if match.Tenant == "" && match.Project == "" && match.ActorPrefix == "" && match.Environment == "" && match.LogicalModel == "" && match.EndpointID == "" && match.ServiceClass == "" {
+		if !hasBudgetMatchRestriction(match) {
 			return fmt.Errorf("%s.match must contain at least one restriction", path)
 		}
 		if match.ServiceClass != "" && !match.ServiceClass.Valid() {
@@ -433,6 +433,16 @@ func (budgets BudgetsConfig) validate() error {
 		return fmt.Errorf("budgets.policies is required when require_match is true")
 	}
 	return nil
+}
+
+func hasBudgetMatchRestriction(match BudgetMatch) bool {
+	return (match.Tenant != "" && match.Tenant != "*") ||
+		(match.Project != "" && match.Project != "*") ||
+		match.ActorPrefix != "" ||
+		(match.Environment != "" && match.Environment != "*") ||
+		(match.LogicalModel != "" && match.LogicalModel != "*") ||
+		(match.EndpointID != "" && match.EndpointID != "*") ||
+		match.ServiceClass != ""
 }
 
 func (continuation ContinuationConfig) validate() error {

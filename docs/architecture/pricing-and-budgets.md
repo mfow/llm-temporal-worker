@@ -144,9 +144,10 @@ budgets:
 ```
 
 Matchers cover tenant, project, actor prefix, environment, logical model,
-endpoint, and service class. A policy must declare at least one matcher; all
-matching policies and all windows within them apply; policies are not
-first-match-wins. Missing context cannot match a restricted policy. With
+endpoint, and service class. A policy must declare at least one restriction;
+an exact `*` is a wildcard rather than a restriction, so wildcard-only policies
+are rejected. All matching policies and all windows within them apply; policies
+are not first-match-wins. Missing context cannot match a restricted policy. With
 `budgets.require_match: true`, every authorized
 candidate must match at least one policy before it can be priced, admitted, or
 dispatched. This filtering is candidate-specific, so an explicit fallback that
