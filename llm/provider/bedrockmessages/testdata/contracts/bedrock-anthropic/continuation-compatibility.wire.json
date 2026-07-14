@@ -1,0 +1,29 @@
+{
+  "replay_messages": [
+    {"role": "assistant", "content": [{"type": "thinking"}]},
+    {"role": "assistant", "content": [{"type": "redacted_thinking"}]},
+    {"role": "user", "content": [{"type": "text", "text": "continue fixture"}]}
+  ],
+  "rejections": [
+    {
+      "name": "direct-anthropic-state",
+      "expected": {
+        "code": "invalid_argument",
+        "phase": "compile",
+        "dispatch": "not_dispatched",
+        "retry": "never",
+        "message_contains": "provider state is pinned"
+      }
+    },
+    {
+      "name": "aws-gateway-endpoint",
+      "expected": {
+        "code": "invalid_argument",
+        "phase": "compile",
+        "dispatch": "not_dispatched",
+        "retry": "never",
+        "message_contains": "continuation endpoint"
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-bedrock-strict-loss",
+  "model": "claude-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": null,
+  "sampling": {"seed": 7},
+  "extensions": {}
+}

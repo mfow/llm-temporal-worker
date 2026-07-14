@@ -1,0 +1,19 @@
+event: message_start
+data: {"message":{"usage":{"input_tokens":8}}}
+
+event: content_block_start
+data: {"index":0,"content_block":{"type":"text"}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"text_delta","text":"hello Bedrock"}}
+
+event: content_block_stop
+data: {"index":0}
+
+event: message_delta
+data: {"usage":{"output_tokens":5}}
+
+event: message_stop
+data: {}
+
+: end-of-fixture
