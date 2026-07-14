@@ -41,6 +41,87 @@ type composeHealthcheckTiming struct {
 	retries     int
 }
 
+type composeContainerHealthSnapshot struct {
+	status               string
+	latestCheckStartedAt time.Time
+}
+
+type composeContainerHealthVerdict string
+
+const (
+	composeContainerHealthPending   composeContainerHealthVerdict = "pending"
+	composeContainerHealthHealthy   composeContainerHealthVerdict = "healthy"
+	composeContainerHealthUnhealthy composeContainerHealthVerdict = "unhealthy"
+)
+
+func TestComposeContainerHealthVerdictRequiresPostRestartProbe(t *testing.T) {
+	containerStartedAt := time.Date(2026, time.July, 14, 20, 10, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		snapshot composeContainerHealthSnapshot
+		want     composeContainerHealthVerdict
+	}{
+		{
+			name: "stale unhealthy health status remains pending",
+			snapshot: composeContainerHealthSnapshot{
+				status:               "unhealthy",
+				latestCheckStartedAt: containerStartedAt.Add(-time.Second),
+			},
+			want: composeContainerHealthPending,
+		},
+		{
+			name: "stale healthy health status remains pending",
+			snapshot: composeContainerHealthSnapshot{
+				status:               "healthy",
+				latestCheckStartedAt: containerStartedAt.Add(-time.Second),
+			},
+			want: composeContainerHealthPending,
+		},
+		{
+			name: "health status without a recorded probe remains pending",
+			snapshot: composeContainerHealthSnapshot{
+				status: "unhealthy",
+			},
+			want: composeContainerHealthPending,
+		},
+		{
+			name: "post-restart unhealthy health status fails promptly",
+			snapshot: composeContainerHealthSnapshot{
+				status:               "unhealthy",
+				latestCheckStartedAt: containerStartedAt.Add(time.Second),
+			},
+			want: composeContainerHealthUnhealthy,
+		},
+		{
+			name: "post-restart healthy health status succeeds",
+			snapshot: composeContainerHealthSnapshot{
+				status:               "healthy",
+				latestCheckStartedAt: containerStartedAt.Add(time.Second),
+			},
+			want: composeContainerHealthHealthy,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := composeContainerHealthVerdictAfterRestart(test.snapshot, containerStartedAt); got != test.want {
+				t.Fatalf("health verdict = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseComposeContainerHealthSnapshot(t *testing.T) {
+	snapshot, err := parseComposeContainerHealthSnapshot("unhealthy\n2026-07-14T20:09:55.000000000Z\n2026-07-14T20:10:01.000000000Z\n")
+	if err != nil {
+		t.Fatalf("parse health snapshot: %v", err)
+	}
+	if got, want := snapshot.status, "unhealthy"; got != want {
+		t.Fatalf("health status = %q, want %q", got, want)
+	}
+	if got, want := snapshot.latestCheckStartedAt, time.Date(2026, time.July, 14, 20, 10, 1, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("latest health check started at = %s, want %s", got, want)
+	}
+}
+
 func TestComposeContainerHealthTransitionTimeoutUsesHealthcheckContract(t *testing.T) {
 	healthcheck := composeHealthcheckTiming{
 		interval:    5 * time.Second,
@@ -117,7 +198,8 @@ func TestComposeWorkerReadinessTracksRedis(t *testing.T) {
 
 	runComposeDocker(t, "start", container)
 	stopped = false
-	waitForComposeContainerHealthy(t, container, composeContainerHealthTransitionTimeout(composeRedisHealthcheckTiming(t)))
+	restartedAt := composeContainerStartedAt(t, container)
+	waitForComposeContainerHealthy(t, container, restartedAt, composeContainerHealthTransitionTimeout(composeRedisHealthcheckTiming(t)))
 	waitForComposeStatus(t, address, "/health/ready", http.StatusOK, readinessTransitionTimeout)
 	assertComposeStatus(t, address, "/health/live", http.StatusOK)
 }
@@ -234,34 +316,98 @@ func waitForComposeStatus(t *testing.T, address, path string, want int, timeout 
 	t.Fatalf("%s did not reach HTTP %d within %s: %v", path, want, timeout, last)
 }
 
-func waitForComposeContainerHealthy(t *testing.T, container string, timeout time.Duration) {
+func waitForComposeContainerHealthy(t *testing.T, container string, restartedAt time.Time, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	last := "no Docker health status"
 	for time.Now().Before(deadline) {
-		status, err := composeContainerHealthStatus(container)
+		snapshot, err := composeContainerHealthSnapshotForContainer(container)
 		if err != nil {
 			last = fmt.Sprintf("inspect error: %v", err)
-		} else if status == "healthy" {
-			return
-		} else if status == "unhealthy" {
-			t.Fatalf("Redis container reported Docker health status unhealthy before readiness recovered")
 		} else {
-			last = fmt.Sprintf("Docker health status %q", status)
+			switch composeContainerHealthVerdictAfterRestart(snapshot, restartedAt) {
+			case composeContainerHealthHealthy:
+				return
+			case composeContainerHealthUnhealthy:
+				t.Fatalf("Redis container reported post-restart Docker health status unhealthy before readiness recovered")
+			default:
+				if snapshot.status == "unhealthy" {
+					last = "stale Docker health status \"unhealthy\" before a post-restart health check"
+				} else {
+					last = fmt.Sprintf("Docker health status %q", snapshot.status)
+				}
+			}
 		}
 		time.Sleep(composeContainerHealthPollInterval)
 	}
 	t.Fatalf("Redis container did not reach Docker health status healthy within %s: %s", timeout, last)
 }
 
-func composeContainerHealthStatus(container string) (string, error) {
+func composeContainerStartedAt(t *testing.T, container string) time.Time {
+	t.Helper()
+	output, err := composeDockerInspect(container, "{{.State.StartedAt}}")
+	if err != nil {
+		t.Fatalf("inspect Redis container start time: %v", err)
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(output))
+	if err != nil {
+		t.Fatalf("parse Redis container start time: %v", err)
+	}
+	return startedAt
+}
+
+func composeContainerHealthSnapshotForContainer(container string) (composeContainerHealthSnapshot, error) {
+	output, err := composeDockerInspect(container, "{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}\n{{if .State.Health}}{{range .State.Health.Log}}{{.Start}}\n{{end}}{{end}}")
+	if err != nil {
+		return composeContainerHealthSnapshot{}, err
+	}
+	return parseComposeContainerHealthSnapshot(output)
+}
+
+func composeDockerInspect(container, format string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), composeContainerHealthInspectTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}", container).Output()
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", format, container).Output()
 	if err != nil {
-		return "", fmt.Errorf("docker inspect Redis health: %w", err)
+		return "", fmt.Errorf("docker inspect Redis container: %w", err)
 	}
-	return strings.TrimSpace(string(output)), nil
+	return string(output), nil
+}
+
+func parseComposeContainerHealthSnapshot(output string) (composeContainerHealthSnapshot, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
+		return composeContainerHealthSnapshot{}, fmt.Errorf("Docker health status is empty")
+	}
+	snapshot := composeContainerHealthSnapshot{status: strings.TrimSpace(lines[0])}
+	for _, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		startedAt, err := time.Parse(time.RFC3339Nano, line)
+		if err != nil {
+			return composeContainerHealthSnapshot{}, fmt.Errorf("parse Docker health check timestamp %q: %w", line, err)
+		}
+		if startedAt.After(snapshot.latestCheckStartedAt) {
+			snapshot.latestCheckStartedAt = startedAt
+		}
+	}
+	return snapshot, nil
+}
+
+func composeContainerHealthVerdictAfterRestart(snapshot composeContainerHealthSnapshot, restartedAt time.Time) composeContainerHealthVerdict {
+	if snapshot.latestCheckStartedAt.Before(restartedAt) {
+		return composeContainerHealthPending
+	}
+	switch snapshot.status {
+	case "healthy":
+		return composeContainerHealthHealthy
+	case "unhealthy":
+		return composeContainerHealthUnhealthy
+	default:
+		return composeContainerHealthPending
+	}
 }
 
 func assertComposeStatus(t *testing.T, address, path string, want int) {
