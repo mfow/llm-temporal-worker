@@ -130,11 +130,15 @@ corresponding task adds them.
 go test ./internal/runtime ./internal/app ./internal/httpserver ./storage/redis ./storage/s3blob
 go test -race ./integration
 make integration
+make readiness-integration
 ```
 
 Tests cover initial failure, recovery, reload failure, healthy liveness during
 readiness failure, no Redis auto-mutation, and every configured persistence and
-function/script policy.
+function/script policy. `make readiness-integration` uses one pinned local Redis
+instance, stops and restores it while a worker is running, and proves
+`/health/live` remains successful while `/health/ready` transitions from
+success to failure and back without contacting a provider.
 
 ## Task 2: Safe provider egress transport and secret-safe diagnostics
 
@@ -211,13 +215,17 @@ raw-byte leak scans.
 **Acceptance evidence**
 
 ```sh
-go test ./pricing ./budget ./engine ./internal/runtime
-go test -race ./pricing ./budget ./engine
+go test ./routing ./pricing ./budget ./engine ./internal/runtime
+go test -race ./routing ./pricing ./budget ./engine
 ```
 
 The cases include all matcher fields, overlapping policies, zero/one/multiple
 matches, class fallbacks, stale or missing prices, a budgeted unpriced route,
-an allowed unbudgeted unpriced route, and request-digest stability.
+an allowed unbudgeted unpriced route, and request-digest stability. Route-plan
+conformance proves byte-for-byte deterministic output for a fixed snapshot,
+class-major order, omission normalization to `standard` before request hashing,
+rejection of `provider_default`, a fourth class, and provider tier strings, and
+rejection of every unrequested service-class movement.
 
 ## Task 4: Configure Claude Platform on AWS end to end
 
@@ -291,70 +299,146 @@ The test adapter proves delta order, terminal success/error, cancellation,
 backpressure, duplicate terminal rejection, completed replay, pre-write retry,
 ambiguous post-write refusal, and final stream/non-stream equivalence.
 
-## Task 6: Wire real streaming for every supported adapter profile
+## Task 6: Wire OpenAI Responses and Azure streaming
 
-**PR title:** `feat(adapters): dispatch typed provider streams`
+**PR title:** `feat(openai): dispatch Responses streams`
 
 **Files to change**
 
 - `llm/provider/openairesponses/`, including Azure construction
-- `llm/provider/openaichat/`, including OpenRouter and Exa construction
-- `llm/provider/anthropicmessages/`, including direct and AWS construction
-- `llm/provider/bedrockmessages/`
-- shared stream tests and fixtures under `llm/provider/*/testdata/contracts/`
+- Responses/Azure stream fixtures under `llm/provider/openairesponses/testdata/`
 - `docs/reference/source-contracts.md`
 
 **Implementation**
 
-1. Connect each official SDK streaming API to the Task 5 stream port without
-   changing the semantic IR or enabling SDK retries.
-2. Feed the existing fragmented-stream decoders from actual client stream
-   bodies, map provider IDs/usage/class/cost/continuation facts, and classify
-   dispatch certainty at the write boundary.
-3. Preserve provider-specific opaque reasoning, signatures, tool-argument
-   fragments, status/refusal events, and terminal error facts. Reject features
-   that cannot be represented in strict mode before any network write.
-4. Test OpenAI Responses, Azure Responses, generic OpenAI-compatible Chat,
-   OpenRouter, Exa, Anthropic direct, Anthropic AWS, and Bedrock Anthropic
-   through deterministic SDK-supported transports.
+1. Connect the official OpenAI Responses streaming API and its Azure variant to
+   the Task 5 stream port without enabling SDK retries or changing the semantic
+   IR.
+2. Feed the fragmented-stream decoder from actual client stream bodies; retain
+   request IDs, usage, class, cost, opaque state, and dispatch certainty at the
+   write boundary.
+3. Test direct OpenAI and Azure separately through deterministic SDK-supported
+   transports, including cancellation, malformed terminal events, and strict
+   rejection before a network write.
 
 **Acceptance evidence**
 
 ```sh
-go test ./llm/provider/... -run 'Stream|Fragment|Client|Strict'
-go test -race ./llm/provider/...
+go test ./llm/provider/openairesponses -run 'Stream|Fragment|Client|Strict'
+go test -race ./llm/provider/openairesponses
 ```
 
-Every supported profile has a real client-stream path, full/single-byte/split/
-seeded chunk equivalence, cancellation, malformed terminal handling, and no
-credential or content leakage.
+## Task 7: Wire OpenAI-compatible Chat streaming
 
-## Task 7: Add a manifest-governed cross-adapter contract harness
-
-**PR title:** `test(adapters): enforce complete contract fixture manifests`
+**PR title:** `feat(chat): dispatch compatible Chat streams`
 
 **Files to change**
 
-- a shared fixture harness under `llm/provider/contracttest/`
-- required case definitions under `llm/provider/contracttest/`
-- every `llm/provider/*/testdata/contracts/*/manifest.yaml`
-- fixture metadata and redaction tests under `llm/provider/`
-- `docs/testing/fixture-matrix.md` and `docs/testing/strategy.md`
+- `llm/provider/openaichat/`, including generic, OpenRouter, and Exa clients
+- Chat stream fixtures under `llm/provider/openaichat/testdata/`
+- `docs/reference/source-contracts.md`
 
 **Implementation**
 
-1. Define the code-owned required matrix by profile capabilities: semantic
-   request, captured wire request, response, usage/cost, classified error,
-   full and fragmented stream, strict loss, best-effort diagnostic, class
-   facts, continuation compatibility, and security/redaction.
-2. Require each fixture directory to contain the documented semantic, wire,
-   event, and metadata files. Metadata records upstream URL/date, SDK version,
-   provenance, redactions, capability facts, and generated-field exemptions.
-3. Fail a package test when a required case has no manifest entry, a manifest
-   points at a missing file, a fixture contains unsafe bytes, or the source
-   contract date is absent.
-4. Add cross-adapter assertions for semantic round-trip where supported and
-   stream assembly equivalence to non-stream output.
+1. Connect the generic Chat streaming implementation to the Task 5 stream port
+   and configure it independently for generic compatible, OpenRouter, and Exa
+   endpoints.
+2. Preserve tool argument fragments, usage/class/cost facts, errors, and
+   dispatch certainty without inferring unsupported provider capability.
+3. Use the injected transport to prove each configuration has a real stream
+   request path, exact chunk equivalence, cancellation, and redaction.
+
+**Acceptance evidence**
+
+```sh
+go test ./llm/provider/openaichat -run 'Stream|Fragment|Client|Strict'
+go test -race ./llm/provider/openaichat
+```
+
+## Task 8: Wire Anthropic direct and AWS-gateway streaming
+
+**PR title:** `feat(anthropic): dispatch direct and AWS streams`
+
+**Files to change**
+
+- `llm/provider/anthropicmessages/`
+- Anthropic direct/AWS stream fixtures under
+  `llm/provider/anthropicmessages/testdata/`
+- `docs/reference/source-contracts.md`
+
+**Implementation**
+
+1. Connect direct Anthropic and Claude Platform on AWS streams to the Task 5
+   port through their official SDK clients.
+2. Preserve signed or opaque reasoning blocks, tool fragments, usage, provider
+   state, and terminal error facts byte-for-byte and in source order.
+3. Prove direct and AWS gateway paths independently with full, single-byte,
+   split, and seeded chunk input, then verify profile-specific continuation
+   pinning remains intact.
+
+**Acceptance evidence**
+
+```sh
+go test ./llm/provider/anthropicmessages -run 'Stream|Fragment|Client|Strict'
+go test -race ./llm/provider/anthropicmessages
+```
+
+## Task 9: Wire Bedrock Anthropic streaming
+
+**PR title:** `feat(bedrock): dispatch Anthropic streams`
+
+**Files to change**
+
+- `llm/provider/bedrockmessages/`
+- Bedrock stream fixtures under `llm/provider/bedrockmessages/testdata/`
+- `docs/reference/source-contracts.md`
+
+**Implementation**
+
+1. Connect the current Bedrock Messages-compatible stream to the Task 5 port
+   with explicit region/profile construction and zero SDK retries.
+2. Map fragmented events, opaque state, usage, cost, and terminal errors while
+   keeping Bedrock continuation state incompatible with direct/AWS gateway
+   profiles unless the adapter has an explicit portable transcript.
+3. Prove the complete client stream path with deterministic transport cases and
+   strict-mode pre-dispatch failure coverage.
+
+**Acceptance evidence**
+
+```sh
+go test ./llm/provider/bedrockmessages -run 'Stream|Fragment|Client|Strict'
+go test -race ./llm/provider/bedrockmessages
+```
+
+## Task 10: Bootstrap a manifest-governed adapter contract harness
+
+**PR title:** `test(adapters): add fixture manifest contract harness`
+
+**Files to change**
+
+- a shared harness and case registry under `llm/provider/contracttest/`
+- every existing `llm/provider/*/testdata/contracts/*/manifest.yaml`
+- fixture metadata/redaction tests under `llm/provider/`
+- `Makefile`, `docs/testing/fixture-matrix.md`, and
+  `docs/testing/strategy.md`
+
+**Implementation**
+
+1. Define the code-owned matrix by profile capability: semantic request,
+   captured wire request, response, usage/cost, classified error, full and
+   fragmented stream, strict loss, best-effort diagnostic, class facts,
+   continuation compatibility, and security/redaction.
+2. Require all manifests to have a valid schema and every listed case to have
+   the documented semantic, wire, event, and metadata files. Metadata records
+   upstream URL/date, SDK version, provenance, redactions, capability facts,
+   and generated-field exemptions.
+3. Introduce explicit `bootstrap` and `enforced` coverage status. The harness
+   structurally validates every profile now; it enforces the full required
+   matrix only for profiles marked `enforced`. No production profile may be
+   marked `enforced` until its dedicated coverage task below supplies every
+   required case.
+4. Add cross-adapter helpers for reversible semantic round-trip and
+   stream/non-stream assembly equivalence. They run for each enforced profile.
 
 **Acceptance evidence**
 
@@ -363,71 +447,120 @@ go test ./llm/provider/contracttest ./llm/provider/...
 make adapter-contracts
 ```
 
-The target lists every profile and required case in its output, fails on a
-deliberately removed manifest entry, and never rewrites fixtures in normal
-test mode.
+The target reports bootstrap and enforced profiles separately, fails on a
+missing listed fixture, invalid metadata, unsafe bytes, or absent source date,
+and never rewrites fixtures in normal test mode. It does not claim full-matrix
+coverage until Tasks 11 through 14 mark the corresponding profile enforced.
 
-## Task 8: Complete Responses and Chat fixture coverage
+## Task 11: Complete OpenAI and Azure Responses fixture coverage
 
-**PR title:** `test(adapters): complete Responses and Chat golden coverage`
+**PR title:** `test(openai): enforce Responses golden coverage`
 
 **Files to change**
 
-- OpenAI and Azure Responses fixtures/tests under
-  `llm/provider/openairesponses/`
+- Responses/Azure fixtures and tests under `llm/provider/openairesponses/`
+- required case definitions only for a real Responses capability distinction
+- `docs/reference/source-contracts.md`
+
+**Implementation**
+
+1. Populate every Task 10 matrix case advertised by OpenAI Responses and Azure
+   Responses: tools, structured output, image parts, opaque state, usage/cost,
+   service class, errors, streams, and strict/best-effort behavior.
+2. Mark each Responses profile `enforced` only after all listed files and
+   source-date facts pass the harness. Do not infer Azure support from a direct
+   OpenAI fixture.
+3. Add the complete fragmentation corpus and safe fixture redaction coverage.
+
+**Acceptance evidence**
+
+```sh
+go test ./llm/provider/openairesponses
+make adapter-contracts
+```
+
+## Task 12: Complete compatible Chat fixture coverage
+
+**PR title:** `test(chat): enforce compatible Chat golden coverage`
+
+**Files to change**
+
 - generic Chat, OpenRouter, and Exa fixtures/tests under
   `llm/provider/openaichat/`
-- shared required cases only when a real capability distinction requires it
+- required case definitions only for genuine Chat capability distinctions
 - `docs/reference/source-contracts.md`
 
 **Implementation**
 
-1. Populate every Task 7 matrix case each supported Responses and Chat profile
-   advertises, including tools, structured output, image parts, opaque state,
-   usage/cost, service class, errors, and streams.
-2. Add explicit strict rejections and best-effort diagnostics for unsupported
-   semantics. Never mark a provider capability supported merely because a
-   generic wire field happens to serialize.
-3. Add complete fragmentation corpus coverage and source-date updates for all
-   changed upstream facts.
+1. Populate all Task 10 cases advertised by generic compatible Chat,
+   OpenRouter, and Exa, including strict loss/best-effort diagnostics,
+   class/cost facts, errors, and stream fragmentation.
+2. Mark each profile `enforced` only after it independently passes the matrix;
+   wire-compatible endpoints do not inherit another endpoint's capability
+   claims.
+3. Update source contracts for each changed upstream behavior.
 
 **Acceptance evidence**
 
 ```sh
-go test ./llm/provider/openairesponses ./llm/provider/openaichat
+go test ./llm/provider/openaichat
 make adapter-contracts
 ```
 
-## Task 9: Complete Anthropic, Anthropic AWS, and Bedrock fixture coverage
+## Task 13: Complete Anthropic direct and AWS-gateway fixture coverage
 
-**PR title:** `test(adapters): complete Anthropic golden coverage`
+**PR title:** `test(anthropic): enforce direct and AWS golden coverage`
 
 **Files to change**
 
-- Anthropic direct/AWS fixtures/tests under `llm/provider/anthropicmessages/`
-- Bedrock fixtures/tests under `llm/provider/bedrockmessages/`
-- shared required cases only for real capability distinctions
+- direct/AWS fixtures and tests under `llm/provider/anthropicmessages/`
+- required case definitions only for genuine Anthropic distinctions
 - `docs/reference/source-contracts.md`
 
 **Implementation**
 
-1. Populate the Task 7 matrix for direct Anthropic, Anthropic AWS gateway, and
-   Bedrock Anthropic profiles, including signed/opaque reasoning state,
-   tool-call argument fragments, usage, tier facts, errors, and streams.
-2. Make direct, AWS gateway, and Bedrock continuation compatibility explicit
-   in fixtures and tests. No adapter may restore opaque state across an
-   incompatible profile.
-3. Add strict-loss and best-effort fixtures for every profile-specific feature
-   that is not portable.
+1. Populate all Task 10 cases for direct Anthropic and Claude Platform on AWS,
+   including signed/opaque reasoning state, tool fragments, tier facts, errors,
+   streams, and continuation compatibility.
+2. Mark each direct/AWS profile `enforced` independently and make every
+   profile-incompatible opaque-state transition a strict pre-dispatch failure.
+3. Add strict-loss and best-effort fixtures for every non-portable feature.
 
 **Acceptance evidence**
 
 ```sh
-go test ./llm/provider/anthropicmessages ./llm/provider/bedrockmessages
+go test ./llm/provider/anthropicmessages
 make adapter-contracts
 ```
 
-## Task 10: Prove Redis admission and continuation conformance against Redis
+## Task 14: Complete Bedrock Anthropic fixture coverage
+
+**PR title:** `test(bedrock): enforce Anthropic golden coverage`
+
+**Files to change**
+
+- Bedrock fixtures and tests under `llm/provider/bedrockmessages/`
+- required case definitions only for genuine Bedrock distinctions
+- `docs/reference/source-contracts.md`
+
+**Implementation**
+
+1. Populate all Task 10 cases for each supported Bedrock Anthropic profile,
+   including opaque state, tool fragments, usage, cost, errors, streams, and
+   direct/AWS-gateway incompatibility.
+2. Mark the profile `enforced` only after its independent contract test passes.
+   Once every production profile is enforced, change the harness default to
+   fail if any supported profile is merely bootstrap status.
+3. Add source-date and redaction validation for all new fixtures.
+
+**Acceptance evidence**
+
+```sh
+go test ./llm/provider/bedrockmessages
+make adapter-contracts
+```
+
+## Task 15: Prove Redis admission and continuation conformance against Redis
 
 **PR title:** `test(redis): run shared state conformance against Redis`
 
@@ -462,48 +595,7 @@ go test ./storage/conformance ./storage/memory ./storage/redis
 make redis-integration
 ```
 
-## Task 11: Make the local Compose stack runnable and prove real Temporal behavior
-
-**PR title:** `test(integration): verify Temporal recovery with shared Redis`
-
-**Files to change**
-
-- `compose.yaml`, local configuration fixtures, and provider mock assets
-- live harnesses under `integration/temporal/` and `integration/compose/`
-- `activity/`, `engine/`, `internal/app/`, and `internal/runtime/` tests only
-  where live behavior exposes an implementation defect
-- `Makefile`, CI scripts, and operations runbook documentation
-- `docs/architecture/temporal-worker.md` and
-  `docs/architecture/deployment-and-operations.md`
-
-**Implementation**
-
-1. Make the opt-in local stack self-contained: pinned Temporal development
-   services, Redis with the Task 1 durability requirements, a content-free
-   deterministic provider mock, and a blob backend suitable for local
-   continuation/result testing. The worker profile obtains a generated local
-   continuation key without requiring a live provider credential.
-2. Add a Temporal SDK test-environment suite for registration, versioned
-   payloads, heartbeats at admitted/pre-write/periodic/finalizing phases,
-   cancellation before/during/after dispatch, retry rules, non-retryable
-   error typing, completed replay, and shutdown drain.
-3. Add a real local Temporal test that dispatches an Activity, kills the worker
-   after the mock accepts the request, restarts it, and proves either completed
-   replay or conservative ambiguity. Run the same test with two worker replicas
-   and a shared budget; no schedule may overspend.
-4. Keep the parser-only Compose target distinct from the bounded authorized
-   `make compose-live-integration` target. The latter names its Docker
-   prerequisite and fails closed without explicit authorization.
-
-**Acceptance evidence**
-
-```sh
-go test ./integration ./activity -run 'Temporal|Heartbeat|Cancellation|Replay'
-make redis-integration
-make compose-live-integration
-```
-
-## Task 12: Wire production telemetry, activity heartbeats, reload, and reconciliation
+## Task 16: Wire production telemetry, activity heartbeats, reload, and reconciliation
 
 **PR title:** `feat(runtime): wire telemetry and safe lifecycle controls`
 
@@ -542,53 +634,131 @@ The tests inspect OTLP/log/metric outputs for required safe fields and denied
 fields, verify exporter flush, per-Activity heartbeat isolation, signal reload,
 drain, and rejected invalid reload behavior.
 
-## Task 13: Add deterministic fuzz, property, mutation, and security gates
+## Task 17: Make the local Compose stack runnable and prove real Temporal behavior
 
-**PR title:** `test(security): enforce invariant and fuzz verification`
+**PR title:** `test(integration): verify Temporal recovery with shared Redis`
+
+**Files to change**
+
+- `compose.yaml`, local configuration fixtures, and provider mock assets
+- live harnesses under `integration/temporal/` and `integration/compose/`
+- `activity/`, `engine/`, `internal/app/`, and `internal/runtime/` tests only
+  where live behavior exposes an implementation defect
+- `Makefile`, CI scripts, and operations runbook documentation
+- `docs/architecture/temporal-worker.md` and
+  `docs/architecture/deployment-and-operations.md`
+
+**Implementation**
+
+1. Make the opt-in local stack self-contained: pinned Temporal development
+   services, Redis with the Task 1 durability requirements, a content-free
+   deterministic provider mock, and a blob backend suitable for local
+   continuation/result testing. The worker profile obtains a generated local
+   continuation key without requiring a live provider credential.
+2. Add a Temporal SDK test-environment suite using the Task 16 heartbeater for
+   registration, versioned payloads, admitted/pre-write/periodic/finalizing
+   heartbeat phases, cancellation before/during/after dispatch, retry rules,
+   non-retryable error typing, completed replay, and shutdown drain.
+3. Add a real local Temporal test that dispatches an Activity, kills the worker
+   after the mock accepts the request, restarts it, and proves either completed
+   replay or conservative ambiguity. Run the same test with two worker replicas
+   and a shared budget; no schedule may overspend.
+4. Stop and restore Redis during a running worker test. Assert live health stays
+   successful, ready health becomes unavailable, polling stops, and recovery
+   restores readiness only after the Task 1 probe succeeds. Verify the Compose
+   worker probes hit those exact endpoints and the rendered Kubernetes probes
+   reference the same paths.
+5. Keep the parser-only Compose target distinct from the bounded authorized
+   `make compose-live-integration` target. The latter names its Docker
+   prerequisite and fails closed without explicit authorization.
+
+**Acceptance evidence**
+
+```sh
+go test ./integration ./activity -run 'Temporal|Heartbeat|Cancellation|Replay|Readiness'
+make redis-integration
+make compose-live-integration
+KUBECTL=/path/to/pinned/kubectl make kustomize-verify
+```
+
+## Task 18: Add deterministic fuzz, property, and mutation gates
+
+**PR title:** `test(quality): enforce semantic invariant verification`
 
 **Files to change**
 
 - fuzz targets and seed corpora under `llm/`, `llm/provider/`, `pricing/`,
   `budget/`, `state/`, and `storage/redis/`
-- deterministic property tests for money, state transitions, and event assembly
-- test and scanner scripts under `scripts/` or `tools/`
+- deterministic property tests for money, routing, state transitions, and event
+  assembly
+- mutation scripts and supporting tests under `scripts/` or `tools/`
 - `Makefile`, `.github/workflows/pull-request.yml`, and
   `.github/workflows/master.yml`
-- `docs/testing/strategy.md` and security documentation
+- `docs/testing/strategy.md`
 
 **Implementation**
 
-1. Seed each fuzz target from the governed golden fixtures and minimized
-   failures. Assert stream decoder/event-assembler invariants rather than
-   discarding decoded output.
+1. Seed each fuzz target from governed golden fixtures and minimized failures.
+   Assert stream decoder/event-assembler results rather than discarding them.
 2. Add bounded deterministic fuzz smoke to PR CI and sharded longer fuzz runs
-   to the daily trusted master workflow. Preserve a reproducible command for
-   every saved failing corpus input.
+   to the trusted master workflow. Preserve a reproducible command for every
+   saved failing corpus input.
 3. Add property tests for decimal ceiling/overflow, sliding-window boundaries,
-   request canonicalization, continuation MAC/tenant binding, dispatch
+   request canonicalization, continuation MAC/tenant binding, route-plan
+   determinism, omission-to-`standard`, service-class rejection, dispatch
    certainty, and state-machine transition legality.
 4. Add mutation coverage for comparison boundaries, round-up direction,
    dispatch classification, service-class mapping, and state transitions. A
    mutation survivor must be recorded as a failing invariant or a deliberate
    documented boundary.
-5. Add static security verification for Go vulnerabilities, action workflow
-   syntax, dependency/license inventory, secret/leak scans, and Docker/Kustomize
-   security invariants. Pin CI actions by immutable commit with readable
+
+**Acceptance evidence**
+
+```sh
+make fuzz-smoke
+make mutation-verify
+```
+
+## Task 19: Add security, deployment, and workflow verification gates
+
+**PR title:** `build(ci): enforce security and workflow policy`
+
+**Files to change**
+
+- security, action, dependency, and deployment verification scripts under
+  `scripts/` or `tools/`
+- `Makefile`, `.github/workflows/pull-request.yml`, and
+  `.github/workflows/master.yml`
+- Kubernetes/Docker verification tests under `integration/` and `deploy/`
+- `docs/testing/strategy.md`, deployment documentation, and the release runbook
+
+**Implementation**
+
+1. Add action syntax/policy validation, Go vulnerability checking,
+   dependency/license inventory, secret/deny-field scans, and Docker/Kustomize
+   security assertions. Pin CI actions by immutable commit with readable
    version comments where repository policy permits.
+2. Add a workflow-contract test that parses the checked-in PR and master
+   workflows. It requires PR read-only permissions and no provider secrets,
+   and requires master push, manual dispatch, and the exact daily
+   `0 5 * * *` schedule with `Australia/Sydney` timezone.
+3. Assert rendered deployment security context, non-root UID, read-only root
+   filesystem, bounded writable mount, health endpoints, and liveness/readiness
+   paths. Keep manifest rendering offline and separate it from any cluster
+   apply.
+4. Add `make security-verify` and `make workflow-verify`; each is bounded and
+   returns nonzero on a scan finding, action syntax error, schedule mismatch,
+   leaked deny-field, or deployment-policy violation.
 
 **Acceptance evidence**
 
 ```sh
 make security-verify
-make fuzz-smoke
-make mutation-verify
+make workflow-verify
+KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
-All commands are bounded, offline where possible, and return nonzero on a
-scanner finding, an action syntax failure, a leaked deny-field, or an invariant
-violation.
-
-## Task 14: Build release evidence, SBOM, provenance, and guarded live contracts
+## Task 20: Build release evidence, SBOM, provenance, and guarded live contracts
 
 **PR title:** `build(release): add attestable v1 release evidence`
 
@@ -605,34 +775,38 @@ violation.
 
 1. Embed version, revision, build time, Go version, and source URL in the
    image and binary without baking configuration or credentials into layers.
-2. Produce a machine-readable evidence record that links exact test/race/fuzz
+2. Add `make image-verify`: inspect the final image's numeric non-root user,
+   start it with a read-only root and only the documented writable mount, and
+   prove its health endpoint remains reachable with no shell or root fallback.
+3. Produce a machine-readable evidence record that links exact test/race/fuzz
    summaries, fixture manifest/source dates, Redis/Temporal/Compose logs,
    rendered manifests, image digest, SBOM, dependency/license output, and
    vulnerability results.
-3. Generate an SPDX or CycloneDX SBOM, scan the final image, and configure
+4. Generate an SPDX or CycloneDX SBOM, scan the final image, and configure
    keyless provenance/signing through GitHub Actions OIDC in a protected manual
    release workflow. The workflow verifies the published digest before marking
    a release artifact successful.
-4. Add build-tagged live adapter contracts. Each profile needs an explicit
+5. Add build-tagged live adapter contracts. Each profile needs an explicit
    enable flag, allow-listed model, test tenant, maximum microUSD ceiling,
    credential source, and tiny deterministic prompt. Fork PRs receive none of
    these secrets and scheduled workflows never publish or spend money.
-5. Make release publication require a tagged commit, a protected environment,
+6. Make release publication require a tagged commit, a protected environment,
    human approval, and all preceding evidence gates. Do not claim a published
    release until this protected job has passed with its configured identity.
 
 **Acceptance evidence**
 
 ```sh
+make image-verify
 make release-verify
 docker build --build-arg VERSION=test --build-arg REVISION=test --build-arg BUILD_TIME=2026-07-14T00:00:00Z .
 ```
 
-The first command validates the schema and locally generated evidence without
-publishing. The protected workflow later records signed image and live-contract
-evidence using repository-managed credentials and identity.
+The first two commands validate locally generated evidence without publishing.
+The protected workflow later records signed image and live-contract evidence
+using repository-managed credentials and identity.
 
-## Task 15: Final v1 traceability review and release candidate
+## Task 21: Final v1 traceability review and release candidate
 
 **PR title:** `docs(release): record v1 completion evidence`
 
@@ -648,8 +822,10 @@ evidence using repository-managed credentials and identity.
    security/deployment behavior to a specific implementation, deterministic
    test, real-dependency test, workflow job, and retained artifact.
 2. Mark an item complete only when its cited command has a passing recorded
-   run against the release candidate. Distinguish implemented offline gates
-   from protected live-provider and release-signing evidence.
+   run against the release candidate. Require every supported adapter profile
+   to be `enforced` in the Task 10 harness; bootstrap status is a release
+   failure. Distinguish implemented offline gates from protected live-provider
+   and release-signing evidence.
 3. Run the aggregate release verification from a clean checkout, merge only
    after PR and master checks are green and GitHub reports no merge conflict,
    then run the protected manual release workflow with authorized credentials.
@@ -662,20 +838,23 @@ evidence using repository-managed credentials and identity.
 ```sh
 make verify
 make integration
+make readiness-integration
 make redis-integration
 make compose-live-integration
 make adapter-contracts
 make security-verify
+make workflow-verify
 make fuzz-smoke
 make mutation-verify
+make image-verify
 make release-verify
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
 ## External authorization boundary
 
-Tasks 1 through 13 are implementable and testable locally or in trusted CI
-without a production provider account. Task 14 prepares all release machinery,
+Tasks 1 through 19 are implementable and testable locally or in trusted CI
+without a production provider account. Task 20 prepares all release machinery,
 but the first actual credentialed provider run, image publication, provenance
 signature, and release tag require the repository’s protected environment,
 OIDC permissions, registry destination, and deliberately scoped provider
