@@ -178,6 +178,7 @@ compose-live-integration:
 		exit 1; \
 	fi; \
 	printf '%s' "$$continuation_hmac" > "$$key"; \
+	chmod 0444 "$$key"; \
 	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
 	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
 	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 180; then \

@@ -434,6 +434,24 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestComposeLiveIntegrationMakesFileSecretReadableToNonrootWorker(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	makefile := string(data)
+	for _, required := range []string{
+		`tmpdir="$$(mktemp -d`,
+		`umask 077;`,
+		"printf '%s' \"$$continuation_hmac\" > \"$$key\"; \\\n\tchmod 0444 \"$$key\"; \\",
+	} {
+		if !strings.Contains(makefile, required) {
+			t.Errorf("compose live integration target is missing %q", required)
+		}
+	}
+}
+
 func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "Makefile"))
 	if err != nil {
