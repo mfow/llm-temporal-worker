@@ -86,16 +86,27 @@ func (window Window) CanReserve(buckets map[int64]pricing.MicroUSD, amount prici
 }
 
 func (window Window) RetryAfter(buckets map[int64]pricing.MicroUSD, amount pricing.MicroUSD, at time.Time) (time.Duration, error) {
-	ok, _, err := window.CanReserve(buckets, amount, at)
+	ok, active, err := window.CanReserve(buckets, amount, at)
 	if err != nil || ok {
 		return 0, err
 	}
 	first, last := window.Range(at)
+	bucketNanos := window.Bucket.Nanoseconds()
+	durationNanos := window.Duration.Nanoseconds()
 	for index := first; index <= last; index++ {
-		if buckets[index] == 0 {
+		value := buckets[index]
+		if value == 0 {
 			continue
 		}
-		candidate := time.Unix(0, (index+1)*window.Bucket.Nanoseconds()).Sub(at)
+		active, err = active.Sub(value)
+		if err != nil {
+			return 0, err
+		}
+		if active > window.Limit || amount > window.Limit-active {
+			continue
+		}
+		expires := (index+1)*bucketNanos + durationNanos
+		candidate := time.Unix(0, expires).Sub(at)
 		if candidate < 0 {
 			candidate = 0
 		}
