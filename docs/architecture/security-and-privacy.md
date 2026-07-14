@@ -145,8 +145,10 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
   identifiers/count, and vulnerability identifiers; it never contains scanner
   traces, test output, source paths, request content, or secret-like bytes.
 - License inventory and vulnerability exceptions are explicit, reviewed files;
-  an exception requires an owner, future expiry, and remediation reference and
-  cannot suppress an unlisted or newly reported finding.
+  an exception requires an owner, future expiry, remediation reference, and
+  trace scope. A module-only exception cannot suppress a later reachable
+  package/function trace without explicit re-review, nor can any exception
+  suppress an unlisted or newly reported finding.
 - Release artifacts are reproducible where practical, signed, and accompanied
   by provenance.
 - The runtime image is non-root, read-only, capability-dropped, and contains no

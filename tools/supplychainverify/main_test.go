@@ -19,12 +19,13 @@ func TestVerifyAcceptsReviewedInventoryAndApprovedFinding(t *testing.T) {
 		Owner:       "security@example.test",
 		Expires:     "2099-01-01T00:00:00Z",
 		Remediation: "https://example.test/security/GO-2099-0001",
+		Scope:       "module_only",
 	}}
 
 	report, err := verify(
 		baseline,
 		testRequirements(),
-		strings.NewReader(`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"raw-provider-response.txt"}}}]}}`),
+		strings.NewReader(`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}`),
 		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
 	)
 	if err != nil {
@@ -64,6 +65,7 @@ func TestVerifyRejectsUnreviewedAndExpiredVulnerabilityFindings(t *testing.T) {
 					Owner:       "security@example.test",
 					Expires:     "2026-07-13T00:00:00Z",
 					Remediation: "https://example.test/security/GO-2099-0001",
+					Scope:       "module_only",
 				}}
 				return value
 			}(),
@@ -108,11 +110,27 @@ func TestVerifyRejectsInventoryDriftAndIncompleteExceptions(t *testing.T) {
 					ID:          "GO-2099-0001",
 					Expires:     "2099-01-01T00:00:00Z",
 					Remediation: "https://example.test/security/GO-2099-0001",
+					Scope:       "module_only",
 				}}
 				return value
 			}(),
 			requirements: testRequirements(),
 			want:         "owner",
+		},
+		{
+			name: "missing exception scope",
+			baseline: func() baseline {
+				value := testBaseline()
+				value.VulnerabilityExceptions = []vulnerabilityException{{
+					ID:          "GO-2099-0001",
+					Owner:       "security@example.test",
+					Expires:     "2099-01-01T00:00:00Z",
+					Remediation: "https://example.test/security/GO-2099-0001",
+				}}
+				return value
+			}(),
+			requirements: testRequirements(),
+			want:         "scope",
 		},
 	}
 
@@ -139,6 +157,7 @@ func TestReportDoesNotRetainRawScannerTrace(t *testing.T) {
 		Owner:       "security@example.test",
 		Expires:     "2099-01-01T00:00:00Z",
 		Remediation: "https://example.test/security/GO-2099-0001",
+		Scope:       "reachable",
 	}}
 	report, err := verify(
 		baseline,
@@ -170,6 +189,51 @@ func TestReadGoModExcludesIndirectRequirements(t *testing.T) {
 	}
 	if !reflect.DeepEqual(requirements, []moduleRequirement{{Path: "example.test/direct", Version: "v1.2.3"}}) {
 		t.Fatalf("requirements = %#v", requirements)
+	}
+}
+
+func TestReadGoModRejectsReplacements(t *testing.T) {
+	t.Parallel()
+
+	_, err := readGoMod(strings.NewReader(`{
+		"Require":[{"Path":"example.test/direct","Version":"v1.2.3"}],
+		"Replace":[{
+			"Old":{"Path":"example.test/direct","Version":"v1.2.3"},
+			"New":{"Path":"./unreviewed-local-fork"}
+		}]
+	}`))
+	if err == nil {
+		t.Fatal("readGoMod accepted a replacement")
+	}
+	if !strings.Contains(err.Error(), "replacement") {
+		t.Fatalf("readGoMod error %q does not identify the replacement", err)
+	}
+}
+
+func TestVerifyRejectsReachableTraceOutsideModuleOnlyException(t *testing.T) {
+	t.Parallel()
+
+	baseline := testBaseline()
+	baseline.VulnerabilityExceptions = []vulnerabilityException{{
+		ID:          "GO-2099-0001",
+		Owner:       "security@example.test",
+		Expires:     "2099-01-01T00:00:00Z",
+		Remediation: "https://example.test/security/GO-2099-0001",
+		Scope:       "module_only",
+	}}
+
+	_, err := verify(
+		baseline,
+		testRequirements(),
+		strings.NewReader(`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}
+{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"},{"package":"example.test/module/vulnerable","function":"Parse"}]}}`),
+		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
+	)
+	if err == nil {
+		t.Fatal("verify accepted a reachable trace outside the module-only exception scope")
+	}
+	if !strings.Contains(err.Error(), "reachable trace") {
+		t.Fatalf("verify error %q does not identify the reachable trace", err)
 	}
 }
 

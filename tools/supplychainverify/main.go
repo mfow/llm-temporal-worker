@@ -39,6 +39,7 @@ type vulnerabilityException struct {
 	Owner       string `json:"owner"`
 	Expires     string `json:"expires"`
 	Remediation string `json:"remediation"`
+	Scope       string `json:"scope"`
 }
 
 type moduleRequirement struct {
@@ -49,6 +50,17 @@ type moduleRequirement struct {
 
 type goMod struct {
 	Require []moduleRequirement `json:"Require"`
+	Replace []moduleReplacement `json:"Replace"`
+}
+
+type moduleReplacement struct {
+	Old moduleRequirement `json:"Old"`
+	New moduleRequirement `json:"New"`
+}
+
+type vulnerabilityFinding struct {
+	ID                string
+	HasReachableTrace bool
 }
 
 type componentStatus struct {
@@ -159,6 +171,9 @@ func readGoMod(reader io.Reader) ([]moduleRequirement, error) {
 	if err := json.NewDecoder(reader).Decode(&decoded); err != nil {
 		return nil, errors.New("supply chain verification go.mod inventory is not valid JSON")
 	}
+	if len(decoded.Replace) != 0 {
+		return nil, errors.New("supply chain verification go.mod inventory contains a replacement")
+	}
 	requirements := make([]moduleRequirement, 0, len(decoded.Require))
 	for _, requirement := range decoded.Require {
 		if requirement.Indirect {
@@ -191,15 +206,19 @@ func verify(value baseline, requirements []moduleRequirement, vulnerabilityOutpu
 	if err != nil {
 		return report, err
 	}
-	report.Findings = findings
+	report.Findings = findingIDs(findings)
 	approved := make([]string, 0, len(findings))
 	usedExceptions := make(map[string]struct{}, len(findings))
 	for _, finding := range findings {
-		if _, ok := exceptions[finding]; !ok {
-			return report, fmt.Errorf("supply chain verification found unreviewed vulnerability %s", finding)
+		exception, ok := exceptions[finding.ID]
+		if !ok {
+			return report, fmt.Errorf("supply chain verification found unreviewed vulnerability %s", finding.ID)
 		}
-		usedExceptions[finding] = struct{}{}
-		approved = append(approved, finding)
+		if finding.HasReachableTrace && exception.Scope != "reachable" {
+			return report, fmt.Errorf("supply chain verification vulnerability %s has a reachable trace outside of its reviewed exception scope", finding.ID)
+		}
+		usedExceptions[finding.ID] = struct{}{}
+		approved = append(approved, finding.ID)
 	}
 	for id := range exceptions {
 		if _, used := usedExceptions[id]; !used {
@@ -250,8 +269,8 @@ func validateBaseline(value baseline, now time.Time) (map[string]vulnerabilityEx
 
 	exceptions := make(map[string]vulnerabilityException, len(value.VulnerabilityExceptions))
 	for _, exception := range value.VulnerabilityExceptions {
-		if !strings.HasPrefix(exception.ID, "GO-") || strings.TrimSpace(exception.Owner) == "" || strings.TrimSpace(exception.Remediation) == "" {
-			return nil, errors.New("supply chain verification vulnerability exception requires an id, owner, expiry, and remediation")
+		if !strings.HasPrefix(exception.ID, "GO-") || strings.TrimSpace(exception.Owner) == "" || strings.TrimSpace(exception.Remediation) == "" || strings.TrimSpace(exception.Scope) == "" {
+			return nil, errors.New("supply chain verification vulnerability exception requires an id, owner, expiry, remediation, and scope")
 		}
 		if _, duplicate := exceptions[exception.ID]; duplicate {
 			return nil, fmt.Errorf("supply chain verification baseline repeats vulnerability exception %s", exception.ID)
@@ -265,6 +284,9 @@ func validateBaseline(value baseline, now time.Time) (map[string]vulnerabilityEx
 		}
 		if err := validateHTTPSReference(exception.Remediation); err != nil {
 			return nil, fmt.Errorf("supply chain verification vulnerability exception %s has an invalid remediation", exception.ID)
+		}
+		if exception.Scope != "module_only" && exception.Scope != "reachable" {
+			return nil, fmt.Errorf("supply chain verification vulnerability exception %s has an invalid scope", exception.ID)
 		}
 		exceptions[exception.ID] = exception
 	}
@@ -306,13 +328,14 @@ func validateInventory(records []moduleRecord, requirements []moduleRequirement)
 	return nil
 }
 
-func readFindings(reader io.Reader) ([]string, error) {
+func readFindings(reader io.Reader) ([]vulnerabilityFinding, error) {
 	decoder := json.NewDecoder(reader)
-	found := make(map[string]struct{})
+	found := make(map[string]bool)
 	for {
 		var event struct {
 			Finding *struct {
-				OSV string `json:"osv"`
+				OSV   string            `json:"osv"`
+				Trace []json.RawMessage `json:"trace"`
 			} `json:"finding"`
 		}
 		err := decoder.Decode(&event)
@@ -329,14 +352,61 @@ func readFindings(reader io.Reader) ([]string, error) {
 		if !strings.HasPrefix(id, "GO-") {
 			return nil, errors.New("supply chain verification vulnerability output has an invalid finding identifier")
 		}
-		found[id] = struct{}{}
+		hasReachableTrace, err := hasReachableTrace(event.Finding.Trace)
+		if err != nil {
+			return nil, err
+		}
+		found[id] = found[id] || hasReachableTrace
 	}
-	findings := make([]string, 0, len(found))
-	for id := range found {
-		findings = append(findings, id)
+	findings := make([]vulnerabilityFinding, 0, len(found))
+	for id, hasReachableTrace := range found {
+		findings = append(findings, vulnerabilityFinding{ID: id, HasReachableTrace: hasReachableTrace})
 	}
-	sort.Strings(findings)
+	sort.Slice(findings, func(i, j int) bool {
+		return findings[i].ID < findings[j].ID
+	})
 	return findings, nil
+}
+
+func hasReachableTrace(trace []json.RawMessage) (bool, error) {
+	if len(trace) == 0 {
+		return false, nil
+	}
+	if len(trace) != 1 {
+		return true, nil
+	}
+
+	var frame map[string]json.RawMessage
+	if err := json.Unmarshal(trace[0], &frame); err != nil {
+		return false, errors.New("supply chain verification vulnerability output has an invalid finding trace")
+	}
+	if len(frame) != 2 {
+		return true, nil
+	}
+	module, hasModule := frame["module"]
+	version, hasVersion := frame["version"]
+	if !hasModule || !hasVersion {
+		return true, nil
+	}
+	var modulePath, moduleVersion string
+	if err := json.Unmarshal(module, &modulePath); err != nil {
+		return false, errors.New("supply chain verification vulnerability output has an invalid finding trace")
+	}
+	if err := json.Unmarshal(version, &moduleVersion); err != nil {
+		return false, errors.New("supply chain verification vulnerability output has an invalid finding trace")
+	}
+	if strings.TrimSpace(modulePath) == "" || strings.TrimSpace(moduleVersion) == "" {
+		return true, nil
+	}
+	return false, nil
+}
+
+func findingIDs(findings []vulnerabilityFinding) []string {
+	ids := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		ids = append(ids, finding.ID)
+	}
+	return ids
 }
 
 func validateComponentStatus(status componentStatus) error {

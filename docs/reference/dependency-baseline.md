@@ -61,11 +61,15 @@ The Go vulnerability scan still analyzes reachable code across the complete
 module graph, including indirect dependencies.
 
 The target pins `govulncheck` at `v1.6.0` and runs it with `go1.26.5`, the
-reviewed toolchain patch. Its JSON parser retains only unique `GO-*` finding
-identifiers. A `vulnerability_exceptions` entry is valid only when it gives an
-identified finding, owner, future RFC 3339 expiry, and HTTPS remediation
-reference. Expired, incomplete, unused, or unlisted exceptions fail the gate,
-so a baseline cannot conceal a new result.
+reviewed toolchain patch. Its JSON parser retains unique `GO-*` finding
+identifiers and a fail-closed internal trace scope without retaining raw trace
+data. A `vulnerability_exceptions` entry is valid only when it gives an
+identified finding, owner, future RFC 3339 expiry, HTTPS remediation reference,
+and a `scope` of either `module_only` or `reachable`. A `module_only` exception
+accepts only the single module/version trace frame; a later reachable package or
+function trace fails until the baseline is explicitly reviewed as `reachable`.
+Expired, incomplete, unused, or unlisted exceptions fail the gate, so a
+baseline cannot conceal a new result.
 
 The PR workflow runs this target. On a trusted-master failure, CI uploads only
 its redacted report: component pass/fail state, direct-module identifiers/count,
@@ -76,7 +80,7 @@ scanner traces, provider data, and credential-like material.
 
 | Finding | Owner | Expires | Remediation reference | Bounded rationale |
 | --- | --- | --- | --- | --- |
-| `GO-2026-5932` | `platform-security` | 2026-08-14T00:00:00Z | [Go vulnerability report](https://pkg.go.dev/vuln/GO-2026-5932) | `azidentity` currently brings `golang.org/x/crypto` for `pkcs12`; the verifier reports this unmaintained `openpgp` advisory only at module level, with no reachable-function trace. No repository package imports `openpgp`. Re-evaluate the exception before expiry and remove it if the module is split or upstream removes the unused package. |
+| `GO-2026-5932` | `platform-security` | 2026-08-14T00:00:00Z | [Go vulnerability report](https://pkg.go.dev/vuln/GO-2026-5932) | `module_only`: `azidentity` currently brings `golang.org/x/crypto` for `pkcs12`; the verifier reports this unmaintained `openpgp` advisory only at module level, with no reachable-function trace. No repository package imports `openpgp`. A reachable trace fails unless this scope is explicitly re-reviewed. Re-evaluate before expiry and remove it if the module is split or upstream removes the unused package. |
 
 ## Repository module
 
