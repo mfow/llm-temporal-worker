@@ -167,6 +167,13 @@ func TestEngineStreamTreatsIncompleteDirectOpenAIResponsesAsSemanticTerminals(t 
 			if terminal.Response.Continuation == nil || terminal.Response.Continuation.Handle == "" {
 				t.Fatalf("terminal continuation = %#v", terminal.Response.Continuation)
 			}
+			child, err := harness.engine.dependencies.Continuations.Get(context.Background(), state.Handle(terminal.Response.Continuation.Handle))
+			if err != nil {
+				t.Fatalf("load persisted child continuation: %v", err)
+			}
+			if child.ParentID != parent.String() {
+				t.Fatalf("persisted child parent = %q, want %q", child.ParentID, parent)
+			}
 			if transport.calls() != 1 {
 				t.Fatalf("OpenAI stream requests = %d, want one", transport.calls())
 			}
@@ -439,7 +446,7 @@ func openAIResponsesStreamSSE(tier string) string {
 		"event: response.completed",
 		"data: {\"type\":\"response.completed\",\"response\":" + terminal + "}",
 		"",
-	}, "\n")
+	}, "\n") + "\n"
 }
 
 func openAIResponsesIncompleteStreamSSE(tier, reason string) string {

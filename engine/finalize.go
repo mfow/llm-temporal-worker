@@ -142,7 +142,7 @@ func (engine *Engine) persistContinuation(ctx context.Context, request llm.Reque
 		child.ParentID = parent.ID
 		child.Depth = parent.Depth + 1
 		var putErr error
-		handle, putErr = engine.dependencies.Continuations.PutChild(ctx, state.PutChildRequest{Parent: state.Handle(request.Continuation.Handle), Child: child, OperationKey: request.OperationKey})
+		handle, putErr = engine.dependencies.Continuations.PutChild(ctx, state.PutChildRequest{Parent: state.Handle(parent.ID), Child: child, OperationKey: request.OperationKey})
 		if putErr != nil {
 			return nil, engineError(provider.CodeStateUnavailable, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetrySameOperation, "continuation child write failed", putErr)
 		}
