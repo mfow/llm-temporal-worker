@@ -117,6 +117,13 @@ func TestEngineStreamDispatchesDirectOpenAIResponsesTypedEvents(t *testing.T) {
 			if terminal.Response.Continuation == nil || terminal.Response.Continuation.EndpointID != "direct-responses" || terminal.Response.Continuation.Handle == "" {
 				t.Fatalf("terminal continuation = %#v", terminal.Response.Continuation)
 			}
+			child, err := harness.engine.dependencies.Continuations.Get(context.Background(), state.Handle(terminal.Response.Continuation.Handle))
+			if err != nil {
+				t.Fatalf("load persisted child continuation: %v", err)
+			}
+			if child.ParentID != parent.String() {
+				t.Fatalf("persisted child parent = %q, want %q", child.ParentID, parent)
+			}
 		})
 	}
 }
@@ -324,7 +331,8 @@ func directResponsesStreamRequest(operationKey string, class llm.ServiceClass) l
 
 func installDirectResponsesContinuation(t *testing.T, harness testHarness, endpointID string) state.Handle {
 	t.Helper()
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{2}, 16)))
+	entropy := append(bytes.Repeat([]byte{2}, 16), bytes.Repeat([]byte{3}, 16)...)
+	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, bytes.NewReader(entropy))
 	if err != nil {
 		t.Fatal(err)
 	}

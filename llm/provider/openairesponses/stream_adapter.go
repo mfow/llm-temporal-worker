@@ -200,8 +200,10 @@ func (source *responsesEventSource) decode(event responses.ResponseStreamEventUn
 			return nil, false, err
 		}
 		return provider.StreamCompleted{Response: lifted}, true, nil
-	case "response.failed", "error":
-		return provider.StreamErrored{Err: source.terminalError()}, true, nil
+	case "response.failed":
+		return provider.StreamErrored{Err: source.terminalError(string(event.Response.Error.Code), event.Response.ID)}, true, nil
+	case "error":
+		return provider.StreamErrored{Err: source.terminalError(event.Code, "")}, true, nil
 	case "response.created", "response.in_progress", "response.content_part.added", "response.content_part.done", "response.output_text.done", "response.function_call_arguments.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done", "response.reasoning_text.delta", "response.reasoning_text.done", "response.refusal.delta", "response.refusal.done":
 		// These transport markers do not add a public event beyond the output
 		// item lifecycle or the completed semantic response.
@@ -222,10 +224,23 @@ func (source *responsesEventSource) invalidResponse(message string) *provider.Er
 	return invalidResponseError(source.call, source.requestID, message)
 }
 
-func (source *responsesEventSource) terminalError() *provider.Error {
-	mapped := provider.NewError(provider.CodeProviderUnavailable, provider.PhaseStream, provider.DispatchAccepted, provider.RetryNever, "OpenAI Responses stream did not complete")
+func (source *responsesEventSource) terminalError(providerCode, responseID string) *provider.Error {
+	code := provider.CodeProviderUnavailable
+	retry := provider.RetryNever
+	message := "OpenAI Responses stream did not complete"
+	if providerCode == "rate_limit_exceeded" {
+		code = provider.CodeProviderRateLimited
+		retry = provider.RetryAfter
+		message = "provider rate limited the request"
+	}
+	mapped := provider.NewError(code, provider.PhaseStream, provider.DispatchAccepted, retry, message)
 	mapped.OperationID = source.call.OperationKey
 	mapped.Provider.RequestID = source.requestID
+	mapped.Provider.ResponseID = responseID
+	mapped.SafeDetails = map[string]string{"provider": adapterName}
+	if providerCode != "" {
+		mapped.SafeDetails["provider_code"] = providerCode
+	}
 	return provider.WithEndpointID(mapped, source.call.EndpointID)
 }
 
