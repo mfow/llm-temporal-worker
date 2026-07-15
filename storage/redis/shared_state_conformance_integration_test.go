@@ -116,8 +116,9 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	if os.Getenv("LLMTW_REDIS_TEST_PROVISION") != "1" {
 		t.Skip("restart is restricted to make redis-integration's explicitly provisioned dependency")
 	}
-	if !strings.HasPrefix(container, "llmtw-redis-integration-") {
-		t.Skip("restart is restricted to make redis-integration's named local dependency")
+	configuredPrefix := os.Getenv("LLMTW_REDIS_CONTAINER_PREFIX")
+	if !isLiveRedisPersistenceContainer(container, configuredPrefix) {
+		t.Skip("restart is restricted to make redis-integration's configured local dependency")
 	}
 	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -160,6 +161,17 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	if result, err := store.Begin(context.Background(), liveBeginRequest("restart-after", "restart-policy", 1, 10, now)); err != nil || result.Denied != nil {
 		t.Fatalf("Function after Redis restart = %#v, %v", result, err)
 	}
+}
+
+func TestLiveRedisConfiguredPersistenceGateAllowsOverriddenPrefix(t *testing.T) {
+	const prefix = "llmtw-redis-custom-ci"
+	if !isLiveRedisPersistenceContainer(prefix+"-123-456", prefix) {
+		t.Fatal("configured Redis container prefix should allow the persistence gate to run")
+	}
+}
+
+func isLiveRedisPersistenceContainer(container, configuredPrefix string) bool {
+	return configuredPrefix != "" && strings.HasPrefix(container, configuredPrefix+"-")
 }
 
 func openLiveRedis(t *testing.T) *redisclient.Client {

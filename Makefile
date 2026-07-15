@@ -98,7 +98,7 @@ redis-integration:
 			''|*[!0-9]*) echo "redis-integration could not discover its loopback Redis port" >&2; exit 1 ;; \
 		esac; \
 		$(GO) test -count=1 ./storage/conformance ./storage/memory ./storage/redis; \
-		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; \
+		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(REDIS_INTEGRATION_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; \
 		echo "redis-integration passed (isolated pinned Redis)"
 
 # Builds a fresh local image from the checked-out revision, then delegates all
