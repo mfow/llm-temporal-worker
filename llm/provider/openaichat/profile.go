@@ -71,6 +71,7 @@ func NewProfile(profile Profile) (Profile, error) {
 	}
 	copy := profile
 	copy.Capabilities = cloneCapabilities(profile.Capabilities)
+	copy.Capabilities.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(copy.Capabilities.Features[provider.FeatureStreaming])
 	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
 	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
 	copy.AllowedExtensions = cloneExtensions(profile.AllowedExtensions)
@@ -128,6 +129,9 @@ func (profile Profile) validate() error {
 		if _, ok := profile.Capabilities.Features[feature]; !ok {
 			return fmt.Errorf("openai chat profile %q must explicitly declare capability %q", profile.ID, feature)
 		}
+	}
+	if streaming := profile.Capabilities.Features[provider.FeatureStreaming]; streaming.State == provider.CapabilityNative || streaming.State == provider.CapabilityEmulated {
+		return fmt.Errorf("openai chat profile %q cannot advertise streaming as %q: adapter does not implement OpenStream", profile.ID, streaming.State)
 	}
 	if profile.MissingActualServiceClass != "" && !profile.MissingActualServiceClass.Valid() {
 		return fmt.Errorf("openai chat profile %q missing actual service class %q is invalid", profile.ID, profile.MissingActualServiceClass)
@@ -197,6 +201,7 @@ func (profile Profile) capabilities(ctx context.Context, query provider.Capabili
 	}
 	set := cloneCapabilities(profile.Capabilities)
 	set.Version = profile.capabilityVersion()
+	set.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(set.Features[provider.FeatureStreaming])
 	return set, nil
 }
 
@@ -228,6 +233,15 @@ func (profile Profile) actualClass(providerTier string) (*llm.ServiceClass, erro
 
 func publicServiceClasses() []llm.ServiceClass {
 	return []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
+}
+
+func unsupportedStreamingCapability(capability provider.Capability) provider.Capability {
+	capability.State = provider.CapabilityUnsupported
+	capability.Transform = ""
+	if capability.Reason == "" {
+		capability.Reason = "adapter does not implement OpenStream"
+	}
+	return capability
 }
 
 func allFeatures() []provider.Feature {

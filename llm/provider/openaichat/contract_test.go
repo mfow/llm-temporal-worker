@@ -28,6 +28,47 @@ func TestProfileRequiresExplicitFeaturesAndClasses(t *testing.T) {
 	}
 }
 
+func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
+	profile := testProfile()
+	if capability := profile.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Reason == "" {
+		t.Fatalf("default streaming capability = %#v, want unsupported with a reason", capability)
+	}
+	if capability := profileTestCapabilities("chat-profile-test/v1").Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported {
+		t.Fatalf("profile test streaming capability = %#v, want unsupported", capability)
+	}
+
+	for _, state := range []provider.CapabilityState{provider.CapabilityNative, provider.CapabilityEmulated} {
+		t.Run(string(state), func(t *testing.T) {
+			profile := testProfile()
+			profile.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: state}
+			if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "OpenStream") {
+				t.Fatalf("NewProfile() error = %v, want an OpenStream capability error", err)
+			}
+		})
+	}
+
+	profile = testProfile()
+	profile.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: provider.CapabilityUnknown, Transform: "unverified-stream"}
+	validated, err := NewProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability := validated.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
+		t.Fatalf("validated streaming capability = %#v, want normalized unsupported capability", capability)
+	}
+	adapter := &Adapter{endpointID: "chat-prod", profile: validated}
+	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability := set.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
+		t.Fatalf("reported streaming capability = %#v, want normalized unsupported capability", capability)
+	}
+	if _, ok := any((*Adapter)(nil)).(provider.StreamingAdapter); ok {
+		t.Fatal("adapter advertises streaming capability without an OpenStream implementation")
+	}
+}
+
 func TestCompileRejectsUnknownCapabilityInStrictMode(t *testing.T) {
 	adapter := testAdapter(t)
 	request := llm.Request{

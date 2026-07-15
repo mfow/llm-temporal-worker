@@ -14,6 +14,44 @@ import (
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 )
 
+func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
+	profile := DefaultProfile("anthropic-no-stream")
+	if capability := profile.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Reason == "" {
+		t.Fatalf("default streaming capability = %#v, want unsupported with a reason", capability)
+	}
+
+	for _, state := range []provider.CapabilityState{provider.CapabilityNative, provider.CapabilityEmulated} {
+		t.Run(string(state), func(t *testing.T) {
+			profile := DefaultProfile("anthropic-no-stream")
+			profile.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: state}
+			if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "OpenStream") {
+				t.Fatalf("NewProfile() error = %v, want an OpenStream capability error", err)
+			}
+		})
+	}
+
+	profile = DefaultProfile("anthropic-no-stream")
+	profile.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: provider.CapabilityUnknown, Transform: "unverified-stream"}
+	validated, err := NewProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability := validated.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
+		t.Fatalf("validated streaming capability = %#v, want normalized unsupported capability", capability)
+	}
+	adapter := &Adapter{endpointID: validated.ID, profile: validated}
+	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: validated.ID, Family: provider.FamilyAnthropicMessages})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability := set.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
+		t.Fatalf("reported streaming capability = %#v, want normalized unsupported capability", capability)
+	}
+	if _, ok := any((*Adapter)(nil)).(provider.StreamingAdapter); ok {
+		t.Fatal("adapter advertises streaming capability without an OpenStream implementation")
+	}
+}
+
 func TestInvokeMakesExactlyOneSDKCallAndLiftsResponse(t *testing.T) {
 	responseBody := `{"id":"msg_invoke","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1,"service_tier":"standard"}}`
 	calls := 0
