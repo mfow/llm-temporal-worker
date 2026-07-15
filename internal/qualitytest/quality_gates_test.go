@@ -152,6 +152,29 @@ func TestQualityGatesAreWiredIntoMakeCIAndTestingStrategy(t *testing.T) {
 	}
 }
 
+func TestMasterFuzzShardsUseFixedExecutionBudget(t *testing.T) {
+	root := repositoryRoot(t)
+	master := readFile(t, filepath.Join(root, ".github", "workflows", "master.yml"))
+	if !strings.Contains(master, "FUZZ_TIME=250000x bash scripts/run-fuzz.sh shard") {
+		t.Fatal("master fuzz shards must use the fixed 250000x execution budget")
+	}
+	if strings.Contains(master, "FUZZ_TIME=45s") {
+		t.Fatal("master fuzz shards must not use a deadline-based fuzz budget")
+	}
+
+	script := readFile(t, filepath.Join(root, "scripts", "run-fuzz.sh"))
+	if !strings.Contains(script, "-parallel=1") {
+		t.Fatal("fuzz runner must retain one worker per target")
+	}
+
+	strategy := readFile(t, filepath.Join(root, "docs", "testing", "strategy.md"))
+	for _, value := range []string{"FUZZ_TIME=250000x", "248,282"} {
+		if !strings.Contains(strategy, value) {
+			t.Fatalf("testing strategy does not document %q", value)
+		}
+	}
+}
+
 func TestMutationManifestCoversCriticalSemanticInvariants(t *testing.T) {
 	root := repositoryRoot(t)
 	manifest := readFile(t, filepath.Join(root, "tools", "mutationverify", "main.go"))

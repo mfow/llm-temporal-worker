@@ -181,13 +181,16 @@ go test <package> -run '^<FuzzTarget>/<corpus-entry>$' -count=1
 ```
 
 The trusted master workflow separately runs three bounded `-fuzz` shards
-(`FUZZ_TIME=45s`, one worker per target). `scripts/run-fuzz.sh shard <0|1|2>`
-uses the same explicit target list locally. `make mutation-verify` compiles a
-reviewed overlay for each boundary mutation—decimal round-up, budget comparison,
-dispatch certainty, omitted service class, and legal state transition—and
-requires its named invariant to fail. A mutation survivor is therefore a gate
-failure; adding a mutation requires either a failing invariant or a documented
-semantic boundary before it can enter the manifest.
+(`FUZZ_TIME=250000x`, 250,000 executions and one worker per target).
+`250000x` retains at least the slowest observed 45-second workload (248,282
+executions) while avoiding deadline-based cancellation on busy runners.
+`scripts/run-fuzz.sh shard <0|1|2>` uses the same explicit target list locally.
+`make mutation-verify` compiles a reviewed overlay for each boundary mutation—
+decimal round-up, budget comparison, dispatch certainty, omitted service class,
+and legal state transition—and requires its named invariant to fail. A mutation
+survivor is therefore a gate failure; adding a mutation requires either a
+failing invariant or a documented semantic boundary before it can enter the
+manifest.
 
 ### Store conformance
 

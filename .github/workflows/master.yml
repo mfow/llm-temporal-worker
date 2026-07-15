@@ -37,7 +37,7 @@ jobs:
           cache: true
 
       - name: Run bounded semantic fuzz shard
-        run: FUZZ_TIME=45s bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"
+        run: FUZZ_TIME=250000x bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"
 
   verify:
     name: Verify
