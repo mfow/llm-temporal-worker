@@ -282,6 +282,7 @@
       ],
       "verification": {
         "make_targets": [
+          "test",
           "workflow-verify"
         ],
         "workflow_jobs": [

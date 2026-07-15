@@ -12,6 +12,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/mfow/llm-temporal-worker/llm"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -78,6 +79,38 @@ func TestV1TraceabilityCatalog(t *testing.T) {
 	root := repositoryRoot(t)
 	if err := validateV1TraceabilityCatalog(root, readV1TraceabilityCatalog(t, root)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestV1TraceabilityCatalogRejectsDuplicateJSONKeys(t *testing.T) {
+	root := repositoryRoot(t)
+	raw := string(readV1TraceabilityCatalog(t, root))
+
+	for _, test := range []struct {
+		name   string
+		before string
+		after  string
+	}{
+		{
+			name:   "root catalog state where final value is valid",
+			before: "\"catalog_state\": \"partial\",",
+			after:  "\"catalog_state\": \"complete\",\n  \"catalog_state\": \"partial\",",
+		},
+		{
+			name:   "nested evidence status where final value is valid",
+			before: "\"mode\": \"offline\",\n        \"status\": \"unrecorded\"",
+			after:  "\"mode\": \"offline\",\n        \"status\": \"authorization_required\",\n        \"status\": \"unrecorded\"",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(raw, test.before, test.after, 1)
+			if mutated == raw {
+				t.Fatalf("duplicate-key fixture %q did not match the catalog", test.name)
+			}
+			if err := validateV1TraceabilityCatalog(root, []byte(mutated)); err == nil {
+				t.Fatalf("catalog validator accepted %s", test.name)
+			}
+		})
 	}
 }
 
@@ -293,11 +326,17 @@ func catalogEvidence(t *testing.T, requirement map[string]any) map[string]any {
 }
 
 func validateV1TraceabilityCatalog(root string, raw []byte) error {
-	if err := rejectStaticEvidenceClaims(raw); err != nil {
+	// Decode raw bytes through the duplicate-key-safe canonicalizer before any
+	// map or struct decoder can collapse an earlier static evidence claim.
+	canonical, err := llm.CanonicalJSON(raw)
+	if err != nil {
+		return fmt.Errorf("canonicalize catalog: %w", err)
+	}
+	if err := rejectStaticEvidenceClaims(canonical); err != nil {
 		return err
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
 	decoder.DisallowUnknownFields()
 	var catalog v1TraceabilityCatalog
 	if err := decoder.Decode(&catalog); err != nil {
