@@ -101,6 +101,7 @@ func TestAnthropicDirectContractFixturesCoverUsageClassesLossErrorsAndContinuati
 	assertCanonicalAnthropicDirectFixture(t, gotUsage, "usage-cost.semantic.json")
 
 	assertAnthropicDirectFixtureCompileError(t, profile, loadAnthropicDirectFixtureRequest(t, "strict-loss.semantic.json"), "strict-loss.wire.json")
+	assertAnthropicDirectFixtureCompileError(t, profile, loadAnthropicDirectFixtureRequest(t, "best-effort-diagnostic.semantic.json"), "best-effort-diagnostic.wire.json")
 	assertAnthropicDirectFixtureContinuation(t, profile)
 	assertAnthropicDirectFixtureClassifiedError(t)
 	assertAnthropicDirectFixtureRedaction(t)
@@ -338,7 +339,7 @@ func assertAnthropicDirectFixtureCompileError(t *testing.T, profile Profile, req
 			Family:     provider.FamilyAnthropicMessages,
 			Model:      request.Model,
 		},
-		Strict: true,
+		Strict: request.Portability == llm.PortabilityStrict,
 	})
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) {

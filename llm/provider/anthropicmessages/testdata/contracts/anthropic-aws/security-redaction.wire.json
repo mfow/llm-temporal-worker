@@ -1,0 +1,6 @@
+{
+  "aws_authorization": "[REDACTED]",
+  "x-amz-security-token": "[REDACTED]",
+  "request_id": "aws-[REDACTED]",
+  "note": "synthetic AWS gateway redaction fixture"
+}

@@ -1,0 +1,43 @@
+{
+  "api_version": "llm.temporal/v1",
+  "continuation": {"endpoint_id": "anthropic-aws", "handle": "anthropic-messages:msg-aws-usage", "model": "claude-contract", "pinned": true},
+  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-anthropic-aws-usage",
+  "output": [{"actor": "model", "content": [{"kind": "text", "text": "usage response"}], "kind": "message"}],
+  "provider": {
+    "finish_reason": "end_turn",
+    "raw": {"stop_sequence": null},
+    "request_id": "req-anthropic-aws-usage",
+    "response_id": "msg-aws-usage"
+  },
+  "route": {
+    "api_family": "anthropic_messages",
+    "endpoint_id": "anthropic-aws",
+    "requested_model": "claude-contract",
+    "resolved_model": "claude-contract"
+  },
+  "service": {
+    "actual": "standard",
+    "attempted": "standard",
+    "fallback_index": 0,
+    "provider_value": "standard",
+    "requested": "standard"
+  },
+  "status": "completed",
+  "usage": {
+    "cache_read_tokens": 5,
+    "cache_write_tokens": 2,
+    "input_tokens": 21,
+    "output_tokens": 13,
+    "provider_raw": {
+      "cache_creation_input_tokens": 2,
+      "cache_read_input_tokens": 5,
+      "input_tokens": 21,
+      "output_tokens": 13,
+      "output_tokens_details": {"thinking_tokens": 3},
+      "service_tier": "standard"
+    },
+    "reasoning_tokens": 3
+  }
+}
