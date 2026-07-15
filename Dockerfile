@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1.7
 
-# The digest is the multi-platform index for the Go 1.26.0 Bookworm image.
+# The digest is the multi-platform index for the Go 1.26.5 Bookworm image.
 # Renovate/security review should update the tag and digest together.
-ARG GO_IMAGE=docker.io/library/golang:1.26.0-bookworm@sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c
+ARG GO_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 ARG SOURCE=https://github.com/mfow/llm-temporal-worker
-ARG GO_VERSION=go1.26.0
+ARG GO_VERSION=go1.26.5
 
 FROM ${GO_IMAGE} AS build
 

@@ -10,7 +10,7 @@ READINESS_REDIS_PORT ?= 16379
 IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
 IMAGE_VERIFY_VERSION ?= image-verify
 IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
-IMAGE_VERIFY_GO_VERSION ?= go1.26.0
+IMAGE_VERIFY_GO_VERSION ?= go1.26.5
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
 .PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
