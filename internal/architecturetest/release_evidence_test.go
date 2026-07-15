@@ -1823,7 +1823,6 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 		filepath.Join("scripts", "release", "collect.py"),
 		filepath.Join("scripts", "release", "verify.sh"),
 		filepath.Join("scripts", "release", "record.sh"),
-		filepath.Join("docs", "release", "runbook.md"),
 	} {
 		data := readRepositoryFile(t, root, path)
 		lower := strings.ToLower(data)
@@ -1831,6 +1830,19 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 			if strings.Contains(lower, forbidden) {
 				t.Fatalf("%s contains publication or Task 24 control %q", path, forbidden)
 			}
+		}
+	}
+	// Task 24 is separately documented below this heading. Keep the existing
+	// Task 23 runbook boundary nonpublishing while allowing that later,
+	// fail-closed control to document its manual trigger and OIDC boundary.
+	runbook := readRepositoryFile(t, root, "docs", "release", "runbook.md")
+	task23Runbook, _, found := strings.Cut(runbook, "\n## Guarded manual publication boundary")
+	if !found {
+		t.Fatal("release runbook does not separate the Task 23 and Task 24 boundaries")
+	}
+	for _, forbidden := range []string{"docker push", "cosign sign", "gh release", "workflow_dispatch", "id-token: write"} {
+		if strings.Contains(strings.ToLower(task23Runbook), forbidden) {
+			t.Fatalf("Task 23 runbook boundary contains publication or Task 24 control %q", forbidden)
 		}
 	}
 	artifactSchema := readRepositoryFile(t, root, "docs", "release", "artifact.schema.json")

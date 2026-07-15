@@ -32,7 +32,7 @@ type releaseMakeInvocation struct {
 }
 
 func TestWorkflowYAMLParses(t *testing.T) {
-	for _, name := range []string{"master.yml", "pull-request.yml"} {
+	for _, name := range []string{"master.yml", "pull-request.yml", "release.yml"} {
 		_ = readWorkflow(t, name)
 	}
 }
@@ -82,12 +82,9 @@ func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testin
 }
 
 func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
-	root := repositoryRoot(t)
 	master := readWorkflow(t, "master.yml")
 	pullRequest := readWorkflow(t, "pull-request.yml")
-	if _, err := os.Stat(filepath.Join(root, ".github", "workflows", "release.yml")); !os.IsNotExist(err) {
-		t.Fatalf("Task 24 release workflow must not exist: %v", err)
-	}
+	release := readWorkflow(t, "release.yml")
 
 	job := workflowJob(t, master, "release-evidence")
 	assertJobReadOnlyPermissions(t, master.name, "release-evidence", job)
@@ -136,7 +133,7 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 		}
 	}
 
-	if err := validateReleaseMakeInvocationPolicy(master, pullRequest); err != nil {
+	if err := validateReleaseMakeInvocationPolicy(master, pullRequest, release); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateReleaseEvidencePathOverridePolicy(master); err != nil {
@@ -181,6 +178,7 @@ func TestWorkflowReleaseEvidenceTemporaryOCIDirectoryPolicyRejectsRetentionAndMi
 func TestWorkflowReleaseMakeInvocationPolicyRejectsNonExactLines(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
 	pullRequest := readWorkflow(t, "pull-request.yml")
+	release := readWorkflow(t, "release.yml")
 	for _, mutation := range []struct {
 		name        string
 		replacement string
@@ -196,7 +194,7 @@ func TestWorkflowReleaseMakeInvocationPolicyRejectsNonExactLines(t *testing.T) {
 		t.Run(mutation.name, func(t *testing.T) {
 			raw := strings.Replace(master.raw, "          make release-verify", mutation.replacement, 1)
 			mutated := parseWorkflow(t, master.name, raw)
-			if err := validateReleaseMakeInvocationPolicy(mutated, pullRequest); err == nil {
+			if err := validateReleaseMakeInvocationPolicy(mutated, pullRequest, release); err == nil {
 				t.Fatalf("release Make policy accepted mutated line %q", mutation.replacement)
 			}
 		})
@@ -205,7 +203,7 @@ func TestWorkflowReleaseMakeInvocationPolicyRejectsNonExactLines(t *testing.T) {
 	t.Run("second release target", func(t *testing.T) {
 		raw := strings.Replace(master.raw, "          make release-verify", "          make release-verify\n          make release-other", 1)
 		mutated := parseWorkflow(t, master.name, raw)
-		if err := validateReleaseMakeInvocationPolicy(mutated, pullRequest); err == nil {
+		if err := validateReleaseMakeInvocationPolicy(mutated, pullRequest, release); err == nil {
 			t.Fatal("release Make policy accepted a second release target")
 		}
 	})
@@ -289,6 +287,7 @@ func TestWorkflowActionsUseImmutablePinsWithVersionComments(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
 		readWorkflow(t, "master.yml"),
+		readWorkflow(t, "release.yml"),
 	} {
 		for _, reference := range actionReferences(t, workflow) {
 			if strings.HasPrefix(reference, "./") {
@@ -808,12 +807,33 @@ func validateReleaseMakeInvocationPolicy(workflows ...workflowDocument) error {
 		}
 		invocations = append(invocations, releaseMakeInvocations(workflow)...)
 	}
-	if len(invocations) != 1 {
-		return fmt.Errorf("release evidence policy found %d make release* invocations, want exactly one: %#v", len(invocations), invocations)
+	want := map[string]releaseMakeInvocation{
+		"master.yml/release-evidence": {
+			workflow: "master.yml",
+			job:      "release-evidence",
+			target:   "release-verify",
+			line:     "make release-verify",
+		},
+		"release.yml/preflight": {
+			workflow: "release.yml",
+			job:      "preflight",
+			target:   "release-verify",
+			line:     "make release-verify",
+		},
 	}
-	invocation := invocations[0]
-	if invocation.workflow != "master.yml" || invocation.job != "release-evidence" || invocation.target != "release-verify" || invocation.line != "make release-verify" {
-		return fmt.Errorf("only the master release-evidence job may invoke exactly make release-verify, got %#v", invocation)
+	if len(invocations) != len(want) {
+		return fmt.Errorf("release evidence policy found %d make release* invocations, want %#v: %#v", len(invocations), want, invocations)
+	}
+	for _, invocation := range invocations {
+		key := invocation.workflow + "/" + invocation.job
+		expected, ok := want[key]
+		if !ok || invocation != expected {
+			return fmt.Errorf("release evidence policy found unexpected Make invocation %#v", invocation)
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		return fmt.Errorf("release evidence policy is missing Make invocations %#v", want)
 	}
 	return nil
 }

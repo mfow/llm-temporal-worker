@@ -149,3 +149,56 @@ retains `image.oci.tar`, never uses `oci-archive:`, and never uses
 `docker load --input`; the unretained directory is the only raw OCI subject.
 `release-artifacts/` is ignored by Git and excluded from the Docker build
 context.
+
+## Guarded manual publication boundary
+
+Task 24 adds `.github/workflows/release.yml` as a deliberately incomplete
+publication control. It has only a `workflow_dispatch` trigger, and both jobs
+reject a dispatch that is not started from `master`. A human must provide all
+three immutable inputs:
+
+- a strict protected tag reference in the form
+  `refs/tags/vMAJOR.MINOR.PATCH` (lightweight and annotated tags both resolve
+  to their one target commit);
+- a fully qualified `registry/repository@sha256:...` image reference; and
+- the numeric workflow run ID for the successful master `release-evidence`
+  bundle that proves that exact tag commit and digest.
+
+There is intentionally no default registry. Before any manual run, an
+administrator must configure the non-secret repository variable
+`RELEASE_PUBLICATION_IMAGE_REPOSITORY` with the exact trusted registry and
+repository path. The guard rejects a missing, malformed, tag-based, or
+different image reference; it also rejects a branch ref, a malformed tag, a
+tag that is not reachable from protected master, a non-numeric run ID, an
+unavailable or untrusted evidence run, an unavailable artifact, or any
+evidence revision/digest mismatch.
+
+The preflight receives only `contents: read` and `actions: read`. It uses the
+automatic, job-scoped `GITHUB_TOKEN` only as the input to GitHub's pinned
+`actions/download-artifact` action; the token is never placed in a shell
+environment, logged, or passed to another action. This short-lived read token
+is not a provider, registry, or OIDC credential.
+
+This repository is public, so before that download the local guard makes a
+credential-free HTTPS `GET` to the public GitHub Actions run endpoint. It
+fails closed on network, API, rate-limit, size, or JSON errors and requires the
+returned run to name this repository, use `.github/workflows/master.yml`, be a
+completed successful `push` to `master`, and have the exact commit resolved
+from the release tag. The only job that can retain the `release-evidence`
+artifact is the `release-evidence` job in that workflow; its contract requires
+a successful master verification before upload. The downloader then requests
+that exact artifact name from the validated run, and local Task 23 verification
+requires its complete evidence bundle to bind the same revision and image
+digest. If the repository ever becomes private, this public lookup must remain
+fail-closed until a separately authorized design supplies an equivalent trust
+boundary without widening the token's scope.
+
+The downstream job names the `release-publication` protected environment and
+is the only job with `id-token: write`. Repository administrators must create
+and protect that environment before enabling an actual publication capability:
+configure required human approvals, protected tag policy, and the cloud
+identity trust subject/audience for that environment. This repository change
+does not create or modify that environment, configure a registry, establish an
+OIDC trust relationship, or add credentials.
+
+The protected job always exits nonzero after preflight. It does not sign, publish, push, create a tag, or create a release. Consequently an unavailable or unconfigured registry fails closed rather than becoming a silent skip or a claimed release. Do not treat a successful preflight, an environment approval, or this workflow definition as evidence that any image was signed or published; a separately authorized follow-up must implement those irreversible operations.

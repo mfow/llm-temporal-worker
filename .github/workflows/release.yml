@@ -1,0 +1,142 @@
+name: Guarded signed publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Exact protected release tag ref, for example refs/tags/v1.2.3
+        required: true
+        type: string
+      image_reference:
+        description: Fully qualified trusted registry/repository digest reference
+        required: true
+        type: string
+      evidence_run_id:
+        description: Successful master release-evidence workflow run ID
+        required: true
+        type: string
+
+# No job receives write permissions by default. The preflight temporarily adds
+# Actions read access only to retrieve one named evidence artifact from an
+# explicitly selected workflow run.
+permissions:
+  contents: read
+
+concurrency:
+  group: guarded-publication-${{ inputs.release_ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate guarded publication request
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out protected master history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: "0"
+          fetch-tags: "true"
+          persist-credentials: "false"
+          # The repository is public. Keep every action except the artifact
+          # downloader anonymous so the automatic GitHub token has one sink.
+          token: ""
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          token: ""
+          cache: "false"
+
+      - name: Validate immutable manual inputs
+        id: request
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+          IMAGE_REFERENCE: ${{ inputs.image_reference }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          RELEASE_PUBLICATION_IMAGE_REPOSITORY: ${{ vars.RELEASE_PUBLICATION_IMAGE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/guard.sh validate-request \
+            --release-ref "$RELEASE_REF" \
+            --image-reference "$IMAGE_REFERENCE" \
+            --evidence-run-id "$EVIDENCE_RUN_ID" \
+            --trusted-repository "$RELEASE_PUBLICATION_IMAGE_REPOSITORY" \
+            --output "$GITHUB_OUTPUT"
+
+      # The public run lookup is an unauthenticated HTTPS GET. It validates the
+      # master evidence workflow identity before the one job-scoped GitHub token
+      # use below. Network, rate-limit, or metadata-validation errors fail closed.
+      - name: Verify public master evidence run metadata
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          EVIDENCE_RUN_ID: ${{ inputs.evidence_run_id }}
+          TAG_COMMIT: ${{ steps.request.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/guard.sh verify-public-run \
+            --repository "$REPOSITORY" \
+            --evidence-run-id "$EVIDENCE_RUN_ID" \
+            --tag-commit "$TAG_COMMIT"
+
+      # This is the only explicit use of the automatic, job-scoped GitHub
+      # token. The pinned official action receives it directly; no shell or
+      # other action receives the token. The master workflow contract allows
+      # this artifact name only from the successful master release-evidence job.
+      - name: Download the named trusted evidence artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.evidence_run_id }}
+          path: release-artifacts
+
+      - name: Run Task 19 through Task 22 safety gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          make security-verify
+          make workflow-verify
+          make deployment-policy-verify
+          make image-verify
+
+      - name: Verify Task 23 evidence binds the exact publication digest
+        shell: bash
+        env:
+          IMAGE_REFERENCE: ${{ inputs.image_reference }}
+          TAG_COMMIT: ${{ steps.request.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          make release-verify
+          bash scripts/release/guard.sh verify-evidence \
+            --evidence release-artifacts/evidence.json \
+            --tag-commit "$TAG_COMMIT" \
+            --image-reference "$IMAGE_REFERENCE"
+
+  protected-signing-publication:
+    name: Protected signing and publication boundary
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: release-publication
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Stop before external signing or publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Task 24 stops before external signing, registry publication, tagging, or release creation." >&2
+          echo "No registry or signing call is made; an unavailable or unconfigured external publication target remains a failure, never a skipped release." >&2
+          exit 1
