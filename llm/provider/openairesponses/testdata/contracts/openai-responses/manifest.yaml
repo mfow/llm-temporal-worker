@@ -2,7 +2,7 @@ version: 1
 id: openai-responses
 provider: openai
 family: responses
-coverage: bootstrap
+coverage: enforced
 metadata: metadata.yaml
 service_classes:
   economy:
@@ -48,6 +48,10 @@ cases:
     artifacts:
       wire: class-facts.wire.json
       semantic: class-facts.semantic.json
+  - id: continuation-compatibility
+    artifacts:
+      wire: continuation-compatibility.wire.json
+      semantic: continuation-compatibility.semantic.json
   - id: full-stream
     artifacts:
       events: stream.decoder.events

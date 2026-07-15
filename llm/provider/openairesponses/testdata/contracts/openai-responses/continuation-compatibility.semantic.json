@@ -1,0 +1,28 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-openai-response-continuation",
+  "model": "gpt-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "continue response"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": {
+    "handle": "openai-responses:resp-prior",
+    "endpoint_id": "openai-fixture",
+    "model": "gpt-contract",
+    "pinned": true,
+    "provider_state": [
+      {
+        "kind": "provider_state",
+        "provider": "openai",
+        "endpoint_family": "responses",
+        "media_type": "application/vnd.openai.response+json",
+        "opaque": "cmVzcC1wcmlvcg=="
+      }
+    ]
+  },
+  "extensions": {}
+}
