@@ -358,7 +358,7 @@ reviewable diff, and source-contract update. Normal tests never rewrite files.
 
 Live provider contracts are build-tagged `live` and disabled by default. Their
 full safety model, pinned profile matrix, and protected-workflow handoff are in
-[Guarded live provider contracts](../reference/live-provider-contracts.md).
+[Guarded live-provider contracts](../reference/live-provider-contracts.md).
 
 The compile-only gate is safe in ordinary CI:
 
@@ -369,9 +369,12 @@ go test -tags=live ./integration/live -run '^$'
 An invocation needs all three exact `"1"` gates: `LLMTW_LIVE_TESTS`,
 `LLMTW_LIVE_AUTHORIZED`, and the selected profile enable flag. Fork and normal
 pull-request workflows receive neither those gates nor live credentials;
-scheduled workflows must not invoke the suite. The protected manual release
-workflow runs one scoped profile with its allow-listed model, tenant, and cost
-ceiling. A live failure never auto-updates capabilities or prices.
+scheduled workflows, master pushes, and release/publication paths must not
+invoke the suite. The protected manual live-provider workflow dispatches one
+selected profile from `master` after protected-environment approval, with its
+allow-listed model, tenant, and cost ceiling. It verifies and uploads only
+redacted live-provider evidence; that evidence does not prove a release was
+signed or published. A live failure never auto-updates capabilities or prices.
 
 ## Coverage and mutation expectations
 

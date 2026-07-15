@@ -24,7 +24,7 @@ schema-verify:
 	$(GO) test ./llm/schema ./config
 
 docs-verify:
-	$(GO) test ./internal/documentationtest -run TestDocumentationLinksAndInvariants
+	$(GO) test ./internal/documentationtest
 
 workflow-verify:
 	bash scripts/check-workflow-policy.sh

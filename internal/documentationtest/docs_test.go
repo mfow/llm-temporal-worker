@@ -12,6 +12,13 @@ var markdownLink = regexp.MustCompile(`(?m)(?:^|[^!])\[[^\]]+\]\(([^)]+)\)`)
 
 func TestDocumentationLinksAndInvariants(t *testing.T) {
 	root := repositoryRoot(t)
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(makefile), "test ./internal/documentationtest -run") {
+		t.Fatal("docs-verify must not filter documentation tests")
+	}
 	required := []string{
 		"README.md",
 		"docs/index.md",
@@ -24,7 +31,7 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 	var files []string
 	files = append(files, filepath.Join(root, "README.md"))
-	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry, err error) error {
+	err = filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -67,6 +74,24 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 	if strings.Count(string(decision), "economy | standard | priority") != 1 {
 		t.Fatal("service-class decision must state the exact public enum once")
+	}
+}
+
+func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "docs/testing/strategy.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(data)), " ")
+	if !strings.Contains(text, "protected manual live-provider workflow") {
+		t.Fatal("live-provider documentation must name the protected manual live-provider workflow")
+	}
+	if !strings.Contains(text, "redacted live-provider evidence") {
+		t.Fatal("live-provider documentation must distinguish its redacted evidence")
+	}
+	if strings.Contains(text, "protected manual release workflow") {
+		t.Fatal("live-provider workflow must not be documented as a release workflow")
 	}
 }
 

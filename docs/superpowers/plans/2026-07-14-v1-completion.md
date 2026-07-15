@@ -912,8 +912,9 @@ run requires the protected repository identity and explicit human authorization.
    acceptance, reported actual class, request ID, usage/cost, and continuation
    behavior. A failure must not rewrite capabilities or prices.
 3. Ensure fork PRs receive none of these secrets and scheduled workflows never
-   spend money. The protected manual workflow records the per-profile ceiling
-   and actual spend in release evidence.
+   spend money. The protected manual live-provider workflow records the
+   per-profile ceiling and actual spend as verified redacted live-provider
+   evidence, distinct from release-signing and publication evidence.
 
 **Acceptance evidence**
 
