@@ -22,8 +22,20 @@ type ClientConfig struct {
 // Client owns the official OpenAI SDK client for the Responses endpoint.
 // SDK types stay private to this adapter package.
 type Client struct {
-	sdk openai.Client
+	sdk     openai.Client
+	profile endpointProfile
 }
+
+// endpointProfile keeps capability claims tied to the construction path rather
+// than treating all OpenAI-compatible endpoints as interchangeable. In
+// particular, direct OpenAI Responses stream dispatch is verified here, while
+// Azure Responses streaming remains an endpoint/model-specific opt-in.
+type endpointProfile string
+
+const (
+	endpointProfileDirect endpointProfile = "direct"
+	endpointProfileAzure  endpointProfile = "azure"
+)
 
 func NewClient(config ClientConfig) (*Client, error) {
 	baseURL, err := clientconfig.BaseURL(config.BaseURL)
@@ -36,10 +48,13 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if config.HTTPClient == nil {
 		return nil, fmt.Errorf("openai responses: HTTP client is required")
 	}
-	return &Client{sdk: openai.NewClient(
-		option.WithAPIKey(config.APIKey),
-		option.WithBaseURL(baseURL),
-		option.WithHTTPClient(config.HTTPClient),
-		option.WithMaxRetries(0),
-	)}, nil
+	return &Client{
+		sdk: openai.NewClient(
+			option.WithAPIKey(config.APIKey),
+			option.WithBaseURL(baseURL),
+			option.WithHTTPClient(config.HTTPClient),
+			option.WithMaxRetries(0),
+		),
+		profile: endpointProfileDirect,
+	}, nil
 }

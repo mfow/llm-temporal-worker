@@ -23,15 +23,17 @@ capability profile to flex/default/priority; actual response tier is retained.
 
 ### Responses streaming implementation boundary
 
-As of 2026-07-14, `llm/provider/openairesponses` has an SSE decoder only.
-The exact Task 6 blocker is: no `StreamingAdapter`/typed stream port and no
-official OpenAI SDK stream dispatch exists in
-`llm/provider/openairesponses`. The direct and Azure Responses fixture
-profiles therefore record `streaming: unsupported`; their decoder fixtures
-prove transport-fragment reconstruction only, not an end-to-end client stream.
-Task 6 must add the typed stream contract, direct and Azure SDK dispatch, and
-deterministic transport coverage before either profile can claim enforced
-streaming coverage.
+The direct `openai-responses` profile uses the official OpenAI Go SDK stream
+path through the typed `StreamingAdapter` port, so it records
+`streaming: supported`. Its deterministic transport coverage verifies direct
+request dispatch, typed text and tool-argument deltas, terminal lifting, and
+body release on close or parent cancellation.
+
+The `azure-responses` profile remains `streaming: unsupported`. Azure
+Responses stream availability is endpoint- and model-specific, and its
+offline decoder fixtures do not verify an Azure stream dispatch path. An Azure
+endpoint may claim streaming only after its own profile-level capability opt-in
+and transport coverage; direct OpenAI support is not evidence for it.
 
 ### Responses fixture boundary
 
@@ -39,12 +41,12 @@ The direct `openai-responses` and `azure-responses` profiles each have an
 enforced offline fixture matrix selected by their declared capability facts.
 Both exercise Responses lowering/lifting, opaque response state,
 continuation-compatibility, usage, service classes, classified errors,
-strict-loss handling, and redaction in their own fixture roots. Their
-`streaming: unsupported` facts remain deliberate: the full and fragmented
-decoder fixture corpora prove SSE reconstruction only, not end-to-end client
-streaming dispatch. Azure continuation evidence validates the adapter's
-endpoint-pinned conversion path offline; it is not evidence of Azure
-deployment capability.
+strict-loss handling, and redaction in their own fixture roots. The direct
+profile's `streaming: supported` fact is backed by SDK dispatch coverage; the
+full and fragmented decoder fixtures remain separate SSE reconstruction
+evidence. Azure continuation evidence validates the adapter's endpoint-pinned
+conversion path offline; it is not evidence of Azure deployment streaming
+capability.
 
 ## Azure OpenAI
 

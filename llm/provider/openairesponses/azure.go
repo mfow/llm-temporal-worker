@@ -47,13 +47,16 @@ func NewAzureClient(config AzureClientConfig) (*Client, error) {
 	if err := clientconfig.Secret("Azure OpenAI API key", config.APIKey); err != nil {
 		return nil, fmt.Errorf("azure responses: %w", err)
 	}
-	return &Client{sdk: openai.NewClient(
-		azure.WithEndpoint(endpoint, config.APIVersion),
-		azure.WithAPIKey(config.APIKey),
-		option.WithHTTPClient(config.HTTPClient),
-		option.WithMaxRetries(0),
-		option.WithMiddleware(azureResponsesPathMiddleware),
-	)}, nil
+	return &Client{
+		sdk: openai.NewClient(
+			azure.WithEndpoint(endpoint, config.APIVersion),
+			azure.WithAPIKey(config.APIKey),
+			option.WithHTTPClient(config.HTTPClient),
+			option.WithMaxRetries(0),
+			option.WithMiddleware(azureResponsesPathMiddleware),
+		),
+		profile: endpointProfileAzure,
+	}, nil
 }
 
 // NewAzureTokenClient constructs an OpenAI Responses client with the official
@@ -68,13 +71,16 @@ func NewAzureTokenClient(config AzureTokenClientConfig) (*Client, error) {
 	if !validTokenCredential(config.TokenCredential) {
 		return nil, fmt.Errorf("azure responses: token credential is required")
 	}
-	return &Client{sdk: openai.NewClient(
-		azure.WithEndpoint(endpoint, config.APIVersion),
-		azure.WithTokenCredential(config.TokenCredential),
-		option.WithHTTPClient(config.HTTPClient),
-		option.WithMaxRetries(0),
-		option.WithMiddleware(azureResponsesPathMiddleware),
-	)}, nil
+	return &Client{
+		sdk: openai.NewClient(
+			azure.WithEndpoint(endpoint, config.APIVersion),
+			azure.WithTokenCredential(config.TokenCredential),
+			option.WithHTTPClient(config.HTTPClient),
+			option.WithMaxRetries(0),
+			option.WithMiddleware(azureResponsesPathMiddleware),
+		),
+		profile: endpointProfileAzure,
+	}, nil
 }
 
 func validTokenCredential(credential azcore.TokenCredential) bool {

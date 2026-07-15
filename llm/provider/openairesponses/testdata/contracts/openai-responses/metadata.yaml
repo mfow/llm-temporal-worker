@@ -9,7 +9,7 @@ redactions:
   - opaque provider payloads
 capability_facts:
   usage: supported
-  streaming: unsupported
+  streaming: supported
   stream_decoder: supported
   strict_loss: supported
   best_effort: unsupported

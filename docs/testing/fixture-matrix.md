@@ -66,11 +66,13 @@ The direct `openai-responses` and `azure-responses` profiles have separate
 fixture roots, provenance/redaction records, deterministic conversion tests,
 and enforced continuation-compatibility fixtures. Their stream artifacts
 exercise the decoder with full input, every split point, an empty read,
-one-byte fragments, and deterministic random fragments. Those artifacts are
-deliberately decoder-only: both profiles declare `streaming: unsupported`
-because the package has no typed stream adapter or official SDK stream
-dispatch. The Azure fixture also tests its own `/openai/v1/responses` path and
-authentication shape; it is not evidence that a direct OpenAI model/tier is
+one-byte fragments, and deterministic random fragments. Direct OpenAI also
+has an official-SDK `StreamingAdapter` dispatch path and declares
+`streaming: supported`; its runtime transport tests cover typed events and
+body cleanup. Azure remains `streaming: unsupported`: its endpoint/model
+availability has not been verified by an Azure stream dispatch fixture. The
+Azure fixture tests its own `/openai/v1/responses` path and authentication
+shape; it is not evidence that a direct OpenAI model/tier or stream is
 available from an Azure deployment.
 
 Bootstrap metadata can use `pending` while a capability is still being

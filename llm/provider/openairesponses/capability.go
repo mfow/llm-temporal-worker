@@ -14,7 +14,16 @@ const (
 
 // capabilities is intentionally explicit. A route may only claim a feature
 // after the adapter has a lossless lowering/lifting path for that feature.
-func capabilities(version string) provider.CapabilitySet {
+func capabilities(version string, profile endpointProfile) provider.CapabilitySet {
+	streaming := provider.Capability{
+		State:  provider.CapabilityUnsupported,
+		Reason: "streaming dispatch is enabled only for the verified direct OpenAI Responses profile",
+	}
+	if profile == endpointProfileDirect {
+		streaming = provider.Capability{State: provider.CapabilityNative}
+	} else if profile == endpointProfileAzure {
+		streaming.Reason = "Azure Responses streaming is endpoint- and model-specific and is not enabled for this client profile"
+	}
 	return provider.CapabilitySet{
 		Version: version,
 		Features: map[provider.Feature]provider.Capability{
@@ -25,11 +34,8 @@ func capabilities(version string) provider.CapabilitySet {
 			provider.FeatureStructuredOutput: {State: provider.CapabilityNative},
 			provider.FeatureReasoning:        {State: provider.CapabilityNative},
 			provider.FeatureContinuation:     {State: provider.CapabilityNative},
-			provider.FeatureStreaming: {
-				State:  provider.CapabilityUnsupported,
-				Reason: "the adapter has an SSE decoder but no typed stream port or official SDK stream dispatch",
-			},
-			provider.FeatureUsage: {State: provider.CapabilityNative},
+			provider.FeatureStreaming:        streaming,
+			provider.FeatureUsage:            {State: provider.CapabilityNative},
 		},
 	}
 }
@@ -53,5 +59,8 @@ func (adapter *Adapter) capabilities(ctx context.Context, query provider.Capabil
 	if err := validateQuery(query, adapter.endpointID); err != nil {
 		return provider.CapabilitySet{}, err
 	}
-	return capabilities(adapter.capabilityVersion), nil
+	if adapter.client == nil {
+		return provider.CapabilitySet{}, fmt.Errorf("openai responses: adapter client is nil")
+	}
+	return capabilities(adapter.capabilityVersion, adapter.client.profile), nil
 }
