@@ -88,6 +88,29 @@ func waitForWorkerCondition(t *testing.T, condition func() bool, description str
 	t.Fatalf("timed out waiting for %s", description)
 }
 
+// resumeWorkerAfterDrain waits for TemporalWorker to observe that its detached
+// controller has completed Stop. A controller-side completion signal can be
+// published just before TemporalWorker clears its own drain state, so callers
+// must retry ErrWorkerDraining rather than treating that signal as the worker's
+// linearization point.
+func resumeWorkerAfterDrain(t *testing.T, temporalWorker *app.TemporalWorker, description string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := temporalWorker.Resume()
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, app.ErrWorkerDraining) {
+			t.Fatalf("Resume while waiting for %s = %v, want nil or ErrWorkerDraining", description, err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", description)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func closeWorkerGate(gate chan struct{}) func() {
 	var once sync.Once
 	return func() {
@@ -249,9 +272,7 @@ func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) 
 
 	release()
 	waitForWorkerEvent(t, first.stopExited, "first controller drain completion")
-	if err := temporalWorker.Resume(); err != nil {
-		t.Fatal(err)
-	}
+	resumeWorkerAfterDrain(t, temporalWorker, "the first controller drain")
 	if len(controllers) != 2 || !health.Ready() || !temporalWorker.Started() {
 		t.Fatalf("resume after drain controllers=%d ready=%v started=%v", len(controllers), health.Ready(), temporalWorker.Started())
 	}
@@ -377,9 +398,7 @@ func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t
 
 	releaseStopGate()
 	waitForWorkerEvent(t, first.stopExited, "paused controller drain completion")
-	if err := temporalWorker.Resume(); err != nil {
-		t.Fatal(err)
-	}
+	resumeWorkerAfterDrain(t, temporalWorker, "the paused controller drain")
 	if len(controllers) != 2 || !health.Ready() || !temporalWorker.Started() {
 		t.Fatalf("resume after paused start controllers=%d ready=%v started=%v", len(controllers), health.Ready(), temporalWorker.Started())
 	}
