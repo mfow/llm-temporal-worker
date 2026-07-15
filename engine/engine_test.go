@@ -86,7 +86,10 @@ func (adapter *fakeAdapter) Invoke(ctx context.Context, call provider.Call, obse
 	if adapter.rawDeadlineFirst && index == 1 {
 		return provider.Result{}, context.DeadlineExceeded
 	}
-	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
+	if err := observer.AfterResponseHeaders(ctx, provider.ResponseMetadata{}); err != nil {
+		return provider.Result{}, err
+	}
+	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Output)})
 	return provider.Result{Response: response}, nil
 }
 

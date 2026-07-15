@@ -57,7 +57,7 @@ func (observer *dispatchObserver) AfterResponseHeaders(ctx context.Context, meta
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "streaming", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
+	return observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "response_received", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
 }
 
 func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provider.Progress) {

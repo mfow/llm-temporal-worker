@@ -110,22 +110,12 @@ exactly-once semantics.
 
 ## Heartbeats
 
-`Generate` first asks `llm.Engine.Stream` for a real provider stream. It
-observes `response_started` and `content_completed` only to report bounded
-streaming progress, then returns the sole `response_completed` value.
-`Stream` returns a direct typed `unsupported_capability` error with
-`not_dispatched` certainty when its pre-admission route/capability preflight
-finds no real `StreamingAdapter`. Only in that narrow case, before an
-`EventStream` or durable operation exists, the Activity invokes native
-`Engine.Generate` and returns its final semantic response. The fallback match
-also requires stream phase and an empty operation ID, so an unsupported
-compile/planning error or any operation-bearing error cannot enter the native
-path. It never falls back after a stream has been returned or after a stream
-terminal event. Text/JSON
-deltas, tool arguments, and opaque provider-state events are deliberately
-drained without being copied as live event payloads into a Temporal heartbeat;
-only the final normalized response crosses the Activity return boundary. A
-stream error is converted by the normal common-error classifier.
+`Generate` invokes `llm.Engine.Generate` once and returns that final normalized
+response. It does not request an `EventStream`, type-assert
+`llm.StreamingEngine`, or use a stream-first fallback. Text/JSON deltas, tool
+arguments, and opaque provider-state events never enter Temporal history; the
+optional streaming API is for reusable Go-library callers outside this Activity
+boundary.
 
 Heartbeats contain small, redacted progress only:
 
@@ -141,16 +131,15 @@ type HeartbeatDetails struct {
 }
 ```
 
-Phases are `planning`, `admitted`, `dispatching`, `streaming`, and
-`finalizing`. No text, tool arguments/results, provider state, secret, raw error,
-or SDK object is allowed.
+Phases are `planning`, `admission`, `pre_write`, `response_received`, `lift`,
+`finalization`, and, when applicable, `continuation_write`. No text, tool
+arguments/results, provider state, secret, raw error, or SDK object is allowed.
 
 The Activity heartbeats:
 
-- while planning, and for real streams when a response starts or an output
-  item completes, with only bounded counts;
-- before returning a finalized semantic response, including the native
-  pre-admission fallback path;
+- throughout the bounded one-shot engine lifecycle, using only redacted phase,
+  route, class, and output-count facts;
+- before returning a finalized semantic response;
 
 Heartbeat failure does not cancel the provider call by itself; context
 cancellation does. The implementation watches `ctx.Done()` through all

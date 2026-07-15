@@ -41,10 +41,13 @@ func TestContextHeartbeatOverridesStaticEngineHeartbeat(t *testing.T) {
 		t.Fatalf("static heartbeat received %v, want no progress when an Activity-scoped heartbeat is bound", got)
 	}
 	got := bound.phases()
-	for _, phase := range []string{"planning", "admission", "pre_write", "streaming", "finalization"} {
+	for _, phase := range []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization"} {
 		if !containsPhase(got, phase) {
 			t.Fatalf("bound heartbeat phases = %v, missing %q", got, phase)
 		}
+	}
+	if containsPhase(got, "streaming") {
+		t.Fatalf("one-shot Generate heartbeat phases = %v, must not claim streaming", got)
 	}
 }
 

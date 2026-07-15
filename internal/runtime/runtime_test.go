@@ -90,6 +90,41 @@ func TestNewFailsClosedWithoutProviderFactory(t *testing.T) {
 	}
 }
 
+func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
+	metrics, err := newMetrics(config.Config{Telemetry: config.TelemetryConfig{Metrics: config.MetricsConfig{Enabled: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics.RecordActivity("success", "none", time.Millisecond, "response_received")
+	metrics.RecordActivity("success", "none", time.Millisecond, "streaming")
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	phases := make(map[string]struct{})
+	for _, family := range families {
+		if family.GetName() != "llmtw_activity_duration_seconds" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "phase" {
+					phases[label.GetValue()] = struct{}{}
+				}
+			}
+		}
+	}
+	if _, ok := phases["response_received"]; !ok {
+		t.Fatalf("activity metric phases = %v, want response_received", phases)
+	}
+	if _, ok := phases["streaming"]; ok {
+		t.Fatalf("activity metric phases = %v, must not allow streaming for the Temporal runtime", phases)
+	}
+	if _, ok := phases["other"]; !ok {
+		t.Fatalf("activity metric phases = %v, want disallowed streaming to map to other", phases)
+	}
+}
+
 func TestFactoryErrorsDoNotLeakSecretText(t *testing.T) {
 	marker := "provider-secret-marker"
 	_, err := New(context.Background(), runtimeConfig(t), Options{

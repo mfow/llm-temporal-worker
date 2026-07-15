@@ -2,8 +2,6 @@ package activity
 
 import (
 	"context"
-	"errors"
-	"io"
 	"sync"
 
 	"github.com/mfow/llm-temporal-worker/engine"
@@ -39,54 +37,11 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 			return GenerateResponse{}, ToTemporalError(err)
 		}
 	}
-	stream, err := activities.Engine.Stream(ctx, request)
+	response, err := activities.Engine.Generate(ctx, request)
 	if err != nil {
-		if preAdmissionStreamingUnavailable(err) {
-			response, generateErr := activities.Engine.Generate(ctx, request)
-			if generateErr != nil {
-				return GenerateResponse{}, ToTemporalError(generateErr)
-			}
-			return activities.completeGenerate(ctx, response, heartbeater)
-		}
 		return GenerateResponse{}, ToTemporalError(err)
 	}
-	defer stream.Close()
-	outputItems := 0
-	for {
-		event, nextErr := stream.Next(ctx)
-		if nextErr != nil {
-			if errors.Is(nextErr, io.EOF) {
-				return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseStream, provider.DispatchAccepted, provider.RetryNever, "stream ended before a terminal outcome"))
-			}
-			return GenerateResponse{}, ToTemporalError(nextErr)
-		}
-		if _, ok := event.(llm.ContentCompleted); ok {
-			outputItems++
-		}
-		if heartbeater != nil {
-			if progress, ok := StreamProgress(event, outputItems); ok {
-				if err := heartbeater.Beat(ctx, progress); err != nil {
-					return GenerateResponse{}, ToTemporalError(err)
-				}
-			}
-		}
-		switch terminal := event.(type) {
-		case llm.ResponseCompleted:
-			return activities.completeGenerate(ctx, terminal.Response, heartbeater)
-		case llm.StreamErrored:
-			return GenerateResponse{}, ToTemporalError(terminal.Err)
-		}
-	}
-}
-
-// preAdmissionStreamingUnavailable is deliberately narrow: Activity may use
-// the native Generate lifecycle only when Stream returned before it created an
-// EventStream or an admitted operation. A terminal StreamErrored event is
-// never eligible for this fallback because its operation may already be
-// finalized or ambiguous.
-func preAdmissionStreamingUnavailable(err error) bool {
-	var providerErr *provider.Error
-	return errors.As(err, &providerErr) && providerErr.Code == provider.CodeUnsupportedCapability && providerErr.Phase == provider.PhaseStream && providerErr.Dispatch == provider.DispatchNotDispatched && providerErr.OperationID == ""
+	return activities.completeGenerate(ctx, response, heartbeater)
 }
 
 func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response, heartbeater Heartbeater) (GenerateResponse, error) {

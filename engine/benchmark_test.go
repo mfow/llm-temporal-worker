@@ -60,7 +60,10 @@ func (adapter *benchmarkAdapter) Invoke(ctx context.Context, _ provider.Call, ob
 	if err := observer.BeforePossibleWrite(ctx); err != nil {
 		return provider.Result{}, err
 	}
-	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
+	if err := observer.AfterResponseHeaders(ctx, provider.ResponseMetadata{}); err != nil {
+		return provider.Result{}, err
+	}
+	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Output)})
 	return provider.Result{Response: response}, nil
 }
 

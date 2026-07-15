@@ -358,7 +358,7 @@ func (*acceptedThenStoppedAdapter) Name() string { return "content-free-live-rec
 func (*acceptedThenStoppedAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	return provider.CapabilitySet{Version: "live-recovery-capabilities-v1", Features: map[provider.Feature]provider.Capability{
 		provider.FeatureText:      {State: provider.CapabilityNative},
-		provider.FeatureStreaming: {State: provider.CapabilityNative},
+		provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
 	}}, nil
 }
 
@@ -369,13 +369,9 @@ func (*acceptedThenStoppedAdapter) Compile(_ context.Context, input provider.Com
 	}, nil
 }
 
-func (*acceptedThenStoppedAdapter) Invoke(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
-	return provider.Result{}, errors.New("live recovery fixture must use streaming")
-}
-
-func (adapter *acceptedThenStoppedAdapter) OpenStream(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.StreamResult, error) {
+func (adapter *acceptedThenStoppedAdapter) Invoke(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.Result, error) {
 	if err := observer.BeforePossibleWrite(ctx); err != nil {
-		return provider.StreamResult{}, err
+		return provider.Result{}, err
 	}
 	adapter.mu.Lock()
 	adapter.calls++
@@ -387,9 +383,9 @@ func (adapter *acceptedThenStoppedAdapter) OpenStream(ctx context.Context, _ pro
 	}
 	select {
 	case <-sdkactivity.GetWorkerStopChannel(ctx):
-		return provider.StreamResult{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture worker stopped after accepted write")
+		return provider.Result{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture worker stopped after accepted write")
 	case <-ctx.Done():
-		return provider.StreamResult{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture activity ended after accepted write")
+		return provider.Result{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture activity ended after accepted write")
 	}
 }
 
