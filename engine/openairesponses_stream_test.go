@@ -121,6 +121,59 @@ func TestEngineStreamDispatchesDirectOpenAIResponsesTypedEvents(t *testing.T) {
 	}
 }
 
+func TestEngineStreamTreatsIncompleteDirectOpenAIResponsesAsSemanticTerminals(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reason string
+		status llm.ResponseStatus
+	}{
+		{name: "length", reason: "max_output_tokens", status: llm.ResponseStatusLength},
+		{name: "content filtered", reason: "content_filter", status: llm.ResponseStatusContentFiltered},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &openAIResponsesStreamTransport{body: func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(openAIResponsesIncompleteStreamSSE("default", test.reason)))
+			}}
+			adapter := newDirectOpenAIResponsesStreamAdapter(t, transport)
+			harness := newOpenAIResponsesStreamHarness(t, "direct-responses", adapter)
+			parent := installDirectResponsesContinuation(t, harness, "direct-responses")
+			request := directResponsesStreamRequest("direct-stream-incomplete-"+test.name, llm.ServiceClassStandard)
+			request.Continuation = &llm.Continuation{Handle: parent.String()}
+
+			stream, err := harness.engine.Stream(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Engine.Stream() error = %v", err)
+			}
+			events := readTerminalStream(t, stream)
+			if err := stream.Close(); err != nil {
+				t.Fatalf("EventStream.Close() error = %v", err)
+			}
+			if len(events) == 0 {
+				t.Fatal("stream emitted no events")
+			}
+			terminal, ok := events[len(events)-1].(llm.ResponseCompleted)
+			if !ok {
+				if failed, failedOK := events[len(events)-1].(llm.StreamErrored); failedOK {
+					t.Fatalf("incomplete response became stream error = %v", failed.Err)
+				}
+				t.Fatalf("stream terminal = %T, want ResponseCompleted", events[len(events)-1])
+			}
+			if terminal.Response.Status != test.status {
+				t.Fatalf("response status = %q, want %q", terminal.Response.Status, test.status)
+			}
+			if terminal.Response.Provider.ResponseID != "resp-incomplete" || terminal.Response.Provider.RequestID != "req-stream" {
+				t.Fatalf("terminal provider facts = %#v", terminal.Response.Provider)
+			}
+			if terminal.Response.Continuation == nil || terminal.Response.Continuation.Handle == "" {
+				t.Fatalf("terminal continuation = %#v", terminal.Response.Continuation)
+			}
+			if transport.calls() != 1 {
+				t.Fatalf("OpenAI stream requests = %d, want one", transport.calls())
+			}
+		})
+	}
+}
+
 func TestEngineStreamKeepsAzureResponsesUnsupportedBeforeDispatch(t *testing.T) {
 	transport := &openAIResponsesStreamTransport{body: func() io.ReadCloser {
 		return io.NopCloser(strings.NewReader(openAIResponsesStreamSSE("default")))
@@ -387,4 +440,9 @@ func openAIResponsesStreamSSE(tier string) string {
 		"data: {\"type\":\"response.completed\",\"response\":" + terminal + "}",
 		"",
 	}, "\n")
+}
+
+func openAIResponsesIncompleteStreamSSE(tier, reason string) string {
+	terminal := fmt.Sprintf(`{"id":"resp-incomplete","model":"gpt-contract","output":[],"service_tier":%q,"status":"incomplete","incomplete_details":{"reason":%q},"usage":{"input_tokens":1,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{},"total_tokens":2}}`, tier, reason)
+	return "event: response.incomplete\n" + "data: {\"type\":\"response.incomplete\",\"response\":" + terminal + "}\n\n"
 }

@@ -194,13 +194,13 @@ func (source *responsesEventSource) decode(event responses.ResponseStreamEventUn
 		}
 		delete(source.toolCalls, index)
 		return provider.OutputFinished{Index: index, Item: items[0]}, false, nil
-	case "response.completed":
+	case "response.completed", "response.incomplete":
 		lifted, err := liftResponse(source.call, &event.Response, source.requestID)
 		if err != nil {
 			return nil, false, err
 		}
 		return provider.StreamCompleted{Response: lifted}, true, nil
-	case "response.failed", "response.incomplete", "error":
+	case "response.failed", "error":
 		return provider.StreamErrored{Err: source.terminalError()}, true, nil
 	case "response.created", "response.in_progress", "response.content_part.added", "response.content_part.done", "response.output_text.done", "response.function_call_arguments.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done", "response.reasoning_text.delta", "response.reasoning_text.done", "response.refusal.delta", "response.refusal.done":
 		// These transport markers do not add a public event beyond the output
