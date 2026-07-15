@@ -20,7 +20,7 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 		"ARG REVISION=unknown",
 		"ARG BUILD_TIME=unknown",
 		"ARG SOURCE=https://github.com/mfow/llm-temporal-worker",
-		"ARG GO_VERSION=go1.26.0",
+		"ARG GO_VERSION=go1.26.5",
 		"org.opencontainers.image.version=\"${VERSION}\"",
 		"org.opencontainers.image.revision=\"${REVISION}\"",
 		"org.opencontainers.image.created=\"${BUILD_TIME}\"",
@@ -35,6 +35,31 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 		if !strings.Contains(dockerfile, want) {
 			t.Errorf("Dockerfile does not stamp %q", want)
 		}
+	}
+}
+
+func TestImageBuildToolchainVersionPolicyStaysPinned(t *testing.T) {
+	root := repositoryRoot(t)
+	dockerfileData, err := os.ReadFile(filepath.Join(root, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"ARG GO_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+		"ARG GO_VERSION=go1.26.5",
+	} {
+		if !strings.Contains(string(dockerfileData), want) {
+			t.Errorf("Dockerfile toolchain policy is missing %q", want)
+		}
+	}
+
+	makefileData, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(makefileData), "IMAGE_VERIFY_GO_VERSION ?= go1.26.5") {
+		t.Error("Makefile image verification must use the pinned Go 1.26.5 toolchain")
 	}
 }
 
