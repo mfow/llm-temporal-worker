@@ -15,9 +15,10 @@ when all three exact environment values equal `"1"`:
 
 All other values, including common truthy spellings, leave the profile
 disabled. Gate evaluation happens before the harness constructs an adapter or
-looks up credentials. The protected manual release workflow supplied by Task
-24 must set the first two values only after environment approval, set only the
-selected profile flag, and inject only that profile's scoped credentials.
+looks up credentials. The protected manual
+[live-provider workflow](../../.github/workflows/live-provider-contracts.yml)
+sets the first two values only after environment approval, sets only the
+selected profile flag, and injects only that profile's scoped credentials.
 Fork pull requests, ordinary pull requests, and scheduled workflows must not
 set any of these flags or receive these credentials.
 
@@ -93,13 +94,37 @@ catalog. OpenRouter and Exa are allowed to omit a cost status only when the
 reported actual cost fields themselves are valid. A live failure never updates
 capabilities, price catalogs, limits, or fixtures.
 
-## Release workflow handoff
+## Manual protected workflow
 
-Task 24 owns protected workflow implementation. Its protected
-`workflow_dispatch` path should select exactly one profile, expose that
-profile's 25,000-microUSD ceiling in the workflow summary, run the scoped
-test, and retain its redacted test log as release evidence. It must not run
-`TestLiveProviderContracts`, set its live gates, or inject provider credentials
-on pull-request or scheduled workflows; those workflows run this harness only
-through the compile-only command above. It must not turn a test failure into an
-automatic retry, catalog update, or price change.
+`.github/workflows/live-provider-contracts.yml` is separate from the guarded
+publication workflow. It has only a `workflow_dispatch` trigger and rejects a
+dispatch that is not started from `master`. The required `profile` choice is
+closed to the eight checked-in profiles above. Its credential-free
+`validate-request` job verifies that choice before any protected,
+secret-bearing profile job is eligible to run. Each profile then has a static
+job condition, so one dispatch can run at most one bounded provider probe.
+
+Every profile job names the `live-provider-contracts` protected environment.
+Repository administrators must configure that environment with required human
+approval before enabling any live run. A direct provider API key is present
+only in the selected test step; Azure and AWS profiles use their corresponding
+workload-identity action and non-secret repository variables. The checkout
+happens before either kind of provider credential is acquired: it anonymously
+fetches the fixed public HTTPS repository URL, requires the fetched `master`
+to equal the protected workflow's `github.sha`, and checks out that SHA. It
+never receives a provider credential.
+
+The selected test writes its raw output only to `$RUNNER_TEMP`. Before the
+recorder or artifact uploader can run, the workflow clears credential
+variables. The recorder itself starts with `env -i`, reduces the raw log to the
+closed [redacted evidence schema](../release/live-provider-contract.schema.json),
+then verifies that evidence before uploading only its JSON record and
+allowlisted text log for 14 days. A recorder or test failure leaves no artifact
+upload path and is never retried automatically.
+
+No pull-request, fork, scheduled, master-push, signing, registry-publication,
+tagging, or release-creation path invokes `TestLiveProviderContracts`. The
+separate [guarded publication workflow](../../.github/workflows/release.yml)
+remains responsible for its own release-evidence and external-publication
+boundary; a successful live-provider contract is not evidence that a release
+was signed or published.

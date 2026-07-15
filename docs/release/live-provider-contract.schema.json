@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:llmtw:live-provider-contract-evidence:v1",
+  "title": "LLM Temporal Worker redacted live-provider contract evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "profile",
+    "tenant",
+    "ceiling_micro_usd",
+    "actual_spend",
+    "request_id",
+    "response_id",
+    "actual_service_class",
+    "continuation_verified"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profile": {
+      "enum": [
+        "openai-responses",
+        "azure-responses",
+        "openai-chat",
+        "openrouter-chat",
+        "exa-chat",
+        "anthropic-direct",
+        "anthropic-aws",
+        "bedrock-anthropic"
+      ]
+    },
+    "tenant": {
+      "const": "llmtw-live-contract"
+    },
+    "ceiling_micro_usd": {
+      "const": 25000
+    },
+    "actual_spend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "known",
+        "micro_usd",
+        "method"
+      ],
+      "properties": {
+        "known": {
+          "type": "boolean"
+        },
+        "micro_usd": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 25000
+        },
+        "method": {
+          "enum": [
+            "provider_reported",
+            "usage",
+            "not_reported"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "known": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "method": {
+                "enum": [
+                  "provider_reported",
+                  "usage"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "known": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "micro_usd": {
+                "const": 0
+              },
+              "method": {
+                "const": "not_reported"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "request_id": {
+      "$ref": "#/$defs/safe_identifier"
+    },
+    "response_id": {
+      "$ref": "#/$defs/safe_identifier"
+    },
+    "actual_service_class": {
+      "enum": [
+        "economy",
+        "standard",
+        "priority"
+      ]
+    },
+    "continuation_verified": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "safe_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "allOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        {
+          "not": {
+            "pattern": "^[sS][kK][-_]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[eE][yY][jJ]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[aA][kK][iI][aA]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[aA][sS][iI][aA]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[gG][hH][pP]_"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[gG][iI][tT][hH][uU][bB]_[pP][aA][tT]_"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[xX][oO][xX][bB]-"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[xX][oO][xX][pP]-"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[aA][iI][zZ][aA]"
+          }
+        }
+      ]
+    }
+  }
+}
