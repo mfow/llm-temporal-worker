@@ -133,7 +133,7 @@ type testHarness struct {
 	clock     time.Time
 }
 
-func newHarness(t *testing.T, adapter provider.Adapter) testHarness {
+func newHarness(t testing.TB, adapter provider.Adapter) testHarness {
 	t.Helper()
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	classes := []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}

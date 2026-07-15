@@ -15,7 +15,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= go1.26.5
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build benchmark integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -37,6 +37,11 @@ test:
 
 build:
 	$(GO) build ./...
+
+# Runs an opt-in local performance proxy. It has no Redis server or provider
+# network request, so its p99 output is not an SLO proof.
+benchmark:
+	$(GO) test ./engine -run '^$$' -bench '^BenchmarkGenerateMemoryAdmissionAndCompile$$' -benchmem -count=1
 
 integration:
 	$(GO) test -race ./integration/...

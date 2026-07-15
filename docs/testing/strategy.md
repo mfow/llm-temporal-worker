@@ -32,6 +32,27 @@ formatting, schemas, documentation links and invariants, vet, the ordinary
 test suite, and every Go package build. It does not run the race detector or
 the Docker, Compose, or Kubernetes gates shown below.
 
+## Local performance proxy
+
+Run the opt-in in-memory `Generate` benchmark with:
+
+```sh
+make benchmark
+```
+
+It emits Go's aggregate allocation and throughput metrics plus a sampled
+`p99_ms/op` for deterministic successful `Generate` calls using the in-memory
+admission store and a content-free adapter. Inputs are prebuilt and each timed
+call has a fresh operation key, so the path includes normalization, planning,
+pricing, memory admission, and adapter compilation rather than an operation
+replay.
+
+This is a local proxy, not a Redis or provider performance SLO proof: it makes
+no Redis connection or provider network request, and it is deliberately not a
+normal CI gate because runner scheduling and hardware change latency samples.
+Do not compare its p99 output with the service objectives until repeatable,
+controlled memory and same-region Redis evidence is available.
+
 ## Local release gates
 
 The repository also exposes bounded release-gate targets. They are safe to run
