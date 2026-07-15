@@ -30,6 +30,49 @@ func TestLiveRedisStoreFactoryConformance(t *testing.T) {
 	conformance.Run(t, liveRedisStoreFactory(client))
 }
 
+func TestLiveRedisFunctionBeginDecodesTwoFieldDenial(t *testing.T) {
+	client := openLiveRedis(t)
+	now := time.Now().UTC()
+	keys := liveKeyOptions("begin-denial")
+	cleanupLivePrefix(t, client, keys.Prefix)
+	store, err := NewAdmissionStore(AdmissionOptions{
+		Client: client,
+		Mode:   AdmissionModeFunction,
+		Keys:   keys,
+		Clock:  func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := liveBeginRequest("begin-denial-first", "begin-denial-policy", 6, 10, now)
+	if result, err := store.Begin(context.Background(), first); err != nil || result.Denied != nil {
+		t.Fatalf("first reservation = %#v, %v", result, err)
+	}
+	second := liveBeginRequest("begin-denial-second", "begin-denial-policy", 5, 10, now)
+	result, err := store.Begin(context.Background(), second)
+	if err != nil {
+		t.Fatalf("denied reservation = %v", err)
+	}
+	if result.Denied == nil {
+		t.Fatalf("denied reservation = %#v, want a decoded denial", result)
+	}
+	if got, want := result.Denied.PolicyID, "begin-denial-policy"; got != want {
+		t.Fatalf("denial policy = %q, want %q", got, want)
+	}
+	if got, want := result.Denied.WindowID, "hour"; got != want {
+		t.Fatalf("denial window = %q, want %q", got, want)
+	}
+	if got, want := result.Denied.Limit, pricing.MicroUSD(10); got != want {
+		t.Fatalf("denial limit = %d, want %d", got, want)
+	}
+	if got, want := result.Denied.Active, pricing.MicroUSD(6); got != want {
+		t.Fatalf("denial active = %d, want %d", got, want)
+	}
+	if got, want := result.Denied.Requested, pricing.MicroUSD(5); got != want {
+		t.Fatalf("denial requested = %d, want %d", got, want)
+	}
+}
+
 func TestLiveRedisTimeoutAfterMutationResolvesByRead(t *testing.T) {
 	client := openLiveRedis(t)
 	now := time.Now().UTC()

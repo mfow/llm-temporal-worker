@@ -393,6 +393,10 @@ func decodeItems(data []byte) ([]Item, error) {
 	return items, nil
 }
 
+// DecodeItems decodes a JSON item array through the canonical kind-dispatch
+// path used by requests and responses.
+func DecodeItems(data []byte) ([]Item, error) { return decodeItems(data) }
+
 type PartKind string
 
 const (

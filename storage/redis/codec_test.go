@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/admission"
+	"github.com/mfow/llm-temporal-worker/llm"
+	"github.com/mfow/llm-temporal-worker/state"
 )
 
 func TestFormatRedisTimeDistinguishesLegacyZeroFromUnixEpoch(t *testing.T) {
@@ -76,5 +78,52 @@ func TestOperationCodecRoundTripPreservesUnixEpoch(t *testing.T) {
 	}
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("operation codec changed semantic value:\nfirst=%#v\nsecond=%#v", first, second)
+	}
+}
+
+func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	transcript := []llm.Item{
+		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find the weather"}}},
+		llm.ToolCall{ID: "call-weather", Name: "weather", Arguments: json.RawMessage(`{"city":"Sydney"}`)},
+	}
+	_, digest, err := state.CanonicalTranscript(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := state.Continuation{
+		ID:                 "continuation-handle",
+		Tenant:             "tenant-a",
+		Transcript:         transcript,
+		TranscriptDigest:   digest,
+		TranscriptComplete: true,
+		CapabilityVersion:  "cap-v1",
+		PriceVersion:       "price-v1",
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(time.Hour),
+	}
+	encoded, err := encodeContinuation(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeContinuation(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("continuation codec changed semantic value:\ngot=%#v\nwant=%#v", got, want)
+	}
+	if _, ok := got.Transcript[0].(llm.Message); !ok {
+		t.Fatalf("decoded first item type = %T, want llm.Message", got.Transcript[0])
+	}
+	if _, ok := got.Transcript[1].(llm.ToolCall); !ok {
+		t.Fatalf("decoded second item type = %T, want llm.ToolCall", got.Transcript[1])
+	}
+}
+
+func TestContinuationCodecRejectsMalformedItemUnion(t *testing.T) {
+	encoded := []byte(`{"schema":"continuation/v1","value":{"Transcript":[{"kind":"unknown"}]}}`)
+	if _, err := decodeContinuation(encoded); err == nil {
+		t.Fatal("malformed continuation item union was accepted")
 	}
 }

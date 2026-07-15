@@ -26,6 +26,12 @@ type admissionHarness struct {
 	indices map[string]string
 }
 
+type fixedFunctionResultInvoker struct{ result []any }
+
+func (invoker fixedFunctionResultInvoker) Run(_ context.Context, _ string, _ []string, _ ...string) ([]any, error) {
+	return append([]any(nil), invoker.result...), nil
+}
+
 func newAdmissionHarness(now time.Time) *admissionHarness {
 	return &admissionHarness{store: memory.NewAdmissionStore(memory.AdmissionOptions{Clock: func() time.Time { return now }}), records: make(map[string][]byte), indices: make(map[string]string)}
 }
@@ -287,5 +293,37 @@ func TestAdmissionDeniesOverlappingReservationAtomically(t *testing.T) {
 	second, err := store.Begin(context.Background(), admission.BeginRequest{ID: "two", ScopeKey: "two", RequestDigest: admission.Digest([]byte("two")), Reservation: 5, Reservations: []admission.WindowReservation{reservation}, ExpiresAt: now.Add(time.Hour)})
 	if err != nil || second.Denied == nil || second.Denied.Active != 6 {
 		t.Fatalf("second begin = %#v, %v", second, err)
+	}
+}
+
+func TestAdmissionBeginDecodesTwoFieldDeniedFunctionResult(t *testing.T) {
+	now := time.Unix(100, 0)
+	denialData, err := json.Marshal(denialWire{Policy: "policy", Window: "window", Limit: 10, Active: 6, Requested: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := newAdmissionHarness(now)
+	store, err := NewAdmissionStore(AdmissionOptions{
+		Invoker: fixedFunctionResultInvoker{result: []any{"denied", string(denialData)}},
+		Reader:  reader,
+		Keys:    testKeyOptions(),
+		Clock:   func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Begin(context.Background(), admission.BeginRequest{
+		ID:            "two-field-denial",
+		ScopeKey:      "tenant/two-field-denial",
+		RequestDigest: admission.Digest([]byte("two-field-denial")),
+		Reservation:   5,
+		Reservations:  []admission.WindowReservation{testReservation(5, 10)},
+		ExpiresAt:     now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("two-field denial = %v", err)
+	}
+	if result.Denied == nil || result.Denied.PolicyID != "policy" || result.Denied.WindowID != "window" || result.Denied.Active != 6 || result.Denied.Requested != 5 {
+		t.Fatalf("two-field denial = %#v", result)
 	}
 }
