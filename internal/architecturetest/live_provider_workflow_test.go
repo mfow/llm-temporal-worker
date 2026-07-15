@@ -107,13 +107,17 @@ func TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile(t *testi
 			if _, found := record["env"]; found {
 				t.Fatalf("%s job %q recorder must not receive provider credentials", workflow.name, profile.id)
 			}
-			if !strings.Contains(scalarString(t, workflow.name, record, "run"), "env -i PATH=\"$PATH\"") {
+			recordRun := scalarString(t, workflow.name, record, "run")
+			if !strings.Contains(recordRun, "env -i PATH=\"$PATH\"") {
 				t.Fatalf("%s job %q recorder must clear inherited credential environment", workflow.name, profile.id)
 			}
 			for _, command := range []string{"scripts/release/live-contract-evidence.py record", "scripts/release/live-contract-evidence.py verify"} {
-				if !strings.Contains(scalarString(t, workflow.name, record, "run"), command) {
+				if !strings.Contains(recordRun, command) {
 					t.Fatalf("%s job %q recorder step is missing %q", workflow.name, profile.id, command)
 				}
+			}
+			if got := strings.Count(recordRun, "--source-revision \"${{ github.sha }}\""); got != 2 {
+				t.Fatalf("%s job %q must bind both recorder and validator to github.sha, found %d source revision arguments", workflow.name, profile.id, got)
 			}
 			if !strings.Contains(workflow.raw, "name: live-provider-contract-"+profile.id+"-evidence") {
 				t.Fatalf("%s does not retain a profile-specific redacted evidence artifact for %q", workflow.name, profile.id)
