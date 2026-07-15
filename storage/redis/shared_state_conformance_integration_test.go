@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -153,12 +155,21 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 		t.Fatalf("write before Redis restart = %#v, %v", result, err)
 	}
 	runLiveRedisDocker(t, "restart", container)
-	waitForLiveRedis(t, client)
-	stored, err := store.Get(context.Background(), request.ID)
+	restartedClient := reopenLiveRedisAfterRestart(t, container)
+	restartedStore, err := NewAdmissionStore(AdmissionOptions{
+		Client: restartedClient,
+		Mode:   AdmissionModeFunction,
+		Keys:   keys,
+		Clock:  func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := restartedStore.Get(context.Background(), request.ID)
 	if err != nil || stored.State != admission.StateReserved {
 		t.Fatalf("persisted operation after Redis restart = %#v, %v", stored, err)
 	}
-	if result, err := store.Begin(context.Background(), liveBeginRequest("restart-after", "restart-policy", 1, 10, now)); err != nil || result.Denied != nil {
+	if result, err := restartedStore.Begin(context.Background(), liveBeginRequest("restart-after", "restart-policy", 1, 10, now)); err != nil || result.Denied != nil {
 		t.Fatalf("Function after Redis restart = %#v, %v", result, err)
 	}
 }
@@ -167,6 +178,21 @@ func TestLiveRedisConfiguredPersistenceGateAllowsOverriddenPrefix(t *testing.T) 
 	const prefix = "llmtw-redis-custom-ci"
 	if !isLiveRedisPersistenceContainer(prefix+"-123-456", prefix) {
 		t.Fatal("configured Redis container prefix should allow the persistence gate to run")
+	}
+}
+
+func TestLiveRedisAddressForPublishedPort(t *testing.T) {
+	address, err := liveRedisAddressForPublishedPort("32768")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "127.0.0.1:32768"; address != want {
+		t.Fatalf("address = %q, want %q", address, want)
+	}
+	for _, port := range []string{"", "not-a-port", "0", "65536"} {
+		if _, err := liveRedisAddressForPublishedPort(port); err == nil {
+			t.Errorf("port %q was accepted", port)
+		}
 	}
 }
 
@@ -180,15 +206,65 @@ func openLiveRedis(t *testing.T) *redisclient.Client {
 	if address == "" {
 		t.Skip("set LLMTW_REDIS_ADDR to run the pinned live Redis gate")
 	}
-	client := redisclient.NewClient(&redisclient.Options{Addr: address})
-	t.Cleanup(func() { _ = client.Close() })
-	waitForLiveRedis(t, client)
+	client := openLiveRedisAt(t, address)
 	if os.Getenv("LLMTW_REDIS_TEST_PROVISION") == "1" {
 		if err := client.FunctionLoad(context.Background(), AdmissionFunctionSource()).Err(); err != nil && !strings.Contains(err.Error(), "already exists") {
 			t.Fatal("could not provision the isolated Redis Function")
 		}
 	}
 	return client
+}
+
+func openLiveRedisAt(t *testing.T, address string) *redisclient.Client {
+	t.Helper()
+	client := redisclient.NewClient(&redisclient.Options{Addr: address})
+	t.Cleanup(func() { _ = client.Close() })
+	waitForLiveRedis(t, client)
+	return client
+}
+
+func reopenLiveRedisAfterRestart(t *testing.T, container string) *redisclient.Client {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		address, err := liveRedisAddressForContainer(container)
+		if err == nil {
+			client := redisclient.NewClient(&redisclient.Options{Addr: address})
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			err = client.Ping(ctx).Err()
+			cancel()
+			if err == nil {
+				t.Cleanup(func() { _ = client.Close() })
+				return client
+			}
+			_ = client.Close()
+			lastErr = fmt.Errorf("ping Redis at %s: %w", address, err)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("isolated Redis did not become reachable after restart: %v", lastErr)
+	return nil
+}
+
+func liveRedisAddressForContainer(container string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", `{{if .State.Running}}{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}{{end}}`, container).Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect restarted Redis container: %w", err)
+	}
+	return liveRedisAddressForPublishedPort(strings.TrimSpace(string(output)))
+}
+
+func liveRedisAddressForPublishedPort(port string) (string, error) {
+	value, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || value == 0 {
+		return "", fmt.Errorf("invalid Redis published port %q", port)
+	}
+	return net.JoinHostPort("127.0.0.1", port), nil
 }
 
 func waitForLiveRedis(t *testing.T, client *redisclient.Client) {

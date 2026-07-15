@@ -85,7 +85,7 @@ redis-integration:
 		cleanup() { \
 			status=$$?; \
 			if [ "$$status" -ne 0 ]; then \
-				docker logs "$$container" 2>&1 | LLMTW_LOG_REDACT_REDIS_PASSWORD=not-configured LLMTW_LOG_REDACT_POSTGRES_PASSWORD=not-configured LLMTW_LOG_REDACT_MOCK_API_KEY=not-configured LLMTW_LOG_REDACT_CONTINUATION_HMAC=not-configured scripts/redact-compose-logs.sh >&2 || true; \
+				docker logs "$$container" 2>&1 | LLMTW_LOG_REDACT_REDIS_PASSWORD=not-configured LLMTW_LOG_REDACT_POSTGRES_PASSWORD=not-configured LLMTW_LOG_REDACT_MOCK_API_KEY=not-configured LLMTW_LOG_REDACT_CONTINUATION_HMAC=not-configured bash ./scripts/redact-compose-logs.sh >&2 || true; \
 			fi; \
 			docker rm -f "$$container" >/dev/null 2>&1 || true; \
 			exit "$$status"; \
