@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+const liveContractSourceRevision = "0123456789abcdef0123456789abcdef01234567"
+
 func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *testing.T) {
 	root := repositoryRoot(t)
 	directory := t.TempDir()
@@ -24,6 +26,7 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 		"--input", rawPath,
 		"--evidence", evidencePath,
 		"--log", logPath,
+		"--source-revision", liveContractSourceRevision,
 		"--generated-at", "2026-07-15T00:00:00Z",
 	)
 	if err != nil {
@@ -44,6 +47,7 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 	wantKeys := map[string]bool{
 		"schema_version":        true,
 		"generated_at":          true,
+		"source_revision":       true,
 		"profile":               true,
 		"tenant":                true,
 		"ceiling_micro_usd":     true,
@@ -69,6 +73,9 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 	if got := evidence["profile"]; got != "openai-responses" {
 		t.Fatalf("evidence profile = %#v, want openai-responses", got)
 	}
+	if got := evidence["source_revision"]; got != liveContractSourceRevision {
+		t.Fatalf("evidence source_revision = %#v, want %q", got, liveContractSourceRevision)
+	}
 	if got := evidence["ceiling_micro_usd"]; got != float64(25_000) {
 		t.Fatalf("evidence ceiling_micro_usd = %#v, want 25000", got)
 	}
@@ -87,13 +94,66 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 	if strings.Contains(string(log), "live-contract-ok") || strings.Contains(string(log), "api.openai.com") {
 		t.Fatalf("redacted log contains non-allowlisted content: %q", log)
 	}
+	if !strings.Contains(string(log), "source_revision="+liveContractSourceRevision+"\n") {
+		t.Fatalf("redacted log does not bind the source revision: %q", log)
+	}
 
-	output, err = runLiveContractEvidence(root, "verify", "--evidence", evidencePath, "--log", logPath)
+	output, err = runLiveContractEvidence(root,
+		"verify",
+		"--evidence", evidencePath,
+		"--log", logPath,
+		"--source-revision", liveContractSourceRevision,
+	)
 	if err != nil {
 		t.Fatalf("verify recorded live contract evidence: %v\n%s", err, output)
 	}
 	if got := strings.TrimSpace(string(output)); got != "live contract evidence verified" {
 		t.Fatalf("verify output = %q, want fixed success message", got)
+	}
+
+	output, err = runLiveContractEvidence(root,
+		"verify",
+		"--evidence", evidencePath,
+		"--log", logPath,
+		"--source-revision", "fedcba9876543210fedcba9876543210fedcba98",
+	)
+	if err == nil {
+		t.Fatalf("verify accepted evidence for a different source revision: %s", output)
+	}
+}
+
+func TestLiveContractEvidenceRecorderRejectsInvalidSourceRevision(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, revision := range []string{
+		"0123456789abcdef0123456789abcdef0123456",
+		"0123456789abcdef0123456789abcdef0123456g",
+		"0123456789ABCDEF0123456789abcdef01234567",
+	} {
+		t.Run(revision, func(t *testing.T) {
+			directory := t.TempDir()
+			rawPath := filepath.Join(directory, "live-contract.raw.log")
+			evidencePath := filepath.Join(directory, "evidence.json")
+			logPath := filepath.Join(directory, "live-contract.log")
+			writeLiveContractRawLog(t, rawPath, "openai-responses", "req_123", "resp_456", true, 17, "provider_reported", true)
+
+			output, err := runLiveContractEvidence(root,
+				"record",
+				"--profile", "openai-responses",
+				"--input", rawPath,
+				"--evidence", evidencePath,
+				"--log", logPath,
+				"--source-revision", revision,
+				"--generated-at", "2026-07-15T00:00:00Z",
+			)
+			if err == nil {
+				t.Fatalf("record accepted invalid source revision %q: %s", revision, output)
+			}
+			for _, path := range []string{evidencePath, logPath} {
+				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("recorder left output %q after invalid source revision: %v", path, statErr)
+				}
+			}
+		})
 	}
 }
 
@@ -290,6 +350,7 @@ func TestLiveContractEvidenceRecorderRejectsUnsafeOrInconsistentInputWithoutEcho
 				"--input", rawPath,
 				"--evidence", evidencePath,
 				"--log", logPath,
+				"--source-revision", liveContractSourceRevision,
 				"--generated-at", "2026-07-15T00:00:00Z",
 			)
 			if err == nil {
@@ -331,6 +392,7 @@ func TestLiveContractEvidenceRecorderAllowsEachSupportedReportedCostMethod(t *te
 				"--input", rawPath,
 				"--evidence", evidencePath,
 				"--log", logPath,
+				"--source-revision", liveContractSourceRevision,
 				"--generated-at", "2026-07-15T00:00:00Z",
 			)
 			if err != nil {
@@ -369,14 +431,35 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 	if schema["additionalProperties"] != false {
 		t.Fatalf("live provider evidence schema must be closed: %#v", schema["additionalProperties"])
 	}
+	got := stringSequence(t, "live provider evidence schema", schema, "required")
+	want := []string{
+		"schema_version",
+		"generated_at",
+		"source_revision",
+		"profile",
+		"tenant",
+		"ceiling_micro_usd",
+		"actual_spend",
+		"request_id",
+		"response_id",
+		"actual_service_class",
+		"continuation_verified",
+	}
+	if !sameStringSet(got, want) {
+		t.Fatalf("live provider evidence schema required fields = %#v, want %#v", got, want)
+	}
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("live provider evidence schema properties = %#v, want mapping", schema["properties"])
 	}
-	for _, field := range []string{"schema_version", "generated_at", "profile", "tenant", "ceiling_micro_usd", "actual_spend", "request_id", "response_id", "actual_service_class", "continuation_verified"} {
+	for _, field := range []string{"schema_version", "generated_at", "source_revision", "profile", "tenant", "ceiling_micro_usd", "actual_spend", "request_id", "response_id", "actual_service_class", "continuation_verified"} {
 		if _, ok := properties[field]; !ok {
 			t.Fatalf("live provider evidence schema is missing %q", field)
 		}
+	}
+	sourceRevision, ok := properties["source_revision"].(map[string]any)
+	if !ok || sourceRevision["pattern"] != "^[0-9a-f]{40}$" {
+		t.Fatalf("live provider source revision schema must require a full lowercase Git SHA, got %#v", properties["source_revision"])
 	}
 	for _, forbidden := range []string{"prompt", "output", "endpoint", "credential", "api_key", "raw"} {
 		if _, found := properties[forbidden]; found {

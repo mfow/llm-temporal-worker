@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "generated_at",
+    "source_revision",
     "profile",
     "tenant",
     "ceiling_micro_usd",
@@ -23,6 +24,10 @@
     "generated_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
     },
     "profile": {
       "enum": [

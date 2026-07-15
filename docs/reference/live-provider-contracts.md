@@ -74,6 +74,8 @@ model.
 
 A successful live test emits only the following release-evidence fields:
 
+- the exact lowercase 40-character `source_revision` candidate checked out by
+  the protected workflow;
 - profile and fixed tenant;
 - provider request and response IDs;
 - actual normalized service class, always `standard` for this omitted-class
@@ -120,9 +122,11 @@ The selected test writes its raw output only to `$RUNNER_TEMP`. Before the
 recorder or artifact uploader can run, the workflow clears credential
 variables. The recorder itself starts with `env -i`, reduces the raw log to the
 closed [redacted evidence schema](../release/live-provider-contract.schema.json),
-then verifies that evidence before uploading only its JSON record and
-allowlisted text log for 14 days. A recorder or test failure leaves no artifact
-upload path and is never retried automatically.
+then verifies that evidence against the same `github.sha` candidate used for
+the anonymous checkout before uploading only its JSON record and allowlisted
+text log for 14 days. The candidate is a full lowercase Git SHA recorded as
+`source_revision`; it is not inferred from mutable branch state. A recorder or
+test failure leaves no artifact upload path and is never retried automatically.
 
 No pull-request, fork, scheduled, master-push, signing, registry-publication,
 tagging, or release-creation path invokes `TestLiveProviderContracts`. The
