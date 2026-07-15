@@ -40,13 +40,10 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 	if _, found := preflight["environment"]; found {
 		t.Fatal("release preflight must not enter the protected publication environment")
 	}
-	for _, action := range []string{checkoutActionPin, setupGoActionPin, downloadArtifactActionPin} {
+	for _, action := range []string{setupGoActionPin, downloadArtifactActionPin} {
 		assertJobUsesAction(t, release, "preflight", action)
 	}
-	assertJobActionInput(t, release, "preflight", checkoutActionPin, "fetch-depth", "0")
-	assertJobActionInput(t, release, "preflight", checkoutActionPin, "fetch-tags", "true")
-	assertJobActionInput(t, release, "preflight", checkoutActionPin, "persist-credentials", "false")
-	assertJobActionInput(t, release, "preflight", checkoutActionPin, "token", "")
+	assertAnonymousFixedPublicCheckout(t, release)
 	assertJobActionInput(t, release, "preflight", setupGoActionPin, "token", "")
 	assertJobActionInput(t, release, "preflight", setupGoActionPin, "cache", "false")
 	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "name", "release-evidence")
@@ -117,6 +114,9 @@ func TestReleaseRunbookDocumentsExternalAuthorizationBoundary(t *testing.T) {
 		"automatic, job-scoped `GITHUB_TOKEN`",
 		"`actions: read`",
 		"credential-free HTTPS `GET`",
+		"fixed unauthenticated HTTPS Git fetch",
+		"`https://github.com/mfow/llm-temporal-worker.git`",
+		"`github.sha`",
 		"`.github/workflows/master.yml`",
 		"only as the input to GitHub's pinned",
 		"does not create or modify that environment",
@@ -537,6 +537,85 @@ func assertGitHubTokenIsExclusiveToArtifactDownload(t *testing.T, workflow workf
 	}
 	if usesToken != 1 {
 		t.Fatalf("%s passes the GitHub token %d times, want once", workflow.name, usesToken)
+	}
+}
+
+func assertAnonymousFixedPublicCheckout(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	if strings.Contains(strings.ToLower(workflow.raw), "actions/checkout@") {
+		t.Fatalf("%s must not give actions/checkout a GitHub token when the public anonymous bootstrap is required", workflow.name)
+	}
+
+	preflight := workflowJob(t, workflow, "preflight")
+	steps := workflowSteps(t, workflow.name, "preflight", preflight)
+	shapeIndex := -1
+	checkoutIndex := -1
+	var shapeStep map[string]any
+	var checkoutStep map[string]any
+	for index, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch step["name"] {
+		case "Validate release reference before anonymous fetch":
+			shapeIndex = index
+			shapeStep = step
+		case "Check out fixed public master anonymously":
+			checkoutIndex = index
+			checkoutStep = step
+		}
+	}
+	if shapeIndex < 0 || checkoutIndex < 0 || shapeIndex >= checkoutIndex {
+		t.Fatalf("%s must validate the manual release ref before its anonymous public checkout", workflow.name)
+	}
+
+	shapeEnv := stepEnvironment(t, workflow.name, "preflight", shapeStep)
+	if got := scalarString(t, workflow.name, shapeEnv, "RELEASE_REF"); got != "${{ inputs.release_ref }}" {
+		t.Fatalf("%s release-ref shape step input = %q, want explicit environment binding", workflow.name, got)
+	}
+	shapeRun := scalarString(t, workflow.name, shapeStep, "run")
+	for _, want := range []string{
+		`[[ "$RELEASE_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]`,
+		`printf 'release_ref=%s\n' "$RELEASE_REF" >> "$GITHUB_OUTPUT"`,
+	} {
+		if !strings.Contains(shapeRun, want) {
+			t.Fatalf("%s release-ref shape step does not retain %q", workflow.name, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(shapeRun), "git ") {
+		t.Fatalf("%s release-ref shape step must not fetch or execute a manual ref", workflow.name)
+	}
+
+	checkoutEnv := stepEnvironment(t, workflow.name, "preflight", checkoutStep)
+	if got := scalarString(t, workflow.name, checkoutEnv, "RELEASE_REF"); got != "${{ steps.release-ref.outputs.release_ref }}" {
+		t.Fatalf("%s anonymous checkout must use only the validated release ref, got %q", workflow.name, got)
+	}
+	if got := scalarString(t, workflow.name, checkoutEnv, "TRUSTED_MASTER_SHA"); got != "${{ github.sha }}" {
+		t.Fatalf("%s anonymous checkout must bind the protected workflow revision, got %q", workflow.name, got)
+	}
+	checkoutRun := scalarString(t, workflow.name, checkoutStep, "run")
+	for _, want := range []string{
+		`test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"`,
+		`export GIT_CONFIG_NOSYSTEM=1`,
+		`export GIT_TERMINAL_PROMPT=0`,
+		`export GIT_ASKPASS=/bin/false`,
+		`git init --quiet "$GITHUB_WORKSPACE"`,
+		`git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git`,
+		`git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin`,
+		`+refs/heads/master:refs/remotes/origin/master`,
+		`"$RELEASE_REF:$RELEASE_REF"`,
+		`git -C "$GITHUB_WORKSPACE" checkout --detach --force "$TRUSTED_MASTER_SHA"`,
+		`git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master`,
+	} {
+		if !strings.Contains(checkoutRun, want) {
+			t.Fatalf("%s anonymous checkout does not retain %q", workflow.name, want)
+		}
+	}
+	for _, forbidden := range []string{"github.token", "github_token", "gh_token", "actions/checkout"} {
+		if strings.Contains(strings.ToLower(checkoutRun), forbidden) {
+			t.Fatalf("%s anonymous checkout exposes a credentialed checkout path %q", workflow.name, forbidden)
+		}
 	}
 }
 

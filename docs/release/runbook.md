@@ -179,6 +179,18 @@ automatic, job-scoped `GITHUB_TOKEN` only as the input to GitHub's pinned
 environment, logged, or passed to another action. This short-lived read token
 is not a provider, registry, or OIDC credential.
 
+Because `actions/checkout` v6 requires a token input even for public
+repositories, the preflight does not use it. Before it passes a manual ref to
+Git, it validates the tag's strict `refs/tags/vMAJOR.MINOR.PATCH` shape in a
+shell environment. It then performs a fixed unauthenticated HTTPS Git fetch
+from `https://github.com/mfow/llm-temporal-worker.git`, with an empty temporary
+Git home, no system Git configuration, disabled prompting, and no credential
+helper. The checkout fails closed if the workspace is not empty, the exact tag
+cannot be fetched, or fetched `master` is not the protected workflow's
+`github.sha`; it checks out that master SHA only, never the manual tag. Thus no
+manual ref can select code that runs before the normal protected-master and
+tag-ancestry guards below.
+
 This repository is public, so before that download the local guard makes a
 credential-free HTTPS `GET` to the public GitHub Actions run endpoint. It
 fails closed on network, API, rate-limit, size, or JSON errors and requires the

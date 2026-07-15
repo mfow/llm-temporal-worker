@@ -36,15 +36,58 @@ jobs:
       actions: read
       contents: read
     steps:
-      - name: Check out protected master history
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          fetch-depth: "0"
-          fetch-tags: "true"
-          persist-credentials: "false"
-          # The repository is public. Keep every action except the artifact
-          # downloader anonymous so the automatic GitHub token has one sink.
-          token: ""
+      # Validate the only manual ref before it is ever passed to Git. The
+      # protected workflow then fetches a fixed public repository URL without
+      # a credential and checks out only the trusted master revision.
+      - name: Validate release reference before anonymous fetch
+        id: release-ref
+        shell: bash
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            printf 'release_ref=%s\n' "$RELEASE_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_ref must be an exact refs/tags/vMAJOR.MINOR.PATCH reference" >&2
+            exit 1
+          fi
+
+      # actions/checkout v6 requires a token input, even for a public
+      # repository. Keep the automatic GitHub token's only sink below by
+      # bootstrapping a credential-free checkout from the fixed public URL.
+      - name: Check out fixed public master anonymously
+        shell: bash
+        env:
+          RELEASE_REF: ${{ steps.release-ref.outputs.release_ref }}
+          TRUSTED_MASTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
+            echo "anonymous checkout requires an empty workspace" >&2
+            exit 1
+          }
+          if [[ ! "$TRUSTED_MASTER_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "protected workflow revision is invalid" >&2
+            exit 1
+          fi
+          export HOME="$RUNNER_TEMP/anonymous-git-home"
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_ASKPASS=/bin/false
+          mkdir -p "$HOME"
+          git init --quiet "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
+            +refs/heads/master:refs/remotes/origin/master \
+            "$RELEASE_REF:$RELEASE_REF"
+          fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
+          if [[ "$fetched_master" != "$TRUSTED_MASTER_SHA" ]]; then
+            echo "public master moved after this protected workflow started" >&2
+            exit 1
+          fi
+          git -C "$GITHUB_WORKSPACE" show-ref --verify --quiet "$RELEASE_REF"
+          git -C "$GITHUB_WORKSPACE" checkout --detach --force "$TRUSTED_MASTER_SHA"
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6

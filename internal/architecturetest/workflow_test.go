@@ -298,10 +298,16 @@ func TestWorkflowActionsUseImmutablePinsWithVersionComments(t *testing.T) {
 				t.Fatalf("%s action %q is not pinned to an immutable commit", workflow.name, reference)
 			}
 		}
-		for _, want := range []string{checkoutActionPin, setupGoActionPin} {
+		for _, want := range []string{setupGoActionPin} {
 			if !strings.Contains(workflow.raw, "uses: "+want+" # v6") {
 				t.Fatalf("%s does not record readable v6 comment beside immutable action pin %q", workflow.name, want)
 			}
+		}
+		if workflow.name == "release.yml" {
+			continue
+		}
+		if !strings.Contains(workflow.raw, "uses: "+checkoutActionPin+" # v6") {
+			t.Fatalf("%s does not record readable v6 comment beside immutable action pin %q", workflow.name, checkoutActionPin)
 		}
 	}
 }
