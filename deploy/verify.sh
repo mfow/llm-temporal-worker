@@ -3,6 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 kubectl_bin=${KUBECTL:-kubectl}
+go_bin=${GO:-go}
 
 fail() {
   printf 'deploy verification failed: %s\n' "$1" >&2
@@ -17,6 +18,7 @@ grep -Fq 'read_only: true' "$root/compose.yaml" || fail 'Compose worker must use
 grep -Fq 'cap_drop: [ALL]' "$root/compose.yaml" || fail 'Compose worker must drop all capabilities'
 
 command -v "$kubectl_bin" >/dev/null 2>&1 || fail "kubectl executable '$kubectl_bin' is required to render Kustomize assets"
+command -v "$go_bin" >/dev/null 2>&1 || fail "Go executable '$go_bin' is required to inspect rendered manifests"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -29,13 +31,10 @@ for overlay in \
   name=$(basename "$overlay")
   rendered="$tmp/$name.yaml"
   "$kubectl_bin" kustomize "$overlay" >"$rendered"
-  grep -Fq 'runAsNonRoot: true' "$rendered" || fail "$name does not enforce non-root execution"
-  grep -Fq 'fsGroup: 65532' "$rendered" || fail "$name does not grant the worker group access to mounted secrets"
-  grep -Fq 'readOnlyRootFilesystem: true' "$rendered" || fail "$name does not enforce read-only root"
-  grep -Fq 'type: RuntimeDefault' "$rendered" || fail "$name does not set the default seccomp profile"
-  grep -Fq 'path: /health/live' "$rendered" || fail "$name is missing liveness probe"
-  grep -Fq 'path: /health/ready' "$rendered" || fail "$name is missing readiness probe"
-  grep -Fq 'terminationGracePeriodSeconds: 90' "$rendered" || fail "$name has an unsafe termination grace"
+  (
+    cd "$root"
+    "$go_bin" run ./tools/deploymentpolicy --overlay "$name" --rendered "$rendered"
+  ) || fail "$name violates the rendered workload policy"
   grep -Fq 'service_classes: [economy, standard, priority]' "$rendered" || fail "$name does not declare all public service classes"
   if grep -Eq '(^|[[:space:]])(latest|password|api[_-]?key):[[:space:]]+[^"[:space:]]' "$rendered"; then
     fail "$name appears to contain an unreviewed mutable tag or credential value"

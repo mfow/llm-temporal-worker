@@ -53,18 +53,17 @@ detector. `make compose-smoke` parses the checked-in fixture and runs
 worker remains a separate, explicitly authorized live operation because it
 requires a continuation key and a provider/state runtime. Setting
 `LLMTW_COMPOSE_LIVE=1` makes this boundary fail closed with instructions rather
-than silently starting services. `make kustomize-verify` runs static manifest
-tests and `deploy/verify.sh`, which renders each overlay locally through
-`kubectl kustomize` and never applies anything to a cluster. Set `KUBECTL` to a
-reviewed, pinned executable when `kubectl` is not on `PATH`.
+than silently starting services. `make deployment-policy-verify` renders every
+Kustomize overlay locally through `kubectl kustomize`, then checks the rendered
+workload policy and static Kubernetes tests. It never applies anything to a
+cluster or requires credentials. It keeps the worker's non-root UID/GID and
+`fsGroup` aligned, requires group-readable runtime Secret files (`0440`), and
+requires the Redis TLS patch to preserve one projected Secret volume rather
+than combine mutually exclusive volume source types.
 
-`make deployment-policy-verify` checks the checked-in Kubernetes policy without
-requiring a cluster, credentials, or `kubectl`. It keeps the worker's
-non-root UID/GID and `fsGroup` aligned, requires group-readable runtime Secret
-files (`0440`), and requires the Redis TLS patch to preserve one projected
-Secret volume rather than combine mutually exclusive volume source types. With
-`KUBECTL` set, `make kustomize-verify` also checks those invariants against
-every rendered overlay.
+`make kustomize-verify` is the pinned-`kubectl` companion for the rendered
+check. Set `KUBECTL` to a reviewed executable before invoking it; both targets
+verify the same local render and never contact a cluster.
 
 `make workflow-verify` runs pinned `actionlint` syntax validation and a strict
 YAML contract test for the two checked-in GitHub Actions workflows. The test
