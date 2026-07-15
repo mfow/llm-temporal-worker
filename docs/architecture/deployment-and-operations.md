@@ -227,8 +227,16 @@ the conservative `llm_ambiguous_dispatch` result without another dispatch or
 budget reservation. It never calls `provider-mock` and must not create a
 Docker-private-address bypass to satisfy this proof.
 
-Live provider tests are opt-in, require explicit environment flags and tiny cost
-ceilings, and never run on pull requests from untrusted forks.
+Live-provider contracts are opt-in, require explicit environment flags and tiny
+cost ceilings, and run only through the protected [Guarded live-provider
+contracts](../reference/live-provider-contracts.md) workflow. The workflow
+permits only manual, master-only dispatch from `master` after
+protected-environment approval for one selected profile. No pull-request
+(including trusted), fork, scheduled, master-push, signing, registry-publication,
+tagging, or release-creation path invokes `TestLiveProviderContracts` or
+receives its credentials. Its verified redacted live-provider evidence is
+distinct from release-signing and publication evidence and does not prove a
+release was signed or published.
 
 The offline release checks are available without starting this stack:
 

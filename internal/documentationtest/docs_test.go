@@ -70,6 +70,24 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 }
 
+func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "docs/testing/strategy.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(data)), " ")
+	if !strings.Contains(text, "protected manual live-provider workflow") {
+		t.Fatal("live-provider documentation must name the protected manual live-provider workflow")
+	}
+	if !strings.Contains(text, "redacted live-provider evidence") {
+		t.Fatal("live-provider documentation must distinguish its redacted evidence")
+	}
+	if strings.Contains(text, "protected manual release workflow") {
+		t.Fatal("live-provider workflow must not be documented as a release workflow")
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()
