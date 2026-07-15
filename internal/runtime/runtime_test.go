@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -38,29 +37,7 @@ func (testEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, errors.New("test engine")
 }
 
-func (testEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
-	return nil, errors.New("test engine")
-}
-
-type testEventStream struct {
-	events []llm.Event
-	next   int
-	closed atomic.Int32
-}
-
-func (stream *testEventStream) Next(context.Context) (llm.Event, error) {
-	if stream.next == len(stream.events) {
-		return nil, io.EOF
-	}
-	event := stream.events[stream.next]
-	stream.next++
-	return event, nil
-}
-
-func (stream *testEventStream) Close() error {
-	stream.closed.Add(1)
-	return nil
-}
+var _ llm.Engine = testEngine{}
 
 type testRegistry struct{}
 
@@ -462,44 +439,6 @@ func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 	if runtime.Health.Live() || runtime.Health.Ready() || !controller.stopped.Load() || !closed.Load() {
 		t.Fatal("cancellation did not complete graceful shutdown")
 	}
-}
-
-func TestLeasedEventStreamReleasesSnapshotOnTerminalAndEarlyClose(t *testing.T) {
-	t.Run("terminal", func(t *testing.T) {
-		inner := &testEventStream{events: []llm.Event{llm.ResponseCompleted{}}}
-		var releases atomic.Int32
-		stream := &leasedEventStream{EventStream: inner, release: func() { releases.Add(1) }}
-
-		event, err := stream.Next(context.Background())
-		if err != nil || !llm.IsTerminalEvent(event) {
-			t.Fatalf("next = %#v, %v; want terminal event", event, err)
-		}
-		if err := stream.Close(); err != nil {
-			t.Fatalf("close stream: %v", err)
-		}
-		if releases.Load() != 1 {
-			t.Fatalf("lease releases = %d, want one", releases.Load())
-		}
-		if inner.closed.Load() != 1 {
-			t.Fatalf("underlying stream closes = %d, want one", inner.closed.Load())
-		}
-	})
-
-	t.Run("early close", func(t *testing.T) {
-		inner := &testEventStream{events: []llm.Event{llm.ResponseStarted{}}}
-		var releases atomic.Int32
-		stream := &leasedEventStream{EventStream: inner, release: func() { releases.Add(1) }}
-
-		if err := stream.Close(); err != nil {
-			t.Fatalf("close stream: %v", err)
-		}
-		if releases.Load() != 1 {
-			t.Fatalf("lease releases = %d, want one", releases.Load())
-		}
-		if inner.closed.Load() != 1 {
-			t.Fatalf("underlying stream closes = %d, want one", inner.closed.Load())
-		}
-	})
 }
 
 func TestLoadTLSConfigDoesNotExposeCertificateBytes(t *testing.T) {

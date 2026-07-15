@@ -3,8 +3,6 @@ package activity
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"strings"
 	"testing"
 
@@ -20,81 +18,18 @@ import (
 type fakeEngine struct {
 	response llm.Response
 	err      error
-	events   []llm.Event
+	requests []llm.Request
 }
 
-func (fakeEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{}, errors.New("Activity must consume Engine.Stream rather than Engine.Generate")
-}
-
-func (engine fakeEngine) Stream(_ context.Context, _ llm.Request) (llm.EventStream, error) {
+func (engine *fakeEngine) Generate(_ context.Context, request llm.Request) (llm.Response, error) {
+	engine.requests = append(engine.requests, request)
 	if engine.err != nil {
-		return nil, engine.err
+		return llm.Response{}, engine.err
 	}
-	events := engine.events
-	if events == nil {
-		events = []llm.Event{
-			llm.ResponseStarted{EventHeader: llm.EventHeader{Sequence: 1, OperationID: engine.response.OperationID}},
-			llm.ResponseCompleted{EventHeader: llm.EventHeader{Sequence: 2, OperationID: engine.response.OperationID}, Response: engine.response},
-		}
-	}
-	return &sliceEventStream{events: events}, nil
-}
-
-type nativeFallbackEngine struct {
-	response      llm.Response
-	streamErr     error
-	generateCalls int
-	streamCalls   int
-}
-
-func (engine *nativeFallbackEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
-	engine.generateCalls++
 	return engine.response, nil
 }
 
-func (engine *nativeFallbackEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
-	engine.streamCalls++
-	if engine.streamErr != nil {
-		return nil, engine.streamErr
-	}
-	return nil, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming")
-}
-
-type terminalUnsupportedStreamEngine struct {
-	response      llm.Response
-	generateCalls int
-}
-
-func (engine *terminalUnsupportedStreamEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
-	engine.generateCalls++
-	return engine.response, nil
-}
-
-func (engine *terminalUnsupportedStreamEngine) Stream(context.Context, llm.Request) (llm.EventStream, error) {
-	return &sliceEventStream{events: []llm.Event{
-		llm.StreamErrored{EventHeader: llm.EventHeader{Sequence: 1, OperationID: engine.response.OperationID}, Err: provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "stream became unavailable after admission")},
-	}}, nil
-}
-
-type sliceEventStream struct {
-	events []llm.Event
-	next   int
-}
-
-func (stream *sliceEventStream) Next(ctx context.Context) (llm.Event, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if stream.next == len(stream.events) {
-		return nil, io.EOF
-	}
-	event := stream.events[stream.next]
-	stream.next++
-	return event, nil
-}
-
-func (*sliceEventStream) Close() error { return nil }
+var _ llm.Engine = (*fakeEngine)(nil)
 
 type fakeHeartbeater struct{ progress []engine.Progress }
 
@@ -125,11 +60,9 @@ var _ worker.ActivityRegistry = (*temporalActivityCaptureRegistry)(nil)
 func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T) {
 	response := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
 	var created []*fakeHeartbeater
+	value := &fakeEngine{response: response}
 	activities := Activities{
-		Engine: fakeEngine{response: response, events: []llm.Event{
-			llm.ResponseStarted{EventHeader: llm.EventHeader{Sequence: 1, OperationID: response.OperationID}},
-			llm.ResponseCompleted{EventHeader: llm.EventHeader{Sequence: 2, OperationID: response.OperationID}, Response: response},
-		}},
+		Engine: value,
 		HeartbeaterFactory: func() Heartbeater {
 			heartbeater := &fakeHeartbeater{}
 			created = append(created, heartbeater)
@@ -150,51 +83,30 @@ func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T)
 	if len(created[0].progress) == 0 || len(created[1].progress) == 0 {
 		t.Fatalf("per-Activity heartbeat progress = %d, %d; want bounded lifecycle progress on each", len(created[0].progress), len(created[1].progress))
 	}
+	if got := len(value.requests); got != 2 {
+		t.Fatalf("Generate calls = %d, want one per Activity invocation", got)
+	}
 }
 
 func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	heartbeater := &fakeHeartbeater{}
-	activities := Activities{Engine: fakeEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}, Heartbeater: heartbeater}
+	value := &fakeEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
+	activities := Activities{Engine: value, Heartbeater: heartbeater}
 	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Metadata.OperationID != "operation-id" || len(heartbeater.progress) != 3 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "streaming" || heartbeater.progress[2].Phase != "finalization" {
+	if response.Metadata.OperationID != "operation-id" || len(heartbeater.progress) != 2 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "finalization" {
 		t.Fatalf("response=%#v heartbeats=%#v", response, heartbeater.progress)
 	}
-}
-
-func TestGenerateActivityUsesOnlyBoundedStreamProgress(t *testing.T) {
-	heartbeater := &fakeHeartbeater{}
-	response := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
-	activities := Activities{Engine: fakeEngine{response: response, events: []llm.Event{
-		llm.ResponseStarted{EventHeader: llm.EventHeader{Sequence: 1, OperationID: "operation-id"}},
-		llm.TextDelta{EventHeader: llm.EventHeader{Sequence: 2, OperationID: "operation-id", OutputIndex: intPointer(0)}, Text: "unbounded raw provider delta"},
-		llm.ContentCompleted{EventHeader: llm.EventHeader{Sequence: 3, OperationID: "operation-id", OutputIndex: intPointer(0)}},
-		llm.ResponseCompleted{EventHeader: llm.EventHeader{Sequence: 4, OperationID: "operation-id"}, Response: response},
-	}}, Heartbeater: heartbeater}
-	result, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(heartbeater.progress) != 4 || heartbeater.progress[2].OutputItems != 1 {
-		t.Fatalf("heartbeat progress = %#v", heartbeater.progress)
-	}
-	encoded, err := MarshalResponse(result, PayloadLimits{})
-	if err != nil {
-		t.Fatalf("marshal Activity response: %v", err)
-	}
-	if strings.Contains(string(encoded), "unbounded raw provider delta") {
-		t.Fatalf("Activity return leaked a stream delta: %s", encoded)
-	}
-	if rendered := fmt.Sprintf("%#v", heartbeater.progress); strings.Contains(rendered, "unbounded raw provider delta") {
-		t.Fatalf("Activity heartbeat leaked a stream delta: %s", rendered)
+	if got := value.requests; len(got) != 1 || got[0].OperationKey != "operation-1" || got[0].Model != "model-1" {
+		t.Fatalf("Generate request = %#v, want validated Activity request", got)
 	}
 }
 
 func TestGenerateActivityMapsEngineError(t *testing.T) {
 	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
-	activities := Activities{Engine: fakeEngine{err: err}}
+	activities := Activities{Engine: &fakeEngine{err: err}}
 	_, got := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
 	var applicationErr *temporal.ApplicationError
 	if !errors.As(got, &applicationErr) {
@@ -207,7 +119,7 @@ func TestGenerateActivityMapsEngineError(t *testing.T) {
 
 func TestGenerateTemporalReturnsPointerOnlyOnSuccess(t *testing.T) {
 	want := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
-	activities := Activities{Engine: fakeEngine{response: want}}
+	activities := Activities{Engine: &fakeEngine{response: want}}
 
 	response, err := activities.generateTemporal(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
 	if err != nil {
@@ -223,7 +135,7 @@ func TestGenerateTemporalReturnsPointerOnlyOnSuccess(t *testing.T) {
 
 func TestGenerateTemporalReturnsNilResultForAmbiguousError(t *testing.T) {
 	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
-	activities := Activities{Engine: fakeEngine{err: err}}
+	activities := Activities{Engine: &fakeEngine{err: err}}
 
 	response, got := activities.generateTemporal(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
 	if response != nil {
@@ -234,7 +146,7 @@ func TestGenerateTemporalReturnsNilResultForAmbiguousError(t *testing.T) {
 
 func TestRegisteredTemporalGeneratePreservesAmbiguousApplicationError(t *testing.T) {
 	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
-	activities := Activities{Engine: fakeEngine{err: err}}
+	activities := Activities{Engine: &fakeEngine{err: err}}
 	registry := &temporalActivityCaptureRegistry{}
 	activities.Register(registry)
 	if registry.name != GenerateActivityName {
@@ -268,60 +180,3 @@ func assertAmbiguousActivityError(t *testing.T, got error) {
 		t.Fatalf("error type = %q non_retryable=%v, want %q true", applicationErr.Type(), applicationErr.NonRetryable(), ErrorTypeAmbiguous)
 	}
 }
-
-func TestGenerateActivityFallsBackForPreAdmissionStreamingUnsupported(t *testing.T) {
-	heartbeater := &fakeHeartbeater{}
-	native := &nativeFallbackEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
-	activities := Activities{Engine: native, Heartbeater: heartbeater}
-	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.Metadata.OperationID != "operation-id" || native.streamCalls != 1 || native.generateCalls != 1 {
-		t.Fatalf("response=%#v stream calls=%d generate calls=%d", response, native.streamCalls, native.generateCalls)
-	}
-	if len(heartbeater.progress) != 2 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "finalization" {
-		t.Fatalf("fallback heartbeats = %#v, want planning/finalization only", heartbeater.progress)
-	}
-}
-
-func TestGenerateActivityNeverFallsBackAfterReturnedStreamTerminal(t *testing.T) {
-	streaming := &terminalUnsupportedStreamEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
-	activities := Activities{Engine: streaming}
-	_, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
-	if err == nil {
-		t.Fatal("Activity accepted a terminal stream failure")
-	}
-	if streaming.generateCalls != 0 {
-		t.Fatalf("Activity called Generate %d times after Stream returned a terminal event", streaming.generateCalls)
-	}
-}
-
-func TestGenerateActivityDoesNotFallBackForOtherUnsupportedErrors(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		err  *provider.Error
-	}{
-		{name: "compile", err: provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "stream compile capability is unsupported")},
-		{name: "planning", err: provider.NewError(provider.CodeUnsupportedCapability, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "stream planning capability is unsupported")},
-		{name: "operation", err: func() *provider.Error {
-			err := provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "stream operation has already been created")
-			err.OperationID = "operation-id"
-			return err
-		}()},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			native := &nativeFallbackEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}, streamErr: test.err}
-			activities := Activities{Engine: native}
-			_, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
-			if err == nil {
-				t.Fatal("Activity accepted an unsupported stream error outside the pre-admission fallback contract")
-			}
-			if native.generateCalls != 0 {
-				t.Fatalf("Activity called Generate %d times for %#v", native.generateCalls, test.err)
-			}
-		})
-	}
-}
-
-func intPointer(value int) *int { return &value }
