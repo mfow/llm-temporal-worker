@@ -13,11 +13,18 @@ import (
 	"github.com/mfow/llm-temporal-worker/state"
 )
 
-func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, snapshot Snapshot, quoted quotedPlan, index int, operation admission.Operation, parent *state.Continuation, call provider.Call, response llm.Response) (llm.Response, error) {
+func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, snapshot Snapshot, quoted quotedPlan, index int, operation admission.Operation, parent *state.Continuation, call provider.Call, response llm.Response) (result llm.Response, resultErr error) {
 	if index < 0 || index >= len(quoted.candidates) {
 		return llm.Response{}, engineError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "finalization candidate index is invalid", nil)
 	}
 	candidate := quoted.candidates[index]
+	ctx, finalizeSpan := engine.startTrace(ctx, "llmtw.finalization", operationTraceAttrs(operation.ID, candidate.candidate)...)
+	defer func() {
+		if resultErr != nil {
+			engine.recordTraceError(ctx, finalizeSpan, resultErr)
+		}
+		finalizeSpan.End()
+	}()
 	candidate.candidate.PriceVersion = candidate.priceVersion()
 	response.APIVersion = llm.APIVersion
 	response.OperationKey = request.OperationKey
@@ -49,7 +56,13 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	if response.Diagnostics == nil {
 		response.Diagnostics = []llm.Diagnostic{}
 	}
+	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "finalization", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+		return llm.Response{}, err
+	}
 	if response.Continuation != nil {
+		if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "continuation_write", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+			return llm.Response{}, err
+		}
 		secure, continuationErr := engine.persistContinuation(ctx, request, response, candidate.candidate, operation.ID, parent, snapshot)
 		if continuationErr != nil {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, continuationErr, actual.MicroUSD)
@@ -90,7 +103,14 @@ func actualCost(entry pricing.Entry, response llm.Response) (pricing.Cost, error
 	return pricing.CostFromUsage(entry, pricing.Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ReasoningTokens: response.Usage.ReasoningTokens, CacheReadTokens: response.Usage.CacheReadTokens, CacheWriteTokens: response.Usage.CacheWriteTokens})
 }
 
-func (engine *Engine) persistContinuation(ctx context.Context, request llm.Request, response llm.Response, candidate routing.Candidate, operationID string, parent *state.Continuation, snapshot Snapshot) (*llm.Continuation, *provider.Error) {
+func (engine *Engine) persistContinuation(ctx context.Context, request llm.Request, response llm.Response, candidate routing.Candidate, operationID string, parent *state.Continuation, snapshot Snapshot) (continuation *llm.Continuation, resultErr *provider.Error) {
+	ctx, continuationSpan := engine.startTrace(ctx, "llmtw.continuation_write", operationTraceAttrs(operationID, candidate)...)
+	defer func() {
+		if resultErr != nil {
+			engine.recordTraceError(ctx, continuationSpan, resultErr)
+		}
+		continuationSpan.End()
+	}()
 	if engine.dependencies.Continuations == nil {
 		return nil, engineError(provider.CodeStateUnavailable, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetrySameOperation, "continuation store is unavailable", nil)
 	}
@@ -148,10 +168,14 @@ func (engine *Engine) finalizationContext(parent context.Context) (context.Conte
 }
 
 func (engine *Engine) beat(ctx context.Context, progress Progress) error {
-	if engine.dependencies.Heartbeat == nil {
+	heartbeat := heartbeatFromContext(ctx)
+	if heartbeat == nil {
+		heartbeat = engine.dependencies.Heartbeat
+	}
+	if heartbeat == nil {
 		return nil
 	}
-	if err := engine.dependencies.Heartbeat.Beat(ctx, progress); err != nil {
+	if err := heartbeat.Beat(ctx, progress); err != nil {
 		return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetrySameOperation, "progress heartbeat failed", err)
 	}
 	return nil

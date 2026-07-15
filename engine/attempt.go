@@ -47,7 +47,9 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 		return err
 	}
 	observer.marked = true
-	_ = observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "dispatching", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
+	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "pre_write", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -62,7 +64,11 @@ func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provi
 	if observer == nil || observer.engine == nil {
 		return
 	}
-	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: progress.Phase, RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, OutputItems: progress.OutputItems, At: observer.engine.dependencies.Clock()}); err != nil {
+	phase := progress.Phase
+	if phase == string(provider.PhaseStream) {
+		phase = "streaming"
+	}
+	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: phase, RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, OutputItems: progress.OutputItems, At: observer.engine.dependencies.Clock()}); err != nil {
 		observer.heartbeatErr = err
 	}
 }
@@ -99,7 +105,12 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 			lease = defaultLease
 		}
 		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease)}
-		result, invokeErr := adapter.Invoke(ctx, call, observer)
+		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
+		result, invokeErr := adapter.Invoke(attemptCtx, call, observer)
+		if invokeErr != nil {
+			engine.recordTraceError(attemptCtx, attemptSpan, invokeErr)
+		}
+		attemptSpan.End()
 		if invokeErr == nil {
 			if observer.heartbeatErr != nil {
 				return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "progress heartbeat failed", observer.heartbeatErr), candidate.estimate.MicroUSD)

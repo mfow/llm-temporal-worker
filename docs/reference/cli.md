@@ -61,7 +61,9 @@ The command validates the YAML before constructing runtime dependencies. It
 then blocks while the worker polls its configured Temporal task queue. A
 `SIGINT` or `SIGTERM` begins graceful shutdown: readiness is withdrawn, polling
 stops, in-flight Activities receive their configured grace period, and the
-runtime drains its snapshot clients before exiting.
+runtime drains its snapshot clients before exiting. `SIGHUP` requests a
+configuration reload without stopping polling; the worker also watches the
+same `--config` file for atomic replacement or in-place metadata changes.
 
 The worker resolves referenced secrets and catalog files while constructing the
 production runtime. A failure in that phase is fatal; the process must not
@@ -95,34 +97,32 @@ secret values. It is canonical JSON rather than the source YAML, so it is
 appropriate for comparing configuration snapshots but should still be handled
 as deployment-sensitive material.
 
-## `reconcile`
-
-The command dispatcher recognizes:
-
-```sh
-llm-temporal-worker reconcile --operation-id OPERATION_ID
-```
-
-The production binary does not currently wire a reconciliation backend, so
-this command exits with `reconcile backend is unavailable`. Do not use it as an
-operations procedure yet. The flag and injected callback remain available for
-tests and custom embeddings until the scoped production reconciliation
-implementation is complete.
-
 ## Configuration reload
 
-The internal application package supports an atomic reload API that validates a
-replacement and keeps the prior snapshot when validation fails. The production
-CLI does not currently install a `SIGHUP` handler or a file watcher. Operators
-must therefore restart the worker to apply a changed configuration; a file
-replacement alone does not reload a running process.
+`worker` reloads when it receives `SIGHUP` or observes a change to the supplied
+`--config` path. It reads a complete replacement, validates it, resolves
+references, constructs and verifies replacement state clients, atomically
+publishes the new snapshot, then drains clients captured by in-flight
+Activities. Repeated notifications are coalesced.
+
+An unreadable or invalid replacement leaves the active snapshot and readiness
+state unchanged. The worker records `llmtw_config_reload_total{outcome="failure"}`
+and emits only a safe error classification; configuration text, paths, resolved
+secrets, and provider payloads are not logged. A successful reload records
+`outcome="success"`.
+
+Reload changes the dynamic request snapshot (routes, catalogs, budgets, and
+provider/state clients). Listener addresses, Temporal connection/task-queue and
+worker settings, dependency-monitor cadence, and telemetry process wiring are
+established at startup and require a restart. Environment variables are not
+re-read during reload.
 
 ## Exit status and diagnostics
 
 - `0` means the command completed successfully.
 - `1` means a file, configuration, dependency, or runtime operation failed.
 - `2` means the invocation was invalid, such as a missing command, unknown
-  command, invalid flag, or missing `--operation-id`.
+  command, or invalid flag.
 
 Command errors are reduced to a single safe line. Credential, token, prompt,
 output, and provider-body terms are redacted from the CLI error boundary.

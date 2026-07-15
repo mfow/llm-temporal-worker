@@ -317,6 +317,13 @@ telemetry:
   content_logging: disabled
 ```
 
+When `telemetry.tracing.enabled` is true, `otlp_endpoint` names the OTLP/gRPC
+collector and `sample_ratio` is a decimal from `0` through `1`. Runtime uses
+the secure OTLP transport default; deploy a collector endpoint with TLS. The
+tracer exports only bounded lifecycle metadata and hashes tenant identifiers;
+it never exports request content, provider payloads, continuation handles, or
+resolved credentials.
+
 ## Pricing and budget matching
 
 `pricing.require_price_when_budgeted` controls the explicit unpriced policy.

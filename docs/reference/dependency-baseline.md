@@ -38,6 +38,7 @@ the `llm` package.
 | `github.com/prometheus/client_model` | `v0.6.2` | Prometheus metric model types used by tests and exposition boundaries | Apache-2.0; [official repository](https://github.com/prometheus/client_model) |
 | `github.com/prometheus/common` | `v0.70.0` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
 | `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.43.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.43.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
 
 The versions in this table match the direct requirements in `go.mod` on the
@@ -76,11 +77,11 @@ its redacted report: component pass/fail state, direct-module identifiers/count,
 and finding identifiers. It deliberately excludes test output, source paths,
 scanner traces, provider data, and credential-like material.
 
-### Active vulnerability exception
+### Active vulnerability exceptions
 
-| Finding | Owner | Expires | Remediation reference | Bounded rationale |
-| --- | --- | --- | --- | --- |
-| `GO-2026-5932` | `platform-security` | 2026-08-14T00:00:00Z | [Go vulnerability report](https://pkg.go.dev/vuln/GO-2026-5932) | `module_only`: `azidentity` currently brings `golang.org/x/crypto` for `pkcs12`; the verifier reports this unmaintained `openpgp` advisory only at module level, with no reachable-function trace. No repository package imports `openpgp`. A reachable trace fails unless this scope is explicitly re-reviewed. Re-evaluate before expiry and remove it if the module is split or upstream removes the unused package. |
+There are currently no approved vulnerability exceptions. Any future exception
+must be narrowly scoped, documented here, and removed when the verifier no
+longer reports the finding.
 
 ## Repository module
 

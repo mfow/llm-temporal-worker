@@ -45,46 +45,81 @@ type quotedPlan struct {
 	maximum    pricing.MicroUSD
 }
 
-func (engine *Engine) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+func (engine *Engine) Generate(ctx context.Context, request llm.Request) (response llm.Response, resultErr error) {
 	if engine == nil {
 		return llm.Response{}, engineError(provider.CodeInternal, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "engine is nil", nil)
 	}
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, engineError(provider.CodeCanceled, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", err)
 	}
+	ctx, requestSpan := engine.startTrace(ctx, "llmtw.generate", requestTraceAttrs(request)...)
+	defer func() {
+		if resultErr != nil {
+			engine.recordTraceError(ctx, requestSpan, resultErr)
+		}
+		requestSpan.End()
+	}()
+	normalizeCtx, normalizeSpan := engine.startTrace(ctx, "llmtw.normalize", requestTraceAttrs(request)...)
 	normalized, err := llm.NormalizeRequest(request)
 	if err != nil {
+		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
+		normalizeSpan.End()
 		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request normalization failed", err)
 	}
 	digest, err := llm.RequestDigest(normalized)
 	if err != nil {
+		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
+		normalizeSpan.End()
 		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request digest failed", err)
 	}
-	snapshot, err := engine.dependencies.Snapshots.Current(ctx)
+	normalizeSpan.End()
+	ctx = normalizeCtx
+	planCtx, planSpan := engine.startTrace(ctx, "llmtw.planning", requestTraceAttrs(normalized)...)
+	snapshot, err := engine.dependencies.Snapshots.Current(planCtx)
 	if err != nil {
+		engine.recordTraceError(planCtx, planSpan, err)
+		planSpan.End()
 		return llm.Response{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
 	}
 	now := engine.dependencies.Clock()
-	providerRequest, constraints, parent, err := engine.loadContinuation(ctx, normalized, now)
+	stateCtx, stateSpan := engine.startTrace(planCtx, "llmtw.state.load", requestTraceAttrs(normalized)...)
+	providerRequest, constraints, parent, err := engine.loadContinuation(stateCtx, normalized, now)
 	if err != nil {
+		engine.recordTraceError(stateCtx, stateSpan, err)
+		stateSpan.End()
+		planSpan.End()
 		return llm.Response{}, err
 	}
-	if err := engine.beat(ctx, Progress{Phase: string(provider.PhasePlan), At: now}); err != nil {
+	stateSpan.End()
+	if err := engine.beat(planCtx, Progress{Phase: "planning", At: now}); err != nil {
+		engine.recordTraceError(planCtx, planSpan, err)
+		planSpan.End()
 		return llm.Response{}, err
 	}
-	plan, err := engine.dependencies.Planner.Plan(ctx, routingInput(normalized, snapshot, constraints))
+	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints))
 	if err != nil {
+		engine.recordTraceError(planCtx, planSpan, err)
+		planSpan.End()
 		return llm.Response{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
 	}
-	quoted, err := engine.quotePlan(ctx, normalized, plan, snapshot, now)
+	quoted, err := engine.quotePlan(planCtx, normalized, plan, snapshot, now)
 	if err != nil {
+		engine.recordTraceError(planCtx, planSpan, err)
+		planSpan.End()
 		return llm.Response{}, err
 	}
+	planSpan.End()
+	ctx = planCtx
 	operationID, scopeKey := operationIdentity(normalized, digest)
-	operation, existing, err := engine.beginOrResume(ctx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
+	admissionCtx, admissionSpan := engine.startTrace(ctx, "llmtw.admission", requestTraceAttrs(normalized)...)
+	operation, existing, err := engine.beginOrResume(admissionCtx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
 	if err != nil {
+		engine.recordTraceError(admissionCtx, admissionSpan, err)
+		admissionSpan.End()
 		return llm.Response{}, err
 	}
+	admissionSpan.End()
+	ctx = admissionCtx
 	if existing {
 		response, resumed, err := engine.resolveExisting(ctx, operation, now)
 		if err != nil {
@@ -97,7 +132,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (llm.Re
 			return llm.Response{}, engineError(provider.CodeOperationConflict, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetrySameOperation, "operation is already in progress", nil)
 		}
 	}
-	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "admitted", At: now}); err != nil {
+	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "admission", At: now}); err != nil {
 		return llm.Response{}, err
 	}
 	return engine.dispatchPlan(ctx, normalized, providerRequest, snapshot, quoted, operation, parent)

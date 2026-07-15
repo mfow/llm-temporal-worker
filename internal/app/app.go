@@ -231,7 +231,7 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 		return nil
 	}
 	if err := old.Drain(ctx); err != nil {
-		return fmt.Errorf("drain previous snapshot: %w", err)
+		return &PublishedReloadError{cause: err}
 	}
 	return nil
 }
