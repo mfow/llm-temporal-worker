@@ -2,7 +2,7 @@ version: 1
 id: azure-responses
 provider: azure_openai
 family: responses
-coverage: bootstrap
+coverage: enforced
 metadata: metadata.yaml
 service_classes:
   economy:
@@ -47,6 +47,10 @@ cases:
     artifacts:
       wire: class-facts.wire.json
       semantic: class-facts.semantic.json
+  - id: continuation-compatibility
+    artifacts:
+      semantic: continuation-compatibility.semantic.json
+      wire: continuation-compatibility.wire.json
   - id: full-stream
     artifacts:
       events: stream.decoder.events

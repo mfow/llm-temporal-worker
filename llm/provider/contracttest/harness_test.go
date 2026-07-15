@@ -642,7 +642,7 @@ func TestVerifyStreamAssemblyEquivalentRejectsDifferentResponse(t *testing.T) {
 	}
 }
 
-func TestRepositoryManifestReportAllowsIncrementalCoverage(t *testing.T) {
+func TestRepositoryManifestReportRequiresAllProfilesEnforced(t *testing.T) {
 	tests := []struct {
 		name    string
 		report  Report
@@ -657,6 +657,7 @@ func TestRepositoryManifestReportAllowsIncrementalCoverage(t *testing.T) {
 			report: Report{
 				Bootstrap: []Profile{{ID: "bootstrap"}},
 			},
+			wantErr: "adapter contract profiles remain bootstrap: bootstrap",
 		},
 		{
 			name: "enforced profiles",
@@ -670,6 +671,7 @@ func TestRepositoryManifestReportAllowsIncrementalCoverage(t *testing.T) {
 				Bootstrap: []Profile{{ID: "bootstrap"}},
 				Enforced:  []Profile{{ID: "enforced"}},
 			},
+			wantErr: "adapter contract profiles remain bootstrap: bootstrap",
 		},
 	}
 
@@ -702,13 +704,13 @@ func TestRepositoryManifests(t *testing.T) {
 	t.Logf("adapter contract enforced profiles: %s", profileIDs(report.Enforced))
 }
 
-// validateRepositoryManifestReport permits incremental profile enforcement.
-// RequireAllEnforced remains the final release gate once every profile is done.
+// validateRepositoryManifestReport verifies the checked-in repository is ready
+// for the release gate: it has profiles and each one is enforced.
 func validateRepositoryManifestReport(report Report) error {
 	if len(report.Bootstrap)+len(report.Enforced) == 0 {
 		return fmt.Errorf("repository has no adapter contract profiles")
 	}
-	return nil
+	return report.RequireAllEnforced()
 }
 
 func profileIDs(profiles []Profile) string {
