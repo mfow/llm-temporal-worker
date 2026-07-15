@@ -12,6 +12,13 @@ var markdownLink = regexp.MustCompile(`(?m)(?:^|[^!])\[[^\]]+\]\(([^)]+)\)`)
 
 func TestDocumentationLinksAndInvariants(t *testing.T) {
 	root := repositoryRoot(t)
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(makefile), "test ./internal/documentationtest -run") {
+		t.Fatal("docs-verify must not filter documentation tests")
+	}
 	required := []string{
 		"README.md",
 		"docs/index.md",
@@ -24,7 +31,7 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 	var files []string
 	files = append(files, filepath.Join(root, "README.md"))
-	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry, err error) error {
+	err = filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
