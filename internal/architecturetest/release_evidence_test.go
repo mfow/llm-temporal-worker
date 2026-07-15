@@ -97,6 +97,62 @@ func TestReleaseEvidenceLayoutDigestAcceptsDockerOCICompatibilityMetadata(t *tes
 	}
 }
 
+func TestReleaseEvidenceLayoutDigestUsesSingleChildOCIIndexManifestDescriptor(t *testing.T) {
+	root := repositoryRoot(t)
+	path := filepath.Join(t.TempDir(), "image.oci")
+	want := writeReleaseEvidenceNestedOCIIndexLayout(t, path, func(manifestDigest string, manifestSize int) []byte {
+		return []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%d}]}`,
+			manifestDigest, manifestSize))
+	})
+
+	output, err := runReleaseEvidenceLayoutDigest(root, path)
+	if err != nil {
+		t.Fatalf("layout digest rejected a single-child OCI image index: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(string(output)); got != want {
+		t.Fatalf("layout digest = %q, want nested OCI image manifest digest %q", got, want)
+	}
+}
+
+func TestReleaseEvidenceLayoutDigestRejectsUnsafeNestedOCIIndexes(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, test := range []struct {
+		name        string
+		nestedIndex func(manifestDigest string, manifestSize int) []byte
+		failure     string
+	}{
+		{
+			name: "multiple child descriptors",
+			nestedIndex: func(manifestDigest string, manifestSize int) []byte {
+				descriptor := fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%d}`, manifestDigest, manifestSize)
+				return []byte(`{"schemaVersion":2,"manifests":[` + descriptor + `,` + descriptor + `]}`)
+			},
+			failure: "OCI image index must contain exactly one manifest descriptor",
+		},
+		{
+			name: "non-image child descriptor",
+			nestedIndex: func(manifestDigest string, manifestSize int) []byte {
+				return []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}]}`,
+					manifestDigest, manifestSize))
+			},
+			failure: "OCI image index does not reference an OCI image manifest",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "image.oci")
+			writeReleaseEvidenceNestedOCIIndexLayout(t, path, test.nestedIndex)
+
+			output, err := runReleaseEvidenceLayoutDigest(root, path)
+			if err == nil {
+				t.Fatalf("layout digest accepted nested OCI index with %s:\n%s", test.name, output)
+			}
+			if !strings.Contains(string(output), test.failure) {
+				t.Fatalf("nested OCI index %s failure = %q, want %q", test.name, output, test.failure)
+			}
+		})
+	}
+}
+
 func TestReleaseEvidenceLayoutDigestRejectsFilesAndUnsafeDirectoryPaths(t *testing.T) {
 	root := repositoryRoot(t)
 	t.Run("archive file", func(t *testing.T) {
@@ -1794,6 +1850,38 @@ func writeReleaseEvidenceOCILayoutWithCompatibility(t *testing.T, path string, i
 		}{name: "manifest.json", data: []byte(`[]`)})
 	}
 	for _, entry := range entries {
+		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
+	}
+	return "sha256:" + manifestDigest
+}
+
+func writeReleaseEvidenceNestedOCIIndexLayout(t *testing.T, path string, nestedIndex func(manifestDigest string, manifestSize int) []byte) string {
+	t.Helper()
+	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Env":[]}}`)
+	layer := []byte("release-evidence-test-layer")
+	configDigest := sha256Hex(config)
+	layerDigest := sha256Hex(layer)
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%d}]}`,
+		configDigest, len(config), layerDigest, len(layer)))
+	manifestDigest := sha256Hex(manifest)
+	innerIndex := nestedIndex(manifestDigest, len(manifest))
+	innerIndexDigest := sha256Hex(innerIndex)
+	outerIndex := []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}]}`,
+		innerIndexDigest, len(innerIndex)))
+	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "oci-layout", data: []byte(`{"imageLayoutVersion":"1.0.0"}`)},
+		{name: "index.json", data: outerIndex},
+		{name: "blobs/sha256/" + configDigest, data: config},
+		{name: "blobs/sha256/" + layerDigest, data: layer},
+		{name: "blobs/sha256/" + manifestDigest, data: manifest},
+		{name: "blobs/sha256/" + innerIndexDigest, data: innerIndex},
+	} {
 		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
 	}
 	return "sha256:" + manifestDigest
