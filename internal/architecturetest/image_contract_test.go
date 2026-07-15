@@ -94,7 +94,7 @@ func TestImageVerifyOCIExportUsesOneSupportedBuildxSolve(t *testing.T) {
 
 	for _, want := range []string{
 		"docker buildx build --platform linux/amd64 --provenance=false --sbom=false",
-		`--output "type=oci,dest=$$layout,tar=false,name=$(IMAGE_VERIFY_TAG)"`,
+		`--output "type=oci,oci-mediatypes=true,dest=$$layout,tar=false,name=$(IMAGE_VERIFY_TAG)"`,
 		"--load \\",
 		`docker image inspect "$(IMAGE_VERIFY_TAG)"`,
 	} {

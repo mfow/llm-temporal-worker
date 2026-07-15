@@ -821,6 +821,12 @@ type ociDescriptor struct {
 	Size      int64  `json:"size"`
 }
 
+const (
+	ociImageIndexMediaType    = "application/vnd.oci.image.index.v1+json"
+	ociImageManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
+	maxOCIImageIndexDepth     = 2
+)
+
 type ociLayoutDocument struct {
 	ImageLayoutVersion string `json:"imageLayoutVersion"`
 }
@@ -871,30 +877,13 @@ func inspectOCILayout(path string) (string, error) {
 	if err := json.Unmarshal(indexEntry.data, &index); err != nil || index.SchemaVersion != 2 || len(index.Manifests) != 1 {
 		return "", errors.New("OCI layout index must contain exactly one manifest descriptor")
 	}
-	manifestDescriptor := index.Manifests[0]
 	requiredEntries := map[string]struct{}{
 		"oci-layout": {},
 		"index.json": {},
 	}
-	if manifestDescriptor.MediaType == "application/vnd.oci.image.index.v1+json" {
-		nestedIndexEntry, nestedIndexPath, err := ociDescriptorEntry(entries, manifestDescriptor)
-		if err != nil {
-			return "", fmt.Errorf("OCI image index descriptor: %w", err)
-		}
-		if nestedIndexEntry.data == nil {
-			return "", errors.New("OCI image index payload is too large")
-		}
-		var nestedIndex ociIndexDocument
-		if err := json.Unmarshal(nestedIndexEntry.data, &nestedIndex); err != nil || nestedIndex.SchemaVersion != 2 || len(nestedIndex.Manifests) != 1 {
-			return "", errors.New("OCI image index must contain exactly one manifest descriptor")
-		}
-		manifestDescriptor = nestedIndex.Manifests[0]
-		requiredEntries[nestedIndexPath] = struct{}{}
-		if manifestDescriptor.MediaType != "application/vnd.oci.image.manifest.v1+json" {
-			return "", errors.New("OCI image index does not reference an OCI image manifest")
-		}
-	} else if manifestDescriptor.MediaType != "application/vnd.oci.image.manifest.v1+json" {
-		return "", errors.New("OCI layout index does not reference an OCI image manifest")
+	manifestDescriptor, err := resolveOCIManifestDescriptor(entries, index.Manifests[0], requiredEntries)
+	if err != nil {
+		return "", err
 	}
 	manifestEntry, manifestPath, err := ociDescriptorEntry(entries, manifestDescriptor)
 	if err != nil {
@@ -941,6 +930,47 @@ func inspectOCILayout(path string) (string, error) {
 		}
 	}
 	return manifestDescriptor.Digest, nil
+}
+
+// resolveOCIManifestDescriptor accepts the exact descriptor shapes emitted by
+// Buildx's OCI exporter: the top-level index may reference an OCI manifest
+// directly or a chain of up to two single-child OCI indexes. The bound avoids
+// accepting arbitrary descriptor graphs while retaining the one extra index
+// layer Buildx adds to an OCI layout.
+func resolveOCIManifestDescriptor(entries map[string]ociLayoutEntry, descriptor ociDescriptor, requiredEntries map[string]struct{}) (ociDescriptor, error) {
+	seenIndexPayloads := make(map[string]struct{})
+	for indexDepth := 0; ; indexDepth++ {
+		switch descriptor.MediaType {
+		case ociImageManifestMediaType:
+			return descriptor, nil
+		case ociImageIndexMediaType:
+			nestedIndexEntry, nestedIndexPath, err := ociDescriptorEntry(entries, descriptor)
+			if err != nil {
+				return ociDescriptor{}, fmt.Errorf("OCI image index descriptor: %w", err)
+			}
+			if _, seen := seenIndexPayloads[nestedIndexPath]; seen {
+				return ociDescriptor{}, errors.New("OCI image index descriptor chain contains a cycle")
+			}
+			if indexDepth >= maxOCIImageIndexDepth {
+				return ociDescriptor{}, errors.New("OCI image index descriptor chain exceeds the supported Buildx depth")
+			}
+			if nestedIndexEntry.data == nil {
+				return ociDescriptor{}, errors.New("OCI image index payload is too large")
+			}
+			var nestedIndex ociIndexDocument
+			if err := json.Unmarshal(nestedIndexEntry.data, &nestedIndex); err != nil || nestedIndex.SchemaVersion != 2 || len(nestedIndex.Manifests) != 1 {
+				return ociDescriptor{}, errors.New("OCI image index must contain exactly one manifest descriptor")
+			}
+			seenIndexPayloads[nestedIndexPath] = struct{}{}
+			requiredEntries[nestedIndexPath] = struct{}{}
+			descriptor = nestedIndex.Manifests[0]
+		default:
+			if indexDepth == 0 {
+				return ociDescriptor{}, errors.New("OCI layout index does not reference an OCI image manifest")
+			}
+			return ociDescriptor{}, errors.New("OCI image index does not reference an OCI image manifest")
+		}
+	}
 }
 
 // Docker's OCI exporter may retain a compatibility manifest.json beside the

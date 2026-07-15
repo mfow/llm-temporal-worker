@@ -114,6 +114,119 @@ func TestReleaseEvidenceLayoutDigestUsesSingleChildOCIIndexManifestDescriptor(t 
 	}
 }
 
+func TestReleaseEvidenceLayoutDigestAcceptsBuildxDoubleNestedOCIIndexManifestDescriptor(t *testing.T) {
+	root := repositoryRoot(t)
+	path := filepath.Join(t.TempDir(), "image.oci")
+	want := writeReleaseEvidenceOCIIndexChainLayout(t, path, 2, 1, "application/vnd.oci.image.manifest.v1+json")
+
+	output, err := runReleaseEvidenceLayoutDigest(root, path)
+	if err != nil {
+		t.Fatalf("layout digest rejected the bounded Buildx OCI index chain: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(string(output)); got != want {
+		t.Fatalf("layout digest = %q, want Buildx OCI image manifest digest %q", got, want)
+	}
+}
+
+func TestReleaseEvidenceLayoutDigestRejectsUnsafeBuildxOCIIndexChains(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, test := range []struct {
+		name                    string
+		nestedIndexCount        int
+		terminalDescriptorCount int
+		terminalDescriptorType  string
+		mutate                  func(t *testing.T, path string)
+		failure                 string
+	}{
+		{
+			name:                    "branching inner index",
+			nestedIndexCount:        2,
+			terminalDescriptorCount: 2,
+			terminalDescriptorType:  "application/vnd.oci.image.manifest.v1+json",
+			failure:                 "OCI image index must contain exactly one manifest descriptor",
+		},
+		{
+			name:                    "unknown terminal descriptor type",
+			nestedIndexCount:        2,
+			terminalDescriptorCount: 1,
+			terminalDescriptorType:  "application/vnd.docker.distribution.manifest.v2+json",
+			failure:                 "OCI image index does not reference an OCI image manifest",
+		},
+		{
+			name:                    "third nested OCI index",
+			nestedIndexCount:        3,
+			terminalDescriptorCount: 1,
+			terminalDescriptorType:  "application/vnd.oci.image.manifest.v1+json",
+			failure:                 "OCI image index descriptor chain exceeds the supported Buildx depth",
+		},
+		{
+			name:                    "mismatched nested index size",
+			nestedIndexCount:        2,
+			terminalDescriptorCount: 1,
+			terminalDescriptorType:  "application/vnd.oci.image.manifest.v1+json",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				indexPath := filepath.Join(path, "index.json")
+				data, err := os.ReadFile(indexPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var index map[string]any
+				if err := json.Unmarshal(data, &index); err != nil {
+					t.Fatal(err)
+				}
+				manifests, ok := index["manifests"].([]any)
+				if !ok || len(manifests) != 1 {
+					t.Fatalf("test OCI index manifest list = %#v", index["manifests"])
+				}
+				descriptor, ok := manifests[0].(map[string]any)
+				if !ok {
+					t.Fatalf("test OCI index descriptor = %#v", manifests[0])
+				}
+				size, ok := descriptor["size"].(float64)
+				if !ok {
+					t.Fatalf("test OCI index descriptor size = %#v", descriptor["size"])
+				}
+				descriptor["size"] = size + 1
+				updated, err := json.Marshal(index)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeReleaseArtifact(t, indexPath, updated)
+			},
+			failure: "does not match a retained payload",
+		},
+		{
+			name:                    "unreferenced nested payload",
+			nestedIndexCount:        2,
+			terminalDescriptorCount: 1,
+			terminalDescriptorType:  "application/vnd.oci.image.manifest.v1+json",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				data := []byte("unreferenced nested OCI payload")
+				writeReleaseArtifact(t, filepath.Join(path, "blobs", "sha256", sha256Hex(data)), data)
+			},
+			failure: "unreferenced payload",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "image.oci")
+			writeReleaseEvidenceOCIIndexChainLayout(t, path, test.nestedIndexCount, test.terminalDescriptorCount, test.terminalDescriptorType)
+			if test.mutate != nil {
+				test.mutate(t, path)
+			}
+
+			output, err := runReleaseEvidenceLayoutDigest(root, path)
+			if err == nil {
+				t.Fatalf("layout digest accepted Buildx OCI index chain with %s:\n%s", test.name, output)
+			}
+			if !strings.Contains(string(output), test.failure) {
+				t.Fatalf("Buildx OCI index chain %s failure = %q, want %q", test.name, output, test.failure)
+			}
+		})
+	}
+}
+
 func TestReleaseEvidenceLayoutDigestRejectsUnsafeNestedOCIIndexes(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, test := range []struct {
@@ -132,7 +245,7 @@ func TestReleaseEvidenceLayoutDigestRejectsUnsafeNestedOCIIndexes(t *testing.T) 
 		{
 			name: "non-image child descriptor",
 			nestedIndex: func(manifestDigest string, manifestSize int) []byte {
-				return []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}]}`,
+				return []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.docker.distribution.manifest.v2+json","digest":"sha256:%s","size":%d}]}`,
 					manifestDigest, manifestSize))
 			},
 			failure: "OCI image index does not reference an OCI image manifest",
@@ -1882,6 +1995,56 @@ func writeReleaseEvidenceNestedOCIIndexLayout(t *testing.T, path string, nestedI
 		{name: "blobs/sha256/" + manifestDigest, data: manifest},
 		{name: "blobs/sha256/" + innerIndexDigest, data: innerIndex},
 	} {
+		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
+	}
+	return "sha256:" + manifestDigest
+}
+
+func writeReleaseEvidenceOCIIndexChainLayout(t *testing.T, path string, nestedIndexCount, terminalDescriptorCount int, terminalDescriptorType string) string {
+	t.Helper()
+	if nestedIndexCount < 1 || terminalDescriptorCount < 1 {
+		t.Fatal("test OCI index chain requires positive descriptor counts")
+	}
+	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Env":[]}}`)
+	layer := []byte("release-evidence-test-layer")
+	configDigest := sha256Hex(config)
+	layerDigest := sha256Hex(layer)
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%d}]}`,
+		configDigest, len(config), layerDigest, len(layer)))
+	manifestDigest := sha256Hex(manifest)
+	terminalDescriptor := fmt.Sprintf(`{"mediaType":"%s","digest":"sha256:%s","size":%d}`,
+		terminalDescriptorType, manifestDigest, len(manifest))
+	children := make([]string, terminalDescriptorCount)
+	for index := range children {
+		children[index] = terminalDescriptor
+	}
+	entries := []struct {
+		name string
+		data []byte
+	}{
+		{name: "oci-layout", data: []byte(`{"imageLayoutVersion":"1.0.0"}`)},
+		{name: "blobs/sha256/" + configDigest, data: config},
+		{name: "blobs/sha256/" + layerDigest, data: layer},
+		{name: "blobs/sha256/" + manifestDigest, data: manifest},
+	}
+	for index := 0; index < nestedIndexCount; index++ {
+		nestedIndex := []byte(`{"schemaVersion":2,"manifests":[` + strings.Join(children, ",") + `]}`)
+		nestedIndexDigest := sha256Hex(nestedIndex)
+		entries = append(entries, struct {
+			name string
+			data []byte
+		}{name: "blobs/sha256/" + nestedIndexDigest, data: nestedIndex})
+		children = []string{fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}`,
+			nestedIndexDigest, len(nestedIndex))}
+	}
+	entries = append(entries, struct {
+		name string
+		data []byte
+	}{name: "index.json", data: []byte(`{"schemaVersion":2,"manifests":[` + strings.Join(children, ",") + `]}`)})
+	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
 		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
 	}
 	return "sha256:" + manifestDigest
