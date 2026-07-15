@@ -872,7 +872,28 @@ func inspectOCILayout(path string) (string, error) {
 		return "", errors.New("OCI layout index must contain exactly one manifest descriptor")
 	}
 	manifestDescriptor := index.Manifests[0]
-	if manifestDescriptor.MediaType != "application/vnd.oci.image.manifest.v1+json" {
+	requiredEntries := map[string]struct{}{
+		"oci-layout": {},
+		"index.json": {},
+	}
+	if manifestDescriptor.MediaType == "application/vnd.oci.image.index.v1+json" {
+		nestedIndexEntry, nestedIndexPath, err := ociDescriptorEntry(entries, manifestDescriptor)
+		if err != nil {
+			return "", fmt.Errorf("OCI image index descriptor: %w", err)
+		}
+		if nestedIndexEntry.data == nil {
+			return "", errors.New("OCI image index payload is too large")
+		}
+		var nestedIndex ociIndexDocument
+		if err := json.Unmarshal(nestedIndexEntry.data, &nestedIndex); err != nil || nestedIndex.SchemaVersion != 2 || len(nestedIndex.Manifests) != 1 {
+			return "", errors.New("OCI image index must contain exactly one manifest descriptor")
+		}
+		manifestDescriptor = nestedIndex.Manifests[0]
+		requiredEntries[nestedIndexPath] = struct{}{}
+		if manifestDescriptor.MediaType != "application/vnd.oci.image.manifest.v1+json" {
+			return "", errors.New("OCI image index does not reference an OCI image manifest")
+		}
+	} else if manifestDescriptor.MediaType != "application/vnd.oci.image.manifest.v1+json" {
 		return "", errors.New("OCI layout index does not reference an OCI image manifest")
 	}
 	manifestEntry, manifestPath, err := ociDescriptorEntry(entries, manifestDescriptor)
@@ -899,12 +920,8 @@ func inspectOCILayout(path string) (string, error) {
 	if err := rejectSecretLikeContent("OCI image config", configEntry.data); err != nil {
 		return "", err
 	}
-	requiredEntries := map[string]struct{}{
-		"oci-layout": {},
-		"index.json": {},
-		manifestPath: {},
-		configPath:   {},
-	}
+	requiredEntries[manifestPath] = struct{}{}
+	requiredEntries[configPath] = struct{}{}
 	for _, layer := range manifest.Layers {
 		if !strings.HasPrefix(layer.MediaType, "application/vnd.oci.image.layer.v1.") {
 			return "", errors.New("OCI manifest has an invalid layer descriptor")
