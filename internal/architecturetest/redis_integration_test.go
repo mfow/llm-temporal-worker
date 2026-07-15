@@ -60,6 +60,32 @@ func TestRedisPersistenceReopensAtCurrentContainerAddressAfterRestart(t *testing
 	}
 }
 
+func TestRedisPersistenceCleanupUsesRestartedClient(t *testing.T) {
+	root := repositoryRoot(t)
+	testSource, err := os.ReadFile(filepath.Join(root, "storage", "redis", "shared_state_conformance_integration_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const start = "func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {"
+	const end = "\nfunc TestLiveRedisConfiguredPersistenceGateAllowsOverriddenPrefix"
+	persistenceTest := string(testSource)
+	startOffset := strings.Index(persistenceTest, start)
+	if startOffset < 0 {
+		t.Fatal("Redis restart persistence test is missing")
+	}
+	endOffset := strings.Index(persistenceTest[startOffset:], end)
+	if endOffset < 0 {
+		t.Fatal("Redis restart persistence test boundary is missing")
+	}
+	persistenceTest = persistenceTest[startOffset : startOffset+endOffset]
+	if strings.Contains(persistenceTest, "cleanupLivePrefix(t, client, keys.Prefix)") {
+		t.Fatal("Redis restart persistence cleanup must not retain the pre-restart client")
+	}
+	if !strings.Contains(persistenceTest, "cleanupLivePrefix(t, restartedClient, keys.Prefix)") {
+		t.Fatal("Redis restart persistence cleanup must use the restarted client")
+	}
+}
+
 func redisIntegrationTarget(t *testing.T, makefile string) string {
 	t.Helper()
 	const start = "redis-integration:\n"

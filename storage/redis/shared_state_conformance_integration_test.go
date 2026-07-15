@@ -140,7 +140,6 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 
 	now := time.Now().UTC()
 	keys := liveKeyOptions("restart")
-	cleanupLivePrefix(t, client, keys.Prefix)
 	store, err := NewAdmissionStore(AdmissionOptions{
 		Client: client,
 		Mode:   AdmissionModeFunction,
@@ -156,6 +155,7 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	}
 	runLiveRedisDocker(t, "restart", container)
 	restartedClient := reopenLiveRedisAfterRestart(t, container)
+	cleanupLivePrefix(t, restartedClient, keys.Prefix)
 	restartedStore, err := NewAdmissionStore(AdmissionOptions{
 		Client: restartedClient,
 		Mode:   AdmissionModeFunction,
