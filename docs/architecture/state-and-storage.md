@@ -24,9 +24,16 @@ preloaded script, but neither mode lets the runtime load, replace, or rewrite
 shared Redis code. A transport error is never retried blindly; the caller reads
 the operation or continuation index to resolve whether the write committed.
 Offline command/function harnesses exercise the same store ports without
-requiring a Redis daemon. The live gate remains a pinned Redis integration run
-with Functions enabled and persistence settings matching the deployment
-profile.
+requiring a Redis daemon. `storage/conformance` then runs the same public
+admission and continuation contract against memory and the pinned live Redis
+fixture. `make redis-integration` creates one uniquely named loopback-only
+container, discovers its ephemeral port, enables the configured AOF/RDB
+persistence profile, explicitly provisions the immutable Function only inside
+that test dependency, and removes it on completion. It tests a post-mutation
+timeout resolved by a read, restart persistence, fail-closed Function/Lua
+identity mismatch, and the single configured hash slot. Failure logs pass
+through the repository redactor; the trusted master workflow runs this live
+gate while pull-request CI remains offline.
 
 Budget hashes receive a Redis TTL only when the operation has an explicit
 expiry; the TTL is the operation retention plus the longest matching window.

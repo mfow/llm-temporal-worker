@@ -148,7 +148,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Run live Redis conformance
+      - name: Run trusted Redis shared-state conformance
+        if: steps.go.outputs.present == 'true'
+        run: make redis-integration
+
+      - name: Run trusted Redis readiness recovery
         if: steps.go.outputs.present == 'true'
         run: make readiness-integration
 

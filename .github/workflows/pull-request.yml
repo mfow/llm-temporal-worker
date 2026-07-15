@@ -116,10 +116,6 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: make security-verify
 
-      - name: Run live Redis conformance
-        if: steps.go.outputs.present == 'true' && github.event.pull_request.head.repo.full_name == github.repository
-        run: make readiness-integration
-
       - name: Run authorized Compose lifecycle
         if: steps.go.outputs.present == 'true' && github.event.pull_request.head.repo.full_name == github.repository
         run: LLMTW_COMPOSE_LIVE=1 make compose-live-integration

@@ -194,8 +194,10 @@ manifest.
 
 ### Store conformance
 
-One black-box suite accepts a `StoreFactory` and runs unchanged against memory
-and a real Redis container. It tests:
+`storage/conformance` holds one black-box suite that accepts a `StoreFactory`.
+The memory adapter runs it in the ordinary storage test suite; the Redis adapter
+runs the unchanged suite against the isolated pinned daemon started by
+`make redis-integration`. It tests:
 
 - all operation transitions and invalid compare-and-set tokens;
 - idempotent Begin/Complete/Fail;
@@ -215,6 +217,20 @@ and a real Redis container. It tests:
 Concurrency tests coordinate goroutines with barriers rather than sleeps and
 assert accepted total never exceeds the limit. Race tests run for memory and
 domain packages.
+
+Run the full shared-state contract locally with:
+
+```sh
+make redis-integration
+```
+
+The target starts one uniquely named, loopback-only Redis 7.4.2 image pinned
+by digest, discovers its ephemeral port, enables AOF plus snapshot persistence,
+and removes only that container on completion. It exercises timeout-after-write
+read resolution, Function/Lua mismatch handling, configured persistence across
+a restart, and the configured single hash slot. Redis logs are emitted only on
+failure after redaction. The target is invoked by the trusted master workflow,
+not the pull-request workflow.
 
 ### Temporal tests
 

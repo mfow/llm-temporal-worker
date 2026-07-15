@@ -7,13 +7,15 @@ KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 READINESS_REDIS_PORT ?= 16379
+REDIS_INTEGRATION_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+REDIS_INTEGRATION_CONTAINER_PREFIX ?= llmtw-redis-integration
 IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
 IMAGE_VERIFY_VERSION ?= image-verify
 IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= go1.26.5
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -63,6 +65,41 @@ readiness-integration:
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi
+
+# Runs the black-box StoreFactory contract against memory and one fresh,
+# digest-pinned Redis daemon. The target discovers an ephemeral loopback port
+# for its own uniquely named container, explicitly enables durable AOF/RDB
+# settings, and removes only that container. Redis output is shown only on
+# failure and always passes through the repository redactor.
+redis-integration:
+	@command -v docker >/dev/null 2>&1 || { \
+		echo "redis-integration requires Docker" >&2; \
+		exit 2; \
+	}
+	@docker info >/dev/null 2>&1 || { \
+		echo "redis-integration requires a running Docker daemon" >&2; \
+		exit 2; \
+	}
+	@set -eu; \
+		container="$(REDIS_INTEGRATION_CONTAINER_PREFIX)-$$(date +%s)-$$$$"; \
+		cleanup() { \
+			status=$$?; \
+			if [ "$$status" -ne 0 ]; then \
+				docker logs "$$container" 2>&1 | LLMTW_LOG_REDACT_REDIS_PASSWORD=not-configured LLMTW_LOG_REDACT_POSTGRES_PASSWORD=not-configured LLMTW_LOG_REDACT_MOCK_API_KEY=not-configured LLMTW_LOG_REDACT_CONTINUATION_HMAC=not-configured scripts/redact-compose-logs.sh >&2 || true; \
+			fi; \
+			docker rm -f "$$container" >/dev/null 2>&1 || true; \
+			exit "$$status"; \
+		}; \
+		trap cleanup EXIT; \
+		trap 'exit 130' HUP INT TERM; \
+		docker run --detach --name "$$container" --publish 127.0.0.1::6379 "$(REDIS_INTEGRATION_IMAGE)" redis-server --appendonly yes --appendfsync always --save "60 1" --maxmemory-policy noeviction >/dev/null; \
+		port="$$(docker inspect --format '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' "$$container")"; \
+		case "$$port" in \
+			''|*[!0-9]*) echo "redis-integration could not discover its loopback Redis port" >&2; exit 1 ;; \
+		esac; \
+		$(GO) test -count=1 ./storage/conformance ./storage/memory ./storage/redis; \
+		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; \
+		echo "redis-integration passed (isolated pinned Redis)"
 
 # Builds a fresh local image from the checked-out revision, then delegates all
 # runtime assertions to the Docker-backed integration test. The test runs the
