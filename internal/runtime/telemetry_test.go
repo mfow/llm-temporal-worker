@@ -57,3 +57,33 @@ func TestRuntimeConstructsConfiguredTelemetryAndFlushesOnShutdown(t *testing.T) 
 		}
 	}
 }
+
+func TestRuntimeWithMetricsDisabledConstructsAndRunsLifecycle(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, controller, &closed)
+	data := []byte(strings.Replace(string(runtimeConfig(t)), "metrics:\n    enabled: true", "metrics:\n    enabled: false", 1))
+
+	runtime, err := New(context.Background(), data, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Metrics != nil {
+		t.Fatal("disabled metrics constructed a recording metrics registry")
+	}
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			_ = runtime.Shutdown(context.Background())
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(shutdownContext); err != nil {
+		t.Fatal(err)
+	}
+	if !controller.started.Load() || !controller.stopped.Load() || !closed.Load() {
+		t.Fatalf("disabled metrics lifecycle started=%v stopped=%v clients-closed=%v", controller.started.Load(), controller.stopped.Load(), closed.Load())
+	}
+}

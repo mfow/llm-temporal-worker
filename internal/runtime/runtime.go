@@ -272,6 +272,10 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 
 func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	if !configuration.Telemetry.Metrics.Enabled {
+		// A nil Metrics is the intentional disabled implementation: its Handler
+		// supplies a 404 no-op and every recording consumer treats nil as no-op.
+		// Do not replace it with an empty Metrics value, whose collectors are not
+		// initialized and therefore cannot safely record.
 		return nil, nil
 	}
 	endpoints := make([]string, 0, len(configuration.Endpoints))
