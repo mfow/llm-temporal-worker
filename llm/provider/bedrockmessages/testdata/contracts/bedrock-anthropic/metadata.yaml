@@ -9,6 +9,7 @@ redactions:
 capability_facts:
   usage: supported
   streaming: supported
+  stream_decoder: supported
   strict_loss: supported
   best_effort: unsupported
   service_class: supported
