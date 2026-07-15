@@ -67,7 +67,11 @@ readiness-integration:
 # Builds a fresh local image from the checked-out revision, then delegates all
 # runtime assertions to the Docker-backed integration test. The test runs the
 # image directly as its numeric non-root user with an explicitly read-only
-# root filesystem and the sole writable /tmp tmpfs.
+# root filesystem and the sole writable /tmp tmpfs. When release evidence
+# requests an OCI layout, one Docker-compatible archive with explicit OCI media
+# types is loaded for runtime testing and extracted for the evidence consumers.
+# Its private archive staging directory is trap-cleaned; the caller retains the
+# extracted layout for the downstream evidence steps.
 image-verify:
 	@command -v docker >/dev/null 2>&1 || { \
 		echo "image-verify requires Docker" >&2; \
@@ -88,16 +92,22 @@ image-verify:
 			esac; \
 			mkdir -p "$$(dirname "$$layout")"; \
 			test ! -e "$$layout" && test ! -L "$$layout" || { echo "image-verify OCI layout already exists: $$layout" >&2; exit 2; }; \
+			archive_directory="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-image-verify.XXXXXX")"; \
+			archive="$$archive_directory/image.tar"; \
+			cleanup_archive() { rm -rf -- "$$archive_directory"; }; \
+			trap cleanup_archive EXIT HUP INT TERM; \
 			docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
 				--tag "$(IMAGE_VERIFY_TAG)" \
-				--output "type=oci,oci-mediatypes=true,dest=$$layout,tar=false,name=$(IMAGE_VERIFY_TAG)" \
-				--load \
+				--output "type=docker,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)" \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
 				--build-arg REVISION="$$revision" \
 				--build-arg BUILD_TIME="$$build_time" \
 				--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
 				--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
 				.; \
+			docker image load --input "$$archive" >/dev/null; \
+			mkdir "$$layout"; \
+			tar -xf "$$archive" -C "$$layout"; \
 			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
 		else \
 			docker build --tag "$(IMAGE_VERIFY_TAG)" \

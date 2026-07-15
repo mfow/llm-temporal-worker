@@ -97,6 +97,44 @@ func TestReleaseEvidenceLayoutDigestAcceptsDockerOCICompatibilityMetadata(t *tes
 	}
 }
 
+func TestReleaseEvidenceLayoutDigestRejectsDockerTopLevelDescriptorWithCompatibilityMetadata(t *testing.T) {
+	root := repositoryRoot(t)
+	path := filepath.Join(t.TempDir(), "image.oci")
+	writeReleaseEvidenceOCILayoutWithCompatibilityMetadata(t, path)
+
+	indexPath := filepath.Join(path, "index.json")
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index map[string]any
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatal(err)
+	}
+	manifests, ok := index["manifests"].([]any)
+	if !ok || len(manifests) != 1 {
+		t.Fatalf("test OCI index manifest list = %#v", index["manifests"])
+	}
+	descriptor, ok := manifests[0].(map[string]any)
+	if !ok {
+		t.Fatalf("test OCI index descriptor = %#v", manifests[0])
+	}
+	descriptor["mediaType"] = "application/vnd.docker.distribution.manifest.v2+json"
+	updated, err := json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeReleaseArtifact(t, indexPath, updated)
+
+	output, err := runReleaseEvidenceLayoutDigest(root, path)
+	if err == nil {
+		t.Fatalf("layout digest accepted a Docker top-level descriptor with compatibility metadata:\n%s", output)
+	}
+	if !strings.Contains(string(output), "OCI layout index does not reference an OCI image manifest") {
+		t.Fatalf("Docker top-level descriptor failure = %q", output)
+	}
+}
+
 func TestReleaseEvidenceLayoutDigestUsesSingleChildOCIIndexManifestDescriptor(t *testing.T) {
 	root := repositoryRoot(t)
 	path := filepath.Join(t.TempDir(), "image.oci")
