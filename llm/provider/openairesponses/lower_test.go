@@ -80,6 +80,21 @@ func TestLoweringPreservesTypedInputAndControls(t *testing.T) {
 	}
 }
 
+func TestLowerContinuationUsesResolvedPinnedProviderHandle(t *testing.T) {
+	got, err := lowerContinuation(&llm.Continuation{
+		Handle:     "resp-parent",
+		EndpointID: "direct-responses",
+		Model:      "gpt-contract",
+		Pinned:     true,
+	})
+	if err != nil {
+		t.Fatalf("lowerContinuation() error = %v", err)
+	}
+	if got != "resp-parent" {
+		t.Fatalf("lowerContinuation() = %q, want resp-parent", got)
+	}
+}
+
 func TestLoweringMapsOnlyPublicServiceClasses(t *testing.T) {
 	for _, test := range []struct {
 		class llm.ServiceClass

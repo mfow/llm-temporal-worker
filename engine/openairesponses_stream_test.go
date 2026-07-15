@@ -50,6 +50,16 @@ func TestEngineStreamDispatchesDirectOpenAIResponsesTypedEvents(t *testing.T) {
 			if err := stream.Close(); err != nil {
 				t.Fatalf("EventStream.Close() error = %v", err)
 			}
+			if len(events) == 0 {
+				t.Fatal("stream emitted no events")
+			}
+			switch terminal := events[len(events)-1].(type) {
+			case llm.ResponseCompleted:
+			case llm.StreamErrored:
+				t.Fatalf("stream terminal error before transport assertion = %v", terminal.Err)
+			default:
+				t.Fatalf("stream terminal = %T, want ResponseCompleted", terminal)
+			}
 
 			wire := transport.lastRequest(t)
 			if got := wire["stream"]; got != true {

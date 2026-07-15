@@ -398,6 +398,12 @@ func lowerContinuation(continuation *llm.Continuation) (string, error) {
 	if strings.HasPrefix(continuation.Handle, "openai-responses:") {
 		return strings.TrimPrefix(continuation.Handle, "openai-responses:"), nil
 	}
+	if continuation.Pinned && continuation.Handle != "" {
+		// The engine resolves a public continuation into the pinned provider
+		// handle before compiling the selected route. Responses uses that handle
+		// directly as previous_response_id.
+		return continuation.Handle, nil
+	}
 	return "", fmt.Errorf("continuation does not contain an OpenAI Responses response ID")
 }
 
