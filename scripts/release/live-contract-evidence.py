@@ -32,8 +32,15 @@ PROFILES = frozenset(
         "bedrock-anthropic",
     }
 )
-SERVICE_CLASSES = frozenset({"economy", "standard", "priority"})
-REPORTED_COST_METHODS = frozenset({"provider_reported", "usage"})
+ACTUAL_SERVICE_CLASS = "standard"
+REPORTED_COST_METHODS = frozenset(
+    {
+        "provider_reported",
+        "usage",
+        "openrouter_reported",
+        "exa_reported",
+    }
+)
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 RESULT_LINE = re.compile(
@@ -140,7 +147,7 @@ def evidence_from_result(result: dict[str, Any], selected_profile: str, timestam
     micro_usd = int(result["actual_micro_usd"])
     method = result["cost_method"]
     service_class = result["actual_service_class"]
-    if service_class not in SERVICE_CLASSES or service_class != "standard":
+    if service_class != ACTUAL_SERVICE_CLASS:
         raise rejected()
     if micro_usd > CEILING_MICRO_USD:
         raise rejected()
@@ -195,7 +202,7 @@ def validate_evidence(candidate: Any) -> dict[str, Any]:
     if candidate["tenant"] != TENANT or exact_int(candidate["ceiling_micro_usd"]) != CEILING_MICRO_USD:
         raise rejected()
     service_class = candidate["actual_service_class"]
-    if not isinstance(service_class, str) or service_class not in SERVICE_CLASSES or service_class != "standard":
+    if service_class != ACTUAL_SERVICE_CLASS:
         raise rejected()
     spend = candidate["actual_spend"]
     if not isinstance(spend, dict) or set(spend) != {"known", "micro_usd", "method"}:

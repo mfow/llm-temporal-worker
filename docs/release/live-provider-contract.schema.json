@@ -63,6 +63,8 @@
           "enum": [
             "provider_reported",
             "usage",
+            "openrouter_reported",
+            "exa_reported",
             "not_reported"
           ]
         }
@@ -81,7 +83,9 @@
               "method": {
                 "enum": [
                   "provider_reported",
-                  "usage"
+                  "usage",
+                  "openrouter_reported",
+                  "exa_reported"
                 ]
               }
             }
@@ -115,11 +119,7 @@
       "$ref": "#/$defs/safe_identifier"
     },
     "actual_service_class": {
-      "enum": [
-        "economy",
-        "standard",
-        "priority"
-      ]
+      "const": "standard"
     },
     "continuation_verified": {
       "type": "boolean"

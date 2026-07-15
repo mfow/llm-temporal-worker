@@ -76,7 +76,8 @@ A successful live test emits only the following release-evidence fields:
 
 - profile and fixed tenant;
 - provider request and response IDs;
-- actual normalized service class;
+- actual normalized service class, always `standard` for this omitted-class
+  probe;
 - whether actual spend was reported, its microUSD amount when known, and the
   provider cost method;
 - whether a pinned continuation was verified.
@@ -87,12 +88,13 @@ it does not add request tracing that could capture these values.
 
 Responses must report positive input and output token usage, valid actual
 `standard` service class, request and response IDs, and a completed status.
-When a provider reports cost, it must be USD, name its method, and be at or
-below the fixed ceiling. When cost is not reported, the evidence records
-`cost_method=not_reported`; the suite does not infer a number from a pricing
-catalog. OpenRouter and Exa are allowed to omit a cost status only when the
-reported actual cost fields themselves are valid. A live failure never updates
-capabilities, price catalogs, limits, or fixtures.
+When a provider reports cost, it must be USD, name one of the closed reported
+methods (`provider_reported`, `usage`, `openrouter_reported`, or
+`exa_reported`), and be at or below the fixed ceiling. When cost is not
+reported, the evidence records `cost_method=not_reported`; the suite does not
+infer a number from a pricing catalog. OpenRouter and Exa are allowed to omit a
+cost status only when the reported actual cost fields themselves are valid. A
+live failure never updates capabilities, price catalogs, limits, or fixtures.
 
 ## Manual protected workflow
 

@@ -100,15 +100,16 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 func TestLiveContractEvidenceRecorderRejectsUnsafeOrInconsistentInputWithoutEchoingIt(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, test := range []struct {
-		name       string
-		profile    string
-		logProfile string
-		requestID  string
-		known      bool
-		microUSD   int
-		method     string
-		continued  bool
-		secret     string
+		name         string
+		profile      string
+		logProfile   string
+		requestID    string
+		known        bool
+		microUSD     int
+		method       string
+		serviceClass string
+		continued    bool
+		secret       string
 	}{
 		{
 			name:       "unsafe request identifier",
@@ -221,6 +222,27 @@ func TestLiveContractEvidenceRecorderRejectsUnsafeOrInconsistentInputWithoutEcho
 			secret:     "AiZaunsafe-live-secret",
 		},
 		{
+			name:       "unrecognized reported cost method",
+			profile:    "openai-responses",
+			logProfile: "openai-responses",
+			requestID:  "req_123",
+			known:      true,
+			microUSD:   17,
+			method:     "catalog_usage",
+			continued:  true,
+		},
+		{
+			name:         "nonstandard actual service class",
+			profile:      "openai-responses",
+			logProfile:   "openai-responses",
+			requestID:    "req_123",
+			known:        true,
+			microUSD:     17,
+			method:       "provider_reported",
+			serviceClass: "priority",
+			continued:    true,
+		},
+		{
 			name:       "spend over ceiling",
 			profile:    "openai-responses",
 			logProfile: "openai-responses",
@@ -256,7 +278,11 @@ func TestLiveContractEvidenceRecorderRejectsUnsafeOrInconsistentInputWithoutEcho
 			rawPath := filepath.Join(directory, "live-contract.raw.log")
 			evidencePath := filepath.Join(directory, "evidence.json")
 			logPath := filepath.Join(directory, "live-contract.log")
-			writeLiveContractRawLog(t, rawPath, test.logProfile, test.requestID, "resp_456", test.known, test.microUSD, test.method, test.continued)
+			serviceClass := test.serviceClass
+			if serviceClass == "" {
+				serviceClass = "standard"
+			}
+			writeLiveContractRawLogWithServiceClass(t, rawPath, test.logProfile, test.requestID, "resp_456", serviceClass, test.known, test.microUSD, test.method, test.continued)
 
 			output, err := runLiveContractEvidence(root,
 				"record",
@@ -281,40 +307,52 @@ func TestLiveContractEvidenceRecorderRejectsUnsafeOrInconsistentInputWithoutEcho
 	}
 }
 
-func TestLiveContractEvidenceRecorderAllowsTheCheckedInUsageCostMethod(t *testing.T) {
+func TestLiveContractEvidenceRecorderAllowsEachSupportedReportedCostMethod(t *testing.T) {
 	root := repositoryRoot(t)
-	directory := t.TempDir()
-	rawPath := filepath.Join(directory, "live-contract.raw.log")
-	evidencePath := filepath.Join(directory, "evidence.json")
-	logPath := filepath.Join(directory, "live-contract.log")
-	writeLiveContractRawLog(t, rawPath, "openai-responses", "req_123", "resp_456", true, 17, "usage", true)
+	for _, test := range []struct {
+		profile string
+		method  string
+	}{
+		{profile: "openai-responses", method: "provider_reported"},
+		{profile: "openai-responses", method: "usage"},
+		{profile: "openrouter-chat", method: "openrouter_reported"},
+		{profile: "exa-chat", method: "exa_reported"},
+	} {
+		t.Run(test.method, func(t *testing.T) {
+			directory := t.TempDir()
+			rawPath := filepath.Join(directory, "live-contract.raw.log")
+			evidencePath := filepath.Join(directory, "evidence.json")
+			logPath := filepath.Join(directory, "live-contract.log")
+			writeLiveContractRawLog(t, rawPath, test.profile, "req_123", "resp_456", true, 17, test.method, true)
 
-	output, err := runLiveContractEvidence(root,
-		"record",
-		"--profile", "openai-responses",
-		"--input", rawPath,
-		"--evidence", evidencePath,
-		"--log", logPath,
-		"--generated-at", "2026-07-15T00:00:00Z",
-	)
-	if err != nil {
-		t.Fatalf("record usage-method evidence: %v\\n%s", err, output)
-	}
+			output, err := runLiveContractEvidence(root,
+				"record",
+				"--profile", test.profile,
+				"--input", rawPath,
+				"--evidence", evidencePath,
+				"--log", logPath,
+				"--generated-at", "2026-07-15T00:00:00Z",
+			)
+			if err != nil {
+				t.Fatalf("record %s evidence: %v\\n%s", test.method, err, output)
+			}
 
-	data, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var evidence struct {
-		ActualSpend struct {
-			Method string `json:"method"`
-		} `json:"actual_spend"`
-	}
-	if err := json.Unmarshal(data, &evidence); err != nil {
-		t.Fatalf("decode usage-method evidence: %v", err)
-	}
-	if evidence.ActualSpend.Method != "usage" {
-		t.Fatalf("actual spend method = %q, want usage", evidence.ActualSpend.Method)
+			data, err := os.ReadFile(evidencePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var evidence struct {
+				ActualSpend struct {
+					Method string `json:"method"`
+				} `json:"actual_spend"`
+			}
+			if err := json.Unmarshal(data, &evidence); err != nil {
+				t.Fatalf("decode %s evidence: %v", test.method, err)
+			}
+			if evidence.ActualSpend.Method != test.method {
+				t.Fatalf("actual spend method = %q, want %q", evidence.ActualSpend.Method, test.method)
+			}
+		})
 	}
 }
 
@@ -354,8 +392,47 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 		t.Fatalf("live provider actual spend properties = %#v, want mapping", actualSpend["properties"])
 	}
 	method, ok := spendProperties["method"].(map[string]any)
-	if !ok || !sameStringSet(stringSequence(t, "live provider cost method", method, "enum"), []string{"provider_reported", "usage", "not_reported"}) {
+	if !ok || !sameStringSet(stringSequence(t, "live provider cost method", method, "enum"), []string{"provider_reported", "usage", "openrouter_reported", "exa_reported", "not_reported"}) {
 		t.Fatalf("live provider evidence cost method must remain closed to recorded methods, got %#v", spendProperties["method"])
+	}
+	allOfSpend, ok := actualSpend["allOf"].([]any)
+	if !ok {
+		t.Fatalf("live provider actual spend allOf = %#v, want sequence", actualSpend["allOf"])
+	}
+	var knownMethod map[string]any
+	for _, rawRule := range allOfSpend {
+		rule, ok := rawRule.(map[string]any)
+		if !ok {
+			continue
+		}
+		condition, ok := rule["if"].(map[string]any)
+		if !ok {
+			continue
+		}
+		conditionProperties, ok := condition["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		known, ok := conditionProperties["known"].(map[string]any)
+		if !ok || known["const"] != true {
+			continue
+		}
+		then, ok := rule["then"].(map[string]any)
+		if !ok {
+			continue
+		}
+		thenProperties, ok := then["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		knownMethod, _ = thenProperties["method"].(map[string]any)
+	}
+	if !sameStringSet(stringSequence(t, "known live provider cost method", knownMethod, "enum"), []string{"provider_reported", "usage", "openrouter_reported", "exa_reported"}) {
+		t.Fatalf("known live provider evidence cost method must remain closed to provider-reported methods, got %#v", knownMethod)
+	}
+	actualServiceClass, ok := properties["actual_service_class"].(map[string]any)
+	if !ok || actualServiceClass["const"] != "standard" {
+		t.Fatalf("live provider actual service class must be const standard, got %#v", properties["actual_service_class"])
 	}
 	definitions, ok := schema["$defs"].(map[string]any)
 	if !ok {
@@ -407,10 +484,14 @@ func runLiveContractEvidence(root string, arguments ...string) ([]byte, error) {
 }
 
 func writeLiveContractRawLog(t *testing.T, path, profile, requestID, responseID string, known bool, microUSD int, method string, continued bool) {
+	writeLiveContractRawLogWithServiceClass(t, path, profile, requestID, responseID, "standard", known, microUSD, method, continued)
+}
+
+func writeLiveContractRawLogWithServiceClass(t *testing.T, path, profile, requestID, responseID, serviceClass string, known bool, microUSD int, method string, continued bool) {
 	t.Helper()
 	content := strings.Join([]string{
 		"=== RUN   TestLiveProviderContracts/" + profile,
-		"    live_provider_test.go:35: profile=" + profile + " tenant=llmtw-live-contract request_id=" + requestID + " response_id=" + responseID + " actual_service_class=standard actual_spend_known=" + strconv.FormatBool(known) + " actual_micro_usd=" + strconv.Itoa(microUSD) + " cost_method=" + method + " continuation_verified=" + strconv.FormatBool(continued),
+		"    live_provider_test.go:35: profile=" + profile + " tenant=llmtw-live-contract request_id=" + requestID + " response_id=" + responseID + " actual_service_class=" + serviceClass + " actual_spend_known=" + strconv.FormatBool(known) + " actual_micro_usd=" + strconv.Itoa(microUSD) + " cost_method=" + method + " continuation_verified=" + strconv.FormatBool(continued),
 		"--- PASS: TestLiveProviderContracts/" + profile,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
