@@ -74,7 +74,7 @@ func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
 	}
 }
 
-func TestImageVerifyOCIExportUsesOneSupportedBuildxSolve(t *testing.T) {
+func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 	root := repositoryRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "Makefile"))
 	if err != nil {
@@ -94,9 +94,13 @@ func TestImageVerifyOCIExportUsesOneSupportedBuildxSolve(t *testing.T) {
 
 	for _, want := range []string{
 		"docker buildx build --platform linux/amd64 --provenance=false --sbom=false",
-		`--output "type=oci,oci-mediatypes=true,dest=$$layout,tar=false,name=$(IMAGE_VERIFY_TAG)"`,
-		"--load \\",
+		`--output "type=docker,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)"`,
+		`archive_directory="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-image-verify.XXXXXX")"`,
+		`cleanup_archive() { rm -rf -- "$$archive_directory"; };`,
+		`docker image load --input "$$archive"`,
+		`tar -xf "$$archive" -C "$$layout"`,
 		`docker image inspect "$(IMAGE_VERIFY_TAG)"`,
+		"trap cleanup_archive EXIT HUP INT TERM",
 	} {
 		if !strings.Contains(branch, want) {
 			t.Fatalf("OCI layout image-verify branch is missing %q", want)
@@ -105,7 +109,23 @@ func TestImageVerifyOCIExportUsesOneSupportedBuildxSolve(t *testing.T) {
 	if strings.Count(branch, "docker buildx build") != 1 {
 		t.Fatalf("OCI layout image-verify branch must use exactly one Buildx solve: %q", branch)
 	}
-	if strings.Contains(branch, "docker load --input") {
-		t.Fatal("OCI layout image-verify branch must not load an OCI directory through docker load")
+	if strings.Count(branch, "--output") != 1 {
+		t.Fatalf("OCI layout image-verify branch must use exactly one Buildx exporter: %q", branch)
+	}
+	for _, forbidden := range []string{
+		"--load",
+		`docker image load --input "$$layout"`,
+		`--output "type=oci,`,
+		`rm -rf -- "$$layout"`,
+	} {
+		if strings.Contains(branch, forbidden) {
+			t.Fatalf("OCI layout image-verify branch must not retain competing or directory loading behavior %q", forbidden)
+		}
+	}
+	build := strings.Index(branch, "docker buildx build")
+	load := strings.Index(branch, `docker image load --input "$$archive"`)
+	extract := strings.Index(branch, `tar -xf "$$archive" -C "$$layout"`)
+	if build < 0 || load <= build || extract <= load {
+		t.Fatalf("OCI archive must be built once, then loaded and extracted from that exact artifact: %q", branch)
 	}
 }
