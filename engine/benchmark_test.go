@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/llm"
+	"github.com/mfow/llm-temporal-worker/llm/provider"
 )
 
 // BenchmarkGenerateMemoryAdmissionAndCompile measures the deterministic,
@@ -15,7 +16,7 @@ import (
 // a local proxy for admission and compilation work: it deliberately has no
 // Redis server or provider network request, so it does not prove either SLO.
 func BenchmarkGenerateMemoryAdmissionAndCompile(b *testing.B) {
-	adapter := &fakeAdapter{name: "benchmark", response: successfulResponse()}
+	adapter := &benchmarkAdapter{fakeAdapter: fakeAdapter{name: "benchmark", response: successfulResponse()}}
 	harness := newHarness(b, adapter)
 	requests := make([]requestWithDuration, b.N)
 	for index := range requests {
@@ -33,7 +34,34 @@ func BenchmarkGenerateMemoryAdmissionAndCompile(b *testing.B) {
 		requests[index].duration = time.Since(started)
 	}
 	b.StopTimer()
+	adapter.mu.Lock()
+	recordedCalls := len(adapter.calls)
+	invokes := adapter.invokes
+	adapter.mu.Unlock()
+	if recordedCalls != 0 {
+		b.Fatalf("benchmark adapter retained %d calls", recordedCalls)
+	}
+	if invokes != b.N {
+		b.Fatalf("benchmark adapter invoked %d times, want %d", invokes, b.N)
+	}
 	b.ReportMetric(float64(p99Duration(requests))/float64(time.Millisecond), "p99_ms/op")
+}
+
+// benchmarkAdapter retains aggregate counts but never a per-call history, so
+// its test instrumentation does not affect the benchmark's allocation or p99
+// measurements.
+type benchmarkAdapter struct{ fakeAdapter }
+
+func (adapter *benchmarkAdapter) Invoke(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.Result, error) {
+	adapter.mu.Lock()
+	adapter.invokes++
+	response := adapter.response
+	adapter.mu.Unlock()
+	if err := observer.BeforePossibleWrite(ctx); err != nil {
+		return provider.Result{}, err
+	}
+	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
+	return provider.Result{Response: response}, nil
 }
 
 type requestWithDuration struct {
