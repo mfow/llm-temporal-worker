@@ -94,14 +94,35 @@ func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
 	want := state.Continuation{
 		ID:                 "continuation-handle",
 		Tenant:             "tenant-a",
+		ParentID:           "parent-continuation",
 		Transcript:         transcript,
 		TranscriptDigest:   digest,
 		TranscriptComplete: true,
-		CapabilityVersion:  "cap-v1",
-		PriceVersion:       "price-v1",
-		CreatedAt:          now,
-		ExpiresAt:          now.Add(time.Hour),
+		ProviderState: []state.OpaqueStateRef{{
+			Provider:      "openai",
+			EndpointID:    "responses-us-east",
+			AccountRegion: "us-east-1",
+			Family:        "responses",
+			ModelLineage:  "gpt-5",
+			Media:         "application/octet-stream",
+			Data:          []byte("provider-state"),
+			Required:      true,
+		}},
+		Pinning: state.Pinning{
+			Provider:      "openai",
+			EndpointID:    "responses-us-east",
+			AccountRegion: "us-east-1",
+			Family:        "responses",
+			ModelLineage:  "gpt-5",
+		},
+		LastOperationID:   "operation-42",
+		CapabilityVersion: "cap-v1",
+		PriceVersion:      "price-v1",
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(time.Hour),
+		Depth:             2,
 	}
+	expected := want.Clone()
 	encoded, err := encodeContinuation(want)
 	if err != nil {
 		t.Fatal(err)
@@ -110,8 +131,8 @@ func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("continuation codec changed semantic value:\ngot=%#v\nwant=%#v", got, want)
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("continuation codec changed semantic value:\ngot=%#v\nwant=%#v", got, expected)
 	}
 	if _, ok := got.Transcript[0].(llm.Message); !ok {
 		t.Fatalf("decoded first item type = %T, want llm.Message", got.Transcript[0])
