@@ -45,6 +45,61 @@ func TestRuntimeReloadFileRejectsBadReplacementAndRecordsBoundedFailure(t *testi
 	}
 }
 
+func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	data := runtimeConfig(t)
+	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+
+	old := runtime.App.Current()
+	lease, err := runtime.App.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	replacement := strings.Replace(string(data), "readiness_probe_interval: 5s", "readiness_probe_interval: 6s", 1)
+	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- runtime.ReloadFile(ctx, path) }()
+	waitForRuntime(t, func() bool { return runtime.App.Current() != old })
+	cancel()
+	select {
+	case err := <-reloaded:
+		if err != nil {
+			t.Fatalf("published reload returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("published reload did not finish after drain cancellation")
+	}
+
+	current := runtime.App.Current()
+	if current == nil || current == old || current.Config.ConfigVersion() == old.Config.ConfigVersion() {
+		t.Fatal("published reload did not retain the replacement snapshot")
+	}
+	if got := reloadOutcome(t, runtime.Metrics, "success"); got != 1 {
+		t.Fatalf("reload success metric = %v, want 1", got)
+	}
+	if got := reloadOutcome(t, runtime.Metrics, "failure"); got != 0 {
+		t.Fatalf("reload failure metric = %v, want 0", got)
+	}
+
+	lease.Release()
+	if err := old.WaitClosed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool

@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/mfow/llm-temporal-worker/internal/app"
 )
 
 const defaultConfigWatchInterval = time.Second
@@ -22,16 +24,22 @@ func (runtime *Runtime) ReloadFile(ctx context.Context, path string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := runtime.App.ReloadFile(ctx, path); err != nil {
+	err := runtime.App.ReloadFile(ctx, path)
+	if err != nil && !app.IsPublishedReloadError(err) {
 		runtime.recordReloadFailure(ctx, err)
 		return safeReloadError(err)
 	}
+	cleanupIncomplete := err != nil
 	runtime.Metrics.RecordConfigReload("success")
 	version := ""
 	if current := runtime.App.Current(); current != nil && current.Config != nil {
 		version = current.Config.ConfigVersion()
 	}
-	runtime.Logger.Info(ctx, "configuration reloaded", slog.String("outcome", "success"), slog.String("config_version", version))
+	message := "configuration reloaded"
+	if cleanupIncomplete {
+		message = "configuration reloaded; previous snapshot cleanup did not finish before reload returned"
+	}
+	runtime.Logger.Info(ctx, message, slog.String("outcome", "success"), slog.String("config_version", version))
 	return nil
 }
 
