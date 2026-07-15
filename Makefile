@@ -15,7 +15,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= go1.26.5
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify workflow-verify vet test build benchmark integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -25,6 +25,9 @@ schema-verify:
 
 docs-verify:
 	$(GO) test ./internal/documentationtest
+
+traceability-verify:
+	$(GO) test ./internal/architecturetest -run '^TestV1TraceabilityCatalog'
 
 workflow-verify:
 	bash scripts/check-workflow-policy.sh
