@@ -53,7 +53,7 @@ func TestContextHeartbeatOverridesStaticEngineHeartbeat(t *testing.T) {
 	}
 }
 
-func TestGenerateDoesNotExposeProviderStreamProgress(t *testing.T) {
+func TestGenerateDoesNotExposeProviderStreamingPhase(t *testing.T) {
 	adapter := &fakeAdapter{
 		name:          "one-shot-stream-progress",
 		response:      successfulResponse(),
