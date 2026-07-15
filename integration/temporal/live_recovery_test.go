@@ -34,6 +34,9 @@ const (
 	liveRecoveryWorkflowName              = "llmtw.integration.temporal-recovery.v1"
 	liveRecoveryWorkflowTaskExecutionSize = 2
 	liveSharedBudgetLimit                 = pricing.MicroUSD(100)
+	liveHeartbeatTimeout                  = 2 * time.Second
+	liveHeartbeatKeepaliveInterval        = 500 * time.Millisecond
+	liveSuccessfulProviderHold            = liveHeartbeatTimeout + time.Second
 )
 
 func TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum(t *testing.T) {
@@ -204,11 +207,95 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 	}
 }
 
+// TestTemporalKeepaliveCompletesLongOneShotProviderCall proves the
+// provider-wait heartbeat lifecycle against the real Compose Temporal service.
+// The in-process, content-free adapter deliberately holds one successful
+// Adapter.Invoke call longer than the Activity heartbeat timeout. The Activity
+// must complete from that one call rather than timing out and retrying it.
+func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
+	temporalAddress := os.Getenv("LLMTW_TEMPORAL_ADDRESS")
+	redisAddress := os.Getenv("LLMTW_REDIS_ADDR")
+	redisUsername := os.Getenv("LLMTW_REDIS_USERNAME")
+	redisPassword := os.Getenv("LLMTW_REDIS_PASSWORD")
+	if temporalAddress == "" || redisAddress == "" || redisUsername == "" || redisPassword == "" {
+		t.Skip("make compose-live-integration supplies the local Temporal and authenticated Redis addresses")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	workflowClient, err := client.Dial(client.Options{HostPort: temporalAddress, Namespace: "default"})
+	if err != nil {
+		t.Fatalf("dial Temporal: %v", err)
+	}
+	t.Cleanup(func() { workflowClient.Close() })
+
+	queue := fmt.Sprintf("llmtw-live-keepalive-%d", time.Now().UnixNano())
+	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddress, Username: redisUsername, Password: redisPassword})
+	t.Cleanup(func() { _ = redisClient.Close() })
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		t.Fatalf("ping Compose Redis: %v", err)
+	}
+	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{
+		Client:          redisClient,
+		Mode:            redisstore.AdmissionModeFunction,
+		FunctionVersion: redisstore.AdmissionFunctionVersion,
+		Keys: redisstore.KeyOptions{
+			Prefix:    "llmtw-live-keepalive",
+			HashTag:   "admission",
+			KeySecret: liveKeySecret(queue),
+		},
+		Clock:          time.Now,
+		MaxRecordBytes: 256 << 10,
+	})
+	if err != nil {
+		t.Fatalf("create shared Redis admission store: %v", err)
+	}
+
+	adapter := newDelayedSuccessfulAdapter(liveSuccessfulProviderHold)
+	results := &liveSuccessfulResultStore{}
+	value := newLiveRecoveryEngine(t, admissionStore, results, adapter)
+	valueWorker := newLiveRecoveryWorker(t, workflowClient, queue, "keepalive", value)
+	started := false
+	defer func() {
+		if started {
+			valueWorker.Stop()
+		}
+	}()
+	if err := valueWorker.Start(); err != nil {
+		t.Fatalf("start Temporal worker: %v", err)
+	}
+	started = true
+
+	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: liveKeepaliveRequest()}
+	run, err := workflowClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:                       fmt.Sprintf("llmtw-live-keepalive-%d", time.Now().UnixNano()),
+		TaskQueue:                queue,
+		WorkflowRunTimeout:       30 * time.Second,
+		WorkflowTaskTimeout:      5 * time.Second,
+		WorkflowExecutionTimeout: 30 * time.Second,
+	}, liveRecoveryWorkflowName, payload)
+	if err != nil {
+		t.Fatalf("start keepalive workflow: %v", err)
+	}
+	if err := run.Get(ctx, nil); err != nil {
+		t.Fatalf("long one-shot keepalive workflow: %v", err)
+	}
+	if calls := adapter.Calls(); calls != 1 {
+		t.Fatalf("provider calls across completed Activity = %d, want one", calls)
+	}
+	if elapsed := adapter.SuccessfulCallElapsed(); elapsed <= liveHeartbeatTimeout {
+		t.Fatalf("successful provider call ran for %s, want longer than heartbeat timeout %s", elapsed, liveHeartbeatTimeout)
+	}
+	if puts := results.Puts(); puts != 1 {
+		t.Fatalf("completed provider call wrote %d results, want one", puts)
+	}
+}
+
 func liveRecoveryWorkflow(ctx workflow.Context, payload activity.GenerateRequest) error {
 	options := workflow.ActivityOptions{
 		StartToCloseTimeout:    15 * time.Second,
 		ScheduleToCloseTimeout: 25 * time.Second,
-		HeartbeatTimeout:       2 * time.Second,
+		HeartbeatTimeout:       liveHeartbeatTimeout,
 		WaitForCancellation:    true,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:        200 * time.Millisecond,
@@ -225,7 +312,7 @@ func newLiveRecoveryWorker(t *testing.T, workflowClient client.Client, queue, id
 	t.Helper()
 	valueWorker := worker.New(workflowClient, queue, liveRecoveryWorkerOptions(identity))
 	valueWorker.RegisterWorkflowWithOptions(liveRecoveryWorkflow, workflow.RegisterOptions{Name: liveRecoveryWorkflowName})
-	(&activity.Activities{Engine: value, Heartbeater: &activity.TemporalHeartbeater{}}).Register(valueWorker)
+	(&activity.Activities{Engine: value, Heartbeater: &activity.TemporalHeartbeater{}, HeartbeatKeepaliveInterval: liveHeartbeatKeepaliveInterval}).Register(valueWorker)
 	return valueWorker
 }
 
@@ -296,6 +383,17 @@ func liveRecoveryRequest() llm.Request {
 	}
 }
 
+func liveKeepaliveRequest() llm.Request {
+	return llm.Request{
+		OperationKey: "shared-keepalive-operation",
+		Context:      llm.RequestContext{Tenant: "live-tenant"},
+		Model:        "live-recovery-model",
+		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
+			llm.TextPart{Text: "content-free live keepalive fixture"},
+		}}},
+	}
+}
+
 func liveKeySecret(queue string) []byte {
 	digest := sha256.Sum256([]byte("llmtw-live-recovery-key:" + queue))
 	return digest[:]
@@ -343,6 +441,44 @@ func (store *liveResultStore) Puts() int {
 	return store.puts
 }
 
+type liveSuccessfulResultStore struct {
+	mu     sync.Mutex
+	values map[string]llm.Response
+	puts   int
+}
+
+func (store *liveSuccessfulResultStore) Get(_ context.Context, operationID string) (llm.Response, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	value, ok := store.values[operationID]
+	if !ok {
+		return llm.Response{}, engine.ErrResultNotFound
+	}
+	return value, nil
+}
+
+func (store *liveSuccessfulResultStore) Put(_ context.Context, operationID string, response llm.Response) (state.BlobRef, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.values == nil {
+		store.values = make(map[string]llm.Response)
+	}
+	store.values[operationID] = response
+	store.puts++
+	return liveResultRef(operationID), nil
+}
+
+func (store *liveSuccessfulResultStore) Puts() int {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.puts
+}
+
+func liveResultRef(operationID string) state.BlobRef {
+	digest := sha256.Sum256([]byte("live-result:" + operationID))
+	return state.BlobRef{Digest: digest, Size: int64(len(operationID)), Media: "application/json"}
+}
+
 type acceptedThenStoppedAdapter struct {
 	mu       sync.Mutex
 	calls    int
@@ -358,7 +494,7 @@ func (*acceptedThenStoppedAdapter) Name() string { return "content-free-live-rec
 func (*acceptedThenStoppedAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	return provider.CapabilitySet{Version: "live-recovery-capabilities-v1", Features: map[provider.Feature]provider.Capability{
 		provider.FeatureText:      {State: provider.CapabilityNative},
-		provider.FeatureStreaming: {State: provider.CapabilityNative},
+		provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
 	}}, nil
 }
 
@@ -369,13 +505,9 @@ func (*acceptedThenStoppedAdapter) Compile(_ context.Context, input provider.Com
 	}, nil
 }
 
-func (*acceptedThenStoppedAdapter) Invoke(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
-	return provider.Result{}, errors.New("live recovery fixture must use streaming")
-}
-
-func (adapter *acceptedThenStoppedAdapter) OpenStream(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.StreamResult, error) {
+func (adapter *acceptedThenStoppedAdapter) Invoke(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.Result, error) {
 	if err := observer.BeforePossibleWrite(ctx); err != nil {
-		return provider.StreamResult{}, err
+		return provider.Result{}, err
 	}
 	adapter.mu.Lock()
 	adapter.calls++
@@ -387,9 +519,9 @@ func (adapter *acceptedThenStoppedAdapter) OpenStream(ctx context.Context, _ pro
 	}
 	select {
 	case <-sdkactivity.GetWorkerStopChannel(ctx):
-		return provider.StreamResult{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture worker stopped after accepted write")
+		return provider.Result{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture worker stopped after accepted write")
 	case <-ctx.Done():
-		return provider.StreamResult{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture activity ended after accepted write")
+		return provider.Result{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "fixture activity ended after accepted write")
 	}
 }
 
@@ -406,4 +538,72 @@ func (adapter *acceptedThenStoppedAdapter) Calls() int {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
 	return adapter.calls
+}
+
+type delayedSuccessfulAdapter struct {
+	mu      sync.Mutex
+	delay   time.Duration
+	calls   int
+	elapsed time.Duration
+}
+
+func newDelayedSuccessfulAdapter(delay time.Duration) *delayedSuccessfulAdapter {
+	return &delayedSuccessfulAdapter{delay: delay}
+}
+
+func (*delayedSuccessfulAdapter) Name() string { return "content-free-live-keepalive" }
+
+func (*delayedSuccessfulAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
+	return provider.CapabilitySet{Version: "live-recovery-capabilities-v1", Features: map[provider.Feature]provider.Capability{
+		provider.FeatureText:      {State: provider.CapabilityNative},
+		provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
+	}}, nil
+}
+
+func (*delayedSuccessfulAdapter) Compile(_ context.Context, input provider.CompileInput) (provider.Call, error) {
+	return provider.Call{
+		EndpointID: input.Query.EndpointID, Family: input.Query.Family, Model: input.Query.Model,
+		OperationKey: input.Request.OperationKey, ServiceClass: input.Query.ServiceClass, Metadata: input.Metadata,
+	}, nil
+}
+
+func (adapter *delayedSuccessfulAdapter) Invoke(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.Result, error) {
+	if err := observer.BeforePossibleWrite(ctx); err != nil {
+		return provider.Result{}, err
+	}
+	adapter.mu.Lock()
+	adapter.calls++
+	adapter.mu.Unlock()
+
+	started := time.Now()
+	timer := time.NewTimer(adapter.delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		if err := observer.AfterResponseHeaders(ctx, provider.ResponseMetadata{RequestID: "live-keepalive-provider-request"}); err != nil {
+			return provider.Result{}, err
+		}
+		adapter.mu.Lock()
+		adapter.elapsed = time.Since(started)
+		adapter.mu.Unlock()
+		return provider.Result{Response: llm.Response{
+			Status:   llm.ResponseStatusCompleted,
+			Usage:    llm.Usage{OutputTokens: 1},
+			Provider: llm.ProviderFacts{RequestID: "live-keepalive-provider-request"},
+		}}, nil
+	case <-ctx.Done():
+		return provider.Result{}, ctx.Err()
+	}
+}
+
+func (adapter *delayedSuccessfulAdapter) Calls() int {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.calls
+}
+
+func (adapter *delayedSuccessfulAdapter) SuccessfulCallElapsed() time.Duration {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.elapsed
 }

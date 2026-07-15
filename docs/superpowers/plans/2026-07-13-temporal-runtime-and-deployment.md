@@ -125,17 +125,18 @@ normalize -> load continuation -> plan -> price/estimate -> Begin
 
 - [ ] Use the Temporal Activity test environment to register a dependency-
   injected `Activities` method under exact name `llm.generate.v1`.
-- [ ] Write tests capturing heartbeats at admitted, pre-write, periodic
-  streaming/wait, and finalizing phases. Serialize details and assert prompts,
+- [ ] Write tests capturing heartbeats at admitted, pre-write, periodic fixed
+  `provider_wait`, and finalizing phases. Serialize details and assert prompts,
   outputs, tools, handles, raw errors, and secrets are absent.
-- [ ] Write cancellation tests before write, during streaming, and after terminal
-  provider output but before Complete. Assert reservation/result behavior and
-  Temporal error type.
+- [ ] Write cancellation tests before write, while a one-shot provider call is
+  pending, and after provider return but before Complete. Assert reservation/
+  result behavior and Temporal error type.
 - [ ] Run `go test ./activity -run 'TestActivity|TestHeartbeat|TestCancel'`.
   Expected: FAIL.
-- [ ] Implement `Activities.Generate` as a thin engine call. Inject a
-  heartbeater adapter so engine progress becomes bounded/jittered Temporal
-  heartbeats and context cancellation reaches SDK/storage calls.
+- [ ] Implement `Activities.Generate` as a thin one-shot engine `Generate`
+  call. While that provider call is pending, emit only fixed `provider_wait`
+  liveness heartbeats; context cancellation reaches SDK/storage calls without
+  passing stream or delta progress through the Temporal boundary.
 - [ ] Add a goroutine leak test and use channels/fake clocks rather than sleeps.
 - [ ] Run `go test -race -count=100 ./activity`. Expected: PASS.
 - [ ] Commit: `feat(activity): run inference with heartbeat cancellation safety`.
@@ -292,7 +293,8 @@ normalize -> load continuation -> plan -> price/estimate -> Begin
 - [ ] Start real Temporal, Redis, provider mock, and worker processes in an
   isolated Compose project with unique task queue.
 - [ ] Add controlled provider barriers for: before read, after request accepted,
-  after response sent, and during stream. Kill the worker at each barrier.
+  after response sent, and while a one-shot provider request is pending. Kill
+  the worker at each barrier.
 - [ ] Assert pre-write retry submits once after restart; completed replay returns
   cached result; accepted-unresolved returns non-retryable ambiguity and retains
   reservation; cancellation follows the same certainty rules.

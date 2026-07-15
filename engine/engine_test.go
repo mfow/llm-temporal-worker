@@ -27,6 +27,7 @@ type fakeAdapter struct {
 	preDispatchFirst    bool
 	preDispatchDeadline bool
 	rawDeadlineFirst    bool
+	progressPhase       provider.Phase
 	ambiguous           bool
 	capabilities        int
 	compiles            int
@@ -61,6 +62,7 @@ func (adapter *fakeAdapter) Invoke(ctx context.Context, call provider.Call, obse
 	index := adapter.invokes
 	adapter.calls = append(adapter.calls, call)
 	response := adapter.response
+	phase := adapter.progressPhase
 	adapter.mu.Unlock()
 	if err := observer.BeforePossibleWrite(ctx); err != nil {
 		return provider.Result{}, err
@@ -86,7 +88,13 @@ func (adapter *fakeAdapter) Invoke(ctx context.Context, call provider.Call, obse
 	if adapter.rawDeadlineFirst && index == 1 {
 		return provider.Result{}, context.DeadlineExceeded
 	}
-	observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhaseStream), OutputItems: len(response.Output)})
+	if err := observer.AfterResponseHeaders(ctx, provider.ResponseMetadata{}); err != nil {
+		return provider.Result{}, err
+	}
+	if phase == "" {
+		phase = provider.PhaseLift
+	}
+	observer.OnProgress(ctx, provider.Progress{Phase: string(phase), OutputItems: len(response.Output)})
 	return provider.Result{Response: response}, nil
 }
 

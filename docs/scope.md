@@ -62,7 +62,8 @@ controller:
 - Sampling, stop sequences, output limits, and reasoning intent where supported.
 - Provider-state parts that remain opaque and byte-for-byte stable.
 - Strict and best-effort portability with machine-readable diagnostics.
-- Typed streaming events in the reusable Go library.
+- Typed streaming events for reusable Go-library callers, outside the
+  one-shot Temporal Activity boundary.
 - Exactly three request service classes: `economy`, `standard`, and `priority`.
 - Explicit ordered service-class fallback, disabled by default.
 - Durable continuation and endpoint pinning.

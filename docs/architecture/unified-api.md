@@ -297,15 +297,17 @@ Status is one of `completed`, `tool_calls`, `refused`, `length`, or
 
 ## Typed stream
 
-`llm.Engine.Stream(ctx, request)` returns a pull-based `EventStream`; callers
-read with `Next(ctx)` and must call `Close` when they stop before a terminal
-event. It follows the same request normalization, route plan, admission,
-continuation, dispatch-certainty, result-store, and ledger-finalization path as
-`Generate`. Before admission it filters the quoted route plan to real
-`StreamingAdapter` implementations that currently support streaming. If none
-remain, it returns a direct typed `unsupported_capability` error with
-`not_dispatched` certainty and creates neither an event stream nor a durable
-operation. It never fabricates a stream by calling `Generate` first.
+`llm.Engine` is the one-shot `Generate` boundary. A caller that needs typed
+events may require `llm.StreamingEngine` and call
+`StreamingEngine.Stream(ctx, request)`, which returns a pull-based
+`EventStream`; callers read with `Next(ctx)` and must call `Close` when they
+stop before a terminal event. It follows the same request normalization, route
+plan, admission, continuation, dispatch-certainty, result-store, and
+ledger-finalization path as `Generate`. Before admission it filters the quoted
+route plan to real `StreamingAdapter` implementations that currently support
+streaming. If none remain, it returns a direct typed `unsupported_capability`
+error with `not_dispatched` certainty and creates neither an event stream nor a
+durable operation. It never fabricates a stream by calling `Generate` first.
 
 The reusable library emits an ordered, closed Go `Event` union:
 
@@ -361,13 +363,7 @@ rejects an identity-less fragment at the provider boundary rather than emit an
 invalid public event.
 
 Temporal Activity payloads do not expose the live event stream. The Activity
-uses a returned real stream internally for liveness and bounded progress, and
-returns the final normalized response. If the engine reports the specific
-pre-admission streaming-unavailable error, the Activity uses native `Generate`
-instead; it does not turn that response into an `EventStream`, and it never
-falls back after an `EventStream` has been returned. That match requires
-`unsupported_capability`, stream phase, `not_dispatched` certainty, and no
-operation ID; unsupported compile/planning or operation-bearing errors remain
-ordinary Activity failures. Raw deltas, tool
-arguments, and opaque provider state never enter workflow history as heartbeat
-details.
+depends only on `llm.Engine`, invokes `Generate` once, and returns the final
+normalized response; it does not request or fall back from an `EventStream`.
+Raw deltas, tool arguments, and opaque provider state never enter workflow
+history as heartbeat details.

@@ -20,6 +20,7 @@ type dispatchObserver struct {
 	candidate    routing.Candidate
 	attempt      int
 	leaseUntil   time.Time
+	streaming    bool
 	marked       bool
 	heartbeatErr error
 }
@@ -57,7 +58,7 @@ func (observer *dispatchObserver) AfterResponseHeaders(ctx context.Context, meta
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "streaming", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
+	return observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "response_received", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
 }
 
 func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provider.Progress) {
@@ -66,6 +67,12 @@ func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provi
 	}
 	phase := progress.Phase
 	if phase == string(provider.PhaseStream) {
+		// An Invoke call is one-shot even if an adapter reports an internal
+		// stream phase. Only Engine.Stream owns a token event source, so only
+		// that path may expose streaming progress to its heartbeat consumer.
+		if !observer.streaming {
+			return
+		}
 		phase = "streaming"
 	}
 	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: phase, RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, OutputItems: progress.OutputItems, At: observer.engine.dependencies.Clock()}); err != nil {

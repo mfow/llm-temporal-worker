@@ -68,6 +68,9 @@ func applyDefaults(config *Config) {
 	if config.Temporal.Worker.GracefulStopTimeout == 0 {
 		config.Temporal.Worker.GracefulStopTimeout = Duration(30 * time.Second)
 	}
+	if config.Temporal.Worker.HeartbeatKeepaliveInterval == 0 {
+		config.Temporal.Worker.HeartbeatKeepaliveInterval = Duration(time.Second)
+	}
 	if config.State.Kind == "" {
 		config.State.Kind = "redis"
 	}

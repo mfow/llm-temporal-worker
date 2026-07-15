@@ -34,3 +34,32 @@ func TestActivityPolicyValidationAndTemporalOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestActivityPolicyHeartbeatKeepaliveInterval(t *testing.T) {
+	policy := validPolicy()
+	if got, want := policy.KeepaliveInterval(), DefaultHeartbeatKeepaliveInterval; got != want {
+		t.Fatalf("default keepalive interval = %s, want %s", got, want)
+	}
+	policy.HeartbeatKeepaliveInterval = 5 * time.Second
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := policy.KeepaliveInterval(); got != 5*time.Second {
+		t.Fatalf("configured keepalive interval = %s", got)
+	}
+
+	for name, mutate := range map[string]func(*ActivityPolicy){
+		"negative": func(value *ActivityPolicy) { value.HeartbeatKeepaliveInterval = -time.Second },
+		"too slow": func(value *ActivityPolicy) {
+			value.HeartbeatKeepaliveInterval = value.HeartbeatTimeout/3 + time.Nanosecond
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := validPolicy()
+			mutate(&invalid)
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("invalid keepalive policy unexpectedly accepted")
+			}
+		})
+	}
+}

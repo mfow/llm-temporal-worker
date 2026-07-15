@@ -117,6 +117,7 @@ type TemporalWorkerConfig struct {
 	MaxConcurrentActivities        int      `yaml:"max_concurrent_activities" json:"max_concurrent_activities"`
 	MaxConcurrentActivityTaskPolls int      `yaml:"max_concurrent_activity_task_polls" json:"max_concurrent_activity_task_polls"`
 	GracefulStopTimeout            Duration `yaml:"graceful_stop_timeout" json:"graceful_stop_timeout"`
+	HeartbeatKeepaliveInterval     Duration `yaml:"heartbeat_keepalive_interval" json:"heartbeat_keepalive_interval"`
 }
 
 type StateConfig struct {

@@ -24,7 +24,7 @@ tests are the source of truth for behavior that has already been implemented.
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
 | Shared state | Redis is the v1 production backend; memory is for tests and single-process development only |
 | Activity scope | Inference only; tool execution and agent-loop orchestration stay in caller workflows |
-| Streaming | Typed stream events are a reusable library API; the Temporal Activity consumes them and returns a final value |
+| Streaming | Optional typed stream APIs are for reusable-library callers; the Temporal Activity invokes one-shot `Generate` and returns the final normalized response |
 | Deployment | One stateless worker image, horizontally scalable when Redis is enabled |
 | Go baseline | Go 1.26, using the latest security patch in that release line |
 

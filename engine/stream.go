@@ -277,7 +277,7 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 		if lease <= 0 {
 			lease = defaultLease
 		}
-		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease)}
+		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease), streaming: true}
 		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
 		result, openErr := streaming.OpenStream(attemptCtx, call, observer)
 		if openErr != nil {

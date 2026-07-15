@@ -68,6 +68,7 @@ type ActivityPolicy struct {
 	StartToClose        time.Duration
 	ScheduleToClose     time.Duration
 	HeartbeatTimeout    time.Duration
+	HeartbeatKeepaliveInterval time.Duration
 	InitialRetry        time.Duration
 	BackoffCoefficient float64
 	MaximumRetry        time.Duration
@@ -80,6 +81,9 @@ requires:
 
 - schedule-to-close greater than start-to-close;
 - heartbeat timeout shorter than start-to-close for long calls;
+- a provider-wait keepalive interval that matches
+  `temporal.worker.heartbeat_keepalive_interval` and is no more than one third
+  of `HeartbeatTimeout` (the default cadence is `1s`);
 - retry horizon no longer than operation-record retention;
 - maximum attempts bounded;
 - no Temporal retry for application errors marked non-retryable;
@@ -110,22 +114,12 @@ exactly-once semantics.
 
 ## Heartbeats
 
-`Generate` first asks `llm.Engine.Stream` for a real provider stream. It
-observes `response_started` and `content_completed` only to report bounded
-streaming progress, then returns the sole `response_completed` value.
-`Stream` returns a direct typed `unsupported_capability` error with
-`not_dispatched` certainty when its pre-admission route/capability preflight
-finds no real `StreamingAdapter`. Only in that narrow case, before an
-`EventStream` or durable operation exists, the Activity invokes native
-`Engine.Generate` and returns its final semantic response. The fallback match
-also requires stream phase and an empty operation ID, so an unsupported
-compile/planning error or any operation-bearing error cannot enter the native
-path. It never falls back after a stream has been returned or after a stream
-terminal event. Text/JSON
-deltas, tool arguments, and opaque provider-state events are deliberately
-drained without being copied as live event payloads into a Temporal heartbeat;
-only the final normalized response crosses the Activity return boundary. A
-stream error is converted by the normal common-error classifier.
+`Generate` invokes `llm.Engine.Generate` once and returns that final normalized
+response. It does not request an `EventStream`, type-assert
+`llm.StreamingEngine`, or use a stream-first fallback. Text/JSON deltas, tool
+arguments, and opaque provider-state events never enter Temporal history; the
+optional streaming API is for reusable Go-library callers outside this Activity
+boundary.
 
 Heartbeats contain small, redacted progress only:
 
@@ -141,20 +135,27 @@ type HeartbeatDetails struct {
 }
 ```
 
-Phases are `planning`, `admitted`, `dispatching`, `streaming`, and
-`finalizing`. No text, tool arguments/results, provider state, secret, raw error,
-or SDK object is allowed.
+Phases are `planning`, `admission`, `pre_write`, `provider_wait`,
+`response_received`, `lift`, `finalization`, and, when applicable,
+`continuation_write`. No text, tool arguments/results, provider state, secret,
+raw error, or SDK object is allowed.
 
 The Activity heartbeats:
 
-- while planning, and for real streams when a response starts or an output
-  item completes, with only bounded counts;
-- before returning a finalized semantic response, including the native
-  pre-admission fallback path;
+- throughout the bounded one-shot engine lifecycle, using only redacted phase,
+  route, class, and output-count facts;
+- at `temporal.worker.heartbeat_keepalive_interval` (default `1s`) while the
+  one-shot `Engine.Generate` call is blocked, with a fixed `provider_wait`
+  phase and no operation ID, route, class, or output facts;
+- before returning a finalized semantic response;
 
-Heartbeat failure does not cancel the provider call by itself; context
-cancellation does. The implementation watches `ctx.Done()` through all
-provider, blob, and storage calls.
+The keepalive is independent of provider SDK timeout settings. A heartbeat
+transport failure cancels the child engine context, joins the keepalive before
+the Activity returns, and reports a non-retryable ambiguous outcome because
+the provider result can no longer be safely proven. A `context.Canceled` result
+caused by normal keepalive shutdown after `Generate` returns is ignored; an
+external Activity cancellation remains cancellation. The implementation watches
+`ctx.Done()` through all provider, blob, and storage calls.
 
 ## Cancellation
 
@@ -252,6 +253,12 @@ terminal result. The fixture asserts one dispatch and one bounded shared-budget
 reservation, never makes a provider-network request, and does not relax the
 Docker-private provider-egress denial.
 
+It also holds a successful, content-free one-shot provider call for three
+seconds, longer than that Activity's two-second Temporal heartbeat timeout.
+The Activity-owned 500 ms `provider_wait` keepalive must preserve the single
+completed attempt: the gate requires one provider call and one durable result,
+rather than a heartbeat-timeout retry.
+
 ## Temporal tests
 
 The Temporal Go SDK Activity test environment covers:
@@ -267,8 +274,9 @@ The Temporal Go SDK Activity test environment covers:
 
 The opt-in Compose gate complements those deterministic tests with a real
 Temporal service, shared Redis admission ledger, worker-stop recovery, and
-the live readiness probe transition. It is intentionally excluded from normal
-offline tests and pull-request CI.
+the live readiness probe transition. It also proves a periodic
+`provider_wait` keepalive across a long successful one-shot provider call. It
+is intentionally excluded from normal offline tests and pull-request CI.
 
 Workflow-level tests live in an example package and demonstrate caller-owned
 tool execution, but the worker does not ship a general agent Workflow.

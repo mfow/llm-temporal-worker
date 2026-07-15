@@ -198,17 +198,10 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		MaxConcurrentActivities:        configuration.Temporal.Worker.MaxConcurrentActivities,
 		MaxConcurrentActivityTaskPolls: configuration.Temporal.Worker.MaxConcurrentActivityTaskPolls,
 		GracefulStopTimeout:            time.Duration(configuration.Temporal.Worker.GracefulStopTimeout),
-		Activities: &activity.Activities{
-			Engine: dynamic,
-			HeartbeaterFactory: func() activity.Heartbeater {
-				return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
-			},
-			Tracer:        tracer,
-			PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
-		},
-		Health:  health,
-		Metrics: metrics,
-		Factory: options.WorkerFactory,
+		Activities:                     newRuntimeActivities(configuration, dynamic, metrics, tracer),
+		Health:                         health,
+		Metrics:                        metrics,
+		Factory:                        options.WorkerFactory,
 	})
 	if err != nil {
 		_ = tracer.Shutdown(context.Background())
@@ -270,6 +263,21 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	}, nil
 }
 
+// newRuntimeActivities keeps the worker's Activity-bound configuration in one
+// composition point. In particular, the periodic provider-wait cadence is a
+// worker setting, never a provider SDK timeout.
+func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer) *activity.Activities {
+	return &activity.Activities{
+		Engine:                     dynamic,
+		HeartbeatKeepaliveInterval: time.Duration(configuration.Temporal.Worker.HeartbeatKeepaliveInterval),
+		HeartbeaterFactory: func() activity.Heartbeater {
+			return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
+		},
+		Tracer:        tracer,
+		PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
+	}
+}
+
 func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	if !configuration.Telemetry.Metrics.Enabled {
 		// A nil Metrics is the intentional disabled implementation: its Handler
@@ -293,7 +301,7 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	return observability.NewMetrics(observability.AllowedValues{
 		Endpoints: endpoints, Models: models, Policies: policies,
 		Outcomes:              []string{"success", "failure", "accepted", "rejected", "denied"},
-		Phases:                []string{"planning", "admission", "pre_write", "streaming", "finalization", "continuation_write"},
+		Phases:                []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization", "continuation_write"},
 		Statuses:              []string{"completed", "failed", "canceled"},
 		ErrorClasses:          []string{"none", "internal", "provider_unavailable", "budget_denied"},
 		Methods:               []string{"provider_reported", "usage"},
@@ -680,66 +688,6 @@ func (engine *snapshotEngine) Generate(ctx context.Context, request llm.Request)
 		return llm.Response{}, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime engine is unavailable")
 	}
 	return clients.Engine().Generate(ctx, request)
-}
-
-// Stream captures the same immutable runtime snapshot as Generate so a
-// configuration reload cannot change routing or provider ownership midway
-// through an Activity's stream.
-func (engine *snapshotEngine) Stream(ctx context.Context, request llm.Request) (llm.EventStream, error) {
-	if engine == nil || engine.application == nil {
-		return nil, provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "runtime engine is unavailable")
-	}
-	lease, err := engine.application.Acquire()
-	if err != nil {
-		return nil, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime snapshot is unavailable")
-	}
-	clients, ok := lease.Snapshot().Clients.(*snapshotClients)
-	if !ok || clients.Engine() == nil {
-		lease.Release()
-		return nil, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime engine is unavailable")
-	}
-	stream, err := clients.Engine().Stream(ctx, request)
-	if err != nil {
-		lease.Release()
-		return nil, err
-	}
-	return &leasedEventStream{EventStream: stream, release: lease.Release}, nil
-}
-
-// leasedEventStream retains the configuration snapshot until the caller sees
-// a terminal event, observes an error, or explicitly stops early, matching
-// the stream's ownership lifecycle without leaking a reload lease.
-type leasedEventStream struct {
-	llm.EventStream
-	releaseOnce sync.Once
-	release     func()
-}
-
-func (stream *leasedEventStream) Next(ctx context.Context) (llm.Event, error) {
-	if stream == nil || stream.EventStream == nil {
-		return nil, provider.NewError(provider.CodeInternal, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "runtime stream is unavailable")
-	}
-	event, err := stream.EventStream.Next(ctx)
-	if err != nil || llm.IsTerminalEvent(event) {
-		stream.releaseLease()
-	}
-	return event, err
-}
-
-func (stream *leasedEventStream) Close() error {
-	if stream == nil || stream.EventStream == nil {
-		return nil
-	}
-	err := stream.EventStream.Close()
-	stream.releaseLease()
-	return err
-}
-
-func (stream *leasedEventStream) releaseLease() {
-	if stream == nil || stream.release == nil {
-		return
-	}
-	stream.releaseOnce.Do(stream.release)
 }
 
 var _ llm.Engine = (*snapshotEngine)(nil)

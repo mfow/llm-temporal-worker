@@ -47,6 +47,7 @@ temporal:
     max_concurrent_activities: 64
     max_concurrent_activity_task_polls: 8
     graceful_stop_timeout: 30s
+    heartbeat_keepalive_interval: 1s
 
 state:
   kind: redis
@@ -316,6 +317,12 @@ telemetry:
     sample_ratio: "0.05"
   content_logging: disabled
 ```
+
+`temporal.worker.heartbeat_keepalive_interval` controls the fixed, redacted
+heartbeat emitted while a one-shot provider call is in flight. It defaults to
+`1s` when omitted and is not derived from a provider SDK timeout. Every
+workflow Activity policy using this worker must use the same cadence and a
+`heartbeat_timeout` of at least three times that cadence.
 
 When `telemetry.tracing.enabled` is true, `otlp_endpoint` names the OTLP/gRPC
 collector and `sample_ratio` is a decimal from `0` through `1`. Runtime uses

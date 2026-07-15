@@ -284,9 +284,9 @@ go test -race ./config ./internal/runtime ./llm/provider/anthropicmessages
    dispatch, continuation, ambiguity, and finalization rules as `Generate`.
    Preserve event order and opaque bytes while applying backpressure and
    context cancellation safely.
-4. Have the Temporal Activity consume stream events only for heartbeat and
-   bounded progress; it returns the final semantic value rather than placing
-   raw deltas into workflow history.
+4. Keep the Temporal Activity at the one-shot `Generate` boundary. While the
+   provider call is pending, emit periodic bounded heartbeats; return only the
+   final semantic value rather than placing raw deltas into workflow history.
 
 **Acceptance evidence**
 
@@ -612,10 +612,11 @@ make redis-integration
    runtime, attach trace spans and bounded labels through normalization, state,
    planning, admission, attempts, finalization, and continuation writes, and
    flush on shutdown within the configured bound.
-2. Create a fresh Temporal heartbeater per Activity invocation, inject it into
-   the engine, and emit only bounded safe details at planning, admission,
-   pre-write, streaming cadence, and finalization. Concurrent Activities must
-   never share a start timestamp or mutable heartbeat state.
+2. Create a fresh Temporal heartbeater per Activity invocation and emit only
+   bounded safe liveness details. During the one-shot `Generate` provider wait,
+   use a fixed `provider_wait` cadence; do not pass stream or delta progress
+   through the Temporal boundary. Concurrent Activities must never share a
+   start timestamp or mutable heartbeat state.
 3. Implement SIGHUP and safe watched-file reload through the existing atomic
    snapshot/drain path. A bad replacement preserves the active snapshot and
    records a bounded reload failure metric.

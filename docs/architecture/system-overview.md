@@ -72,12 +72,13 @@ flowchart LR
    records whether failure occurred before or after a possible write.
 8. **Invoke once.** SDK retries are disabled. The Activity context controls the
    deadline and cancellation. Long calls emit small heartbeat details.
-9. **Lift and reconcile.** The adapter converts output and stream events back to
-   semantic types, captures request IDs and actual service tier, and normalizes
-   usage. Pricing uses provider-reported cost when authoritative, otherwise the
-   pinned catalog. If a definitely charged failure permits safe fallback, one
-   atomic continuation transition finalizes that attempt and reserves the
-   remaining plan before another dispatch.
+9. **Lift and reconcile.** The adapter converts a one-shot response (or, for
+   the optional library streaming extension, events) back to semantic types,
+   captures request IDs and actual service tier, and normalizes usage. Pricing
+   uses provider-reported cost when authoritative, otherwise the pinned catalog.
+   If a definitely charged failure permits safe fallback, one atomic
+   continuation transition finalizes that attempt and reserves the remaining
+   plan before another dispatch.
 10. **Commit result.** The engine atomically records the completed result,
     creates an immutable child continuation, and refunds unused reservation.
     A repeated operation key returns the recorded result.
@@ -95,6 +96,10 @@ single provider-aware service.
 ```go
 type Engine interface {
 	Generate(context.Context, llm.Request) (llm.Response, error)
+}
+
+type StreamingEngine interface {
+	Engine
 	Stream(context.Context, llm.Request) (llm.EventStream, error)
 }
 
@@ -124,6 +129,10 @@ type ContinuationStore interface {
 	PutChild(context.Context, state.PutChildRequest) (state.Handle, error)
 }
 ```
+
+`StreamingEngine` is an optional reusable-library extension. The Temporal
+Activity depends only on `Engine` and invokes `Generate` once for each Activity
+execution.
 
 `AdmissionStore` deliberately joins operation deduplication and budget mutation
 at their one required atomic boundary. Pricing, policy matching, estimation,

@@ -9,7 +9,8 @@ retry. Its responsibilities are:
 1. declare capabilities for an endpoint/model/service-class tuple;
 2. lower one normalized semantic request to SDK parameter types;
 3. invoke the SDK exactly once with the supplied context and dispatch observer;
-4. lift a response or stream into semantic output and typed usage;
+4. lift a one-shot response, or optional library-stream events, into semantic
+   output and typed usage;
 5. classify the provider result without deciding whether another route runs.
 
 Every SDK client is constructed with automatic retries disabled. This prevents
@@ -180,9 +181,10 @@ type StreamCompleted struct{ Response llm.Response }
 ```
 
 The decoder validates event order, stable indexes, UTF-8 boundaries, tool JSON
-completion, terminal usage, and exactly one terminal event. The Activity does
-not expose a network stream through Temporal; it consumes events, heartbeats
-redacted progress, and returns the final response.
+completion, terminal usage, and exactly one terminal event. This decoder and
+the optional `StreamingAdapter` path are for reusable-library callers. The
+Temporal Activity does not consume a network stream: it invokes one-shot
+`Engine.Generate` and returns the final response.
 
 ## Error decoding
 

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/engine"
-	"github.com/mfow/llm-temporal-worker/llm"
 	sdkactivity "go.temporal.io/sdk/activity"
 )
 
@@ -34,24 +33,6 @@ type HeartbeatMetrics interface {
 type TemporalHeartbeaterOptions struct {
 	Clock   func() time.Time
 	Metrics HeartbeatMetrics
-}
-
-// StreamProgress translates only bounded, redacted stream facts into an
-// Activity heartbeat. Text, JSON, tool arguments, opaque provider state, and
-// other raw delta payloads intentionally never enter Temporal history.
-func StreamProgress(event llm.Event, outputItems int) (engine.Progress, bool) {
-	if event == nil {
-		return engine.Progress{}, false
-	}
-	header := event.Header()
-	switch event.(type) {
-	case llm.ResponseStarted:
-		return engine.Progress{OperationID: header.OperationID, Phase: "streaming", OutputItems: outputItems}, true
-	case llm.ContentCompleted:
-		return engine.Progress{OperationID: header.OperationID, Phase: "streaming", OutputItems: outputItems}, true
-	default:
-		return engine.Progress{}, false
-	}
 }
 
 type TemporalHeartbeater struct {

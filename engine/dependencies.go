@@ -161,3 +161,4 @@ func New(dependencies Dependencies) (*Engine, error) {
 }
 
 var _ llm.Engine = (*Engine)(nil)
+var _ llm.StreamingEngine = (*Engine)(nil)

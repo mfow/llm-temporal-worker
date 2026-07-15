@@ -128,7 +128,10 @@ func (temporal TemporalConfig) validate() error {
 	if temporal.Worker.MaxConcurrentActivities <= 0 || temporal.Worker.MaxConcurrentActivityTaskPolls <= 0 {
 		return fmt.Errorf("temporal.worker concurrency values must be positive")
 	}
-	return validatePositiveDuration(temporal.Worker.GracefulStopTimeout, "temporal.worker.graceful_stop_timeout")
+	if err := validatePositiveDuration(temporal.Worker.GracefulStopTimeout, "temporal.worker.graceful_stop_timeout"); err != nil {
+		return err
+	}
+	return validatePositiveDuration(temporal.Worker.HeartbeatKeepaliveInterval, "temporal.worker.heartbeat_keepalive_interval")
 }
 
 func (state StateConfig) validate() error {
