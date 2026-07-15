@@ -159,10 +159,12 @@ followed by EOF. It covers bounded-buffer backpressure, cancellation closing
 the provider source, duplicate-terminal rejection, byte-exact opaque provider
 state, completed-operation replay, pre-write fallback retry, ambiguous
 post-write replay refusal, filtered stream-only budget reservations, and
-equivalent finalized stream/non-stream responses. Activity and integration
-tests prove that a real stream is consumed when available, while the exact
-pre-admission unsupported error uses native `Generate` for a non-streaming
-production-style adapter. Live raw stream deltas never appear in heartbeat
+equivalent finalized stream/non-stream responses. Those engine-level stream
+tests are separate from the Temporal boundary. Activity and integration tests
+prove that a one-shot `Generate` call remains live through a delayed provider
+response and returns its final response; they do not consume a stream or use a
+streaming fallback. The generic stream API remains outside the Temporal
+Activity/runtime boundary. Live raw stream deltas never appear in heartbeat
 details or as separate return records; only bounded progress and the final
 semantic response cross the Temporal boundary.
 
