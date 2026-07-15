@@ -141,11 +141,13 @@ jobs:
               --profile openai-responses \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -251,11 +253,13 @@ jobs:
               --profile azure-responses \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -352,11 +356,13 @@ jobs:
               --profile openai-chat \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -453,11 +459,13 @@ jobs:
               --profile openrouter-chat \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -554,11 +562,13 @@ jobs:
               --profile exa-chat \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -655,11 +665,13 @@ jobs:
               --profile anthropic-direct \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -764,11 +776,13 @@ jobs:
               --profile anthropic-aws \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -872,11 +886,13 @@ jobs:
               --profile bedrock-anthropic \
               --input "$RUNNER_TEMP/live-contract.raw.log" \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
           env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
             python3 scripts/release/live-contract-evidence.py verify \
               --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
-              --log "$RUNNER_TEMP/live-contract-evidence.log"
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

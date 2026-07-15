@@ -42,6 +42,7 @@ REPORTED_COST_METHODS = frozenset(
     }
 )
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 RESULT_LINE = re.compile(
     r"^\s+live_provider_test\.go:\d+: "
@@ -119,6 +120,12 @@ def generated_at(value: Any) -> str:
     return value
 
 
+def source_revision(value: Any) -> str:
+    if not isinstance(value, str) or not SOURCE_REVISION.fullmatch(value):
+        raise rejected()
+    return value
+
+
 def default_generated_at() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -139,7 +146,9 @@ def parse_raw_result(path: Path, selected_profile: str) -> dict[str, Any]:
     return result
 
 
-def evidence_from_result(result: dict[str, Any], selected_profile: str, timestamp: str) -> dict[str, Any]:
+def evidence_from_result(
+    result: dict[str, Any], selected_profile: str, timestamp: str, revision: str
+) -> dict[str, Any]:
     if selected_profile not in PROFILES:
         raise rejected()
     known = result["actual_spend_known"] == "true"
@@ -160,6 +169,7 @@ def evidence_from_result(result: dict[str, Any], selected_profile: str, timestam
         {
             "schema_version": SCHEMA_VERSION,
             "generated_at": timestamp,
+            "source_revision": revision,
             "profile": selected_profile,
             "tenant": TENANT,
             "ceiling_micro_usd": CEILING_MICRO_USD,
@@ -182,6 +192,7 @@ def validate_evidence(candidate: Any) -> dict[str, Any]:
     required = {
         "schema_version",
         "generated_at",
+        "source_revision",
         "profile",
         "tenant",
         "ceiling_micro_usd",
@@ -196,6 +207,7 @@ def validate_evidence(candidate: Any) -> dict[str, Any]:
     if exact_int(candidate["schema_version"]) != SCHEMA_VERSION:
         raise rejected()
     timestamp = generated_at(candidate["generated_at"])
+    revision = source_revision(candidate["source_revision"])
     profile = candidate["profile"]
     if not isinstance(profile, str) or profile not in PROFILES:
         raise rejected()
@@ -220,6 +232,7 @@ def validate_evidence(candidate: Any) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": timestamp,
+        "source_revision": revision,
         "profile": profile,
         "tenant": TENANT,
         "ceiling_micro_usd": CEILING_MICRO_USD,
@@ -235,6 +248,7 @@ def redacted_log(evidence: dict[str, Any]) -> bytes:
     spend = evidence["actual_spend"]
     lines = [
         "live_provider_contract_evidence=v1",
+        f"source_revision={evidence['source_revision']}",
         f"profile={evidence['profile']}",
         f"tenant={evidence['tenant']}",
         f"ceiling_micro_usd={evidence['ceiling_micro_usd']}",
@@ -274,8 +288,9 @@ def command_record(arguments: argparse.Namespace) -> int:
     if selected_profile not in PROFILES or arguments.evidence == arguments.log:
         raise rejected()
     timestamp = arguments.generated_at or default_generated_at()
+    revision = source_revision(arguments.source_revision)
     result = parse_raw_result(Path(arguments.input), selected_profile)
-    evidence = evidence_from_result(result, selected_profile, generated_at(timestamp))
+    evidence = evidence_from_result(result, selected_profile, generated_at(timestamp), revision)
     evidence_bytes = (json.dumps(evidence, sort_keys=True, indent=2) + "\n").encode("utf-8")
     write_atomic(Path(arguments.evidence), evidence_bytes)
     try:
@@ -291,11 +306,14 @@ def command_record(arguments: argparse.Namespace) -> int:
 
 
 def command_verify(arguments: argparse.Namespace) -> int:
+    expected_revision = source_revision(arguments.source_revision)
     try:
         decoded = json.loads(regular_bytes(Path(arguments.evidence), MAX_EVIDENCE_BYTES))
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise rejected() from None
     evidence = validate_evidence(decoded)
+    if evidence["source_revision"] != expected_revision:
+        raise rejected()
     if regular_bytes(Path(arguments.log), MAX_EVIDENCE_BYTES) != redacted_log(evidence):
         raise rejected()
     print("live contract evidence verified")
@@ -310,11 +328,13 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--input", required=True)
     record.add_argument("--evidence", required=True)
     record.add_argument("--log", required=True)
+    record.add_argument("--source-revision", required=True)
     record.add_argument("--generated-at")
     record.set_defaults(handler=command_record)
     verify = commands.add_parser("verify")
     verify.add_argument("--evidence", required=True)
     verify.add_argument("--log", required=True)
+    verify.add_argument("--source-revision", required=True)
     verify.set_defaults(handler=command_verify)
     return parser
 
