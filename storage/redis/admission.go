@@ -432,6 +432,9 @@ func parseFunctionResult(result []any) (status string, record, denial []byte, er
 	if len(result) > 1 {
 		record, _ = resultBytes(result[1])
 	}
+	if status == "denied" && len(result) == 2 {
+		return status, nil, record, nil
+	}
 	if len(result) > 2 {
 		denial, _ = resultBytes(result[2])
 	}

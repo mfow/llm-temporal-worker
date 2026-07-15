@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/admission"
+	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/pricing"
 	"github.com/mfow/llm-temporal-worker/state"
 )
@@ -271,6 +272,16 @@ type continuationWire struct {
 	Value  state.Continuation `json:"value"`
 }
 
+type continuationStateAlias state.Continuation
+
+type continuationDecodeWire struct {
+	Schema string `json:"schema"`
+	Value  struct {
+		continuationStateAlias
+		Transcript json.RawMessage `json:"Transcript"`
+	} `json:"value"`
+}
+
 func encodeContinuation(value state.Continuation) ([]byte, error) {
 	return json.Marshal(continuationWire{Schema: continuationSchema, Value: value.Clone()})
 }
@@ -279,14 +290,20 @@ func decodeContinuation(data []byte) (state.Continuation, error) {
 	if len(data) == 0 || len(data) > 4<<20 {
 		return state.Continuation{}, fmt.Errorf("invalid continuation record size")
 	}
-	var wire continuationWire
+	var wire continuationDecodeWire
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return state.Continuation{}, fmt.Errorf("decode continuation record: %w", err)
 	}
 	if wire.Schema != continuationSchema {
 		return state.Continuation{}, fmt.Errorf("unsupported continuation schema")
 	}
-	return wire.Value, nil
+	transcript, err := llm.DecodeItems(wire.Value.Transcript)
+	if err != nil {
+		return state.Continuation{}, fmt.Errorf("decode continuation transcript: %w", err)
+	}
+	value := state.Continuation(wire.Value.continuationStateAlias)
+	value.Transcript = transcript
+	return value, nil
 }
 
 func decodeDigest(value string) ([32]byte, error) {
