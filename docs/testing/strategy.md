@@ -294,9 +294,10 @@ credential-like bytes. It only reports clean repository-relative paths.
 
 `coverage: bootstrap` means the profile is structurally governed but is not a
 claim of complete adapter coverage. `coverage: enforced` activates the full
-code-owned case matrix selected by capability facts. No production profile is
-enforced until its dedicated fixture task supplies every required case. The
-offline release target makes that distinction visible:
+code-owned case matrix selected by capability facts. A profile may use
+`bootstrap` while its dedicated fixture task is in progress, but repository
+validation requires every checked-in production profile to be `enforced`. The
+offline release target makes that requirement visible:
 
 ```sh
 make adapter-contracts

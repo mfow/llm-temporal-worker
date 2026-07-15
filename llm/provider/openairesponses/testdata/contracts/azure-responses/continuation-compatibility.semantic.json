@@ -1,0 +1,28 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-azure-response-continuation",
+  "model": "azure-responses/fixture",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "continue Azure response"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": {
+    "handle": "openai-responses:azure-resp-prior",
+    "endpoint_id": "azure-fixture",
+    "model": "azure-responses/fixture",
+    "pinned": true,
+    "provider_state": [
+      {
+        "kind": "provider_state",
+        "provider": "openai",
+        "endpoint_family": "responses",
+        "media_type": "application/vnd.openai.response+json",
+        "opaque": "YXp1cmUtcmVzcC1wcmlvcg=="
+      }
+    ]
+  },
+  "extensions": {}
+}

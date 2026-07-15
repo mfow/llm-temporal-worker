@@ -116,30 +116,33 @@ func TestResponsesContractFixturesCoverUsageClassAndStrictLoss(t *testing.T) {
 	}
 }
 
-func TestOpenAIResponsesContractFixtureCoversContinuationCompatibility(t *testing.T) {
-	profile := responsesFixtureProfiles[0]
-	request := loadContractRequestFixture(t, profile.id, "continuation-compatibility.semantic.json")
-	adapter := fixtureAdapterForProfile(t, profile)
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: profile.endpoint,
-			Family:     provider.FamilyOpenAIResponses,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestResponsesContractFixturesCoverContinuationCompatibility(t *testing.T) {
+	for _, profile := range responsesFixtureProfiles {
+		t.Run(profile.id, func(t *testing.T) {
+			request := loadContractRequestFixture(t, profile.id, "continuation-compatibility.semantic.json")
+			adapter := fixtureAdapterForProfile(t, profile)
+			call, err := adapter.Compile(context.Background(), provider.CompileInput{
+				Request: request,
+				Query: provider.CapabilityQuery{
+					EndpointID: profile.endpoint,
+					Family:     provider.FamilyOpenAIResponses,
+					Model:      request.Model,
+				},
+				Strict: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !call.Metadata.OpaqueStateRequired {
+				t.Fatal("continuation call did not retain opaque-state requirement")
+			}
+			gotWire, err := json.Marshal(call.SDKParams)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCanonicalFixtureJSON(t, gotWire, profile.id, "continuation-compatibility.wire.json")
+		})
 	}
-	if !call.Metadata.OpaqueStateRequired {
-		t.Fatal("continuation call did not retain opaque-state requirement")
-	}
-	gotWire, err := json.Marshal(call.SDKParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertCanonicalFixtureJSON(t, gotWire, profile.id, "continuation-compatibility.wire.json")
 }
 
 func TestResponsesContractFixturesStayRedactedAndRespectCoverageBoundary(t *testing.T) {
@@ -156,7 +159,7 @@ func TestResponsesContractFixturesStayRedactedAndRespectCoverageBoundary(t *test
 		},
 		"azure-responses": {
 			ID:       "azure-responses",
-			Coverage: contracttest.CoverageBootstrap,
+			Coverage: contracttest.CoverageEnforced,
 			Path:     "llm/provider/openairesponses/testdata/contracts/azure-responses",
 		},
 	}

@@ -42,12 +42,12 @@ The shared validator reports the two coverage states separately:
 | `bootstrap` | validates schema, declared artifacts, source metadata, and raw fixture-byte redaction | a structurally governed profile; it does not claim full-matrix coverage |
 | `enforced` | also requires every code-owned case applicable to its capability facts | a profile whose dedicated coverage task has supplied its complete fixture matrix |
 
-`bedrock-anthropic`, direct Chat, OpenRouter Chat, Exa Chat, and Anthropic
-Direct Messages are currently `enforced` for their declared capability facts.
-All other checked-in production profiles remain `bootstrap` until their
-dedicated coverage task adds the required semantic request, captured wire
-request, response, usage/cost, error, stream, loss/diagnostic, service-class,
-continuation, and security fixtures.
+Every checked-in production profile is currently `enforced` for its declared
+capability facts. `bootstrap` remains available only while a new profile's
+dedicated coverage task is incomplete; repository validation rejects it from
+the checked-in release matrix until it supplies the required semantic request,
+captured wire request, response, usage/cost, error, stream, loss/diagnostic,
+service-class, continuation, and security fixtures.
 
 The Bedrock suite proves exact opaque-state replay, service-tier
 lowering/lifting, classified-error redaction, and captured SSE decoding and
@@ -62,15 +62,16 @@ profile's fixture matrix.
 
 ### Responses profile boundary
 
-The direct `openai-responses` and `azure-responses` profiles now have separate
-fixture roots, provenance/redaction records, and deterministic conversion
-tests. Their stream artifacts exercise the decoder with full input, every
-split point, an empty read, one-byte fragments, and deterministic random
-fragments. They are deliberately decoder-only facts: both profiles declare
-`streaming: unsupported` and remain `bootstrap` because the package has no
-typed stream adapter or official SDK stream dispatch. The Azure fixture also
-tests its own `/openai/v1/responses` path and authentication shape; it is not
-evidence that a direct OpenAI model/tier is available from an Azure deployment.
+The direct `openai-responses` and `azure-responses` profiles have separate
+fixture roots, provenance/redaction records, deterministic conversion tests,
+and enforced continuation-compatibility fixtures. Their stream artifacts
+exercise the decoder with full input, every split point, an empty read,
+one-byte fragments, and deterministic random fragments. Those artifacts are
+deliberately decoder-only: both profiles declare `streaming: unsupported`
+because the package has no typed stream adapter or official SDK stream
+dispatch. The Azure fixture also tests its own `/openai/v1/responses` path and
+authentication shape; it is not evidence that a direct OpenAI model/tier is
+available from an Azure deployment.
 
 Bootstrap metadata can use `pending` while a capability is still being
 researched. An enforced profile must instead declare every registry capability
@@ -84,20 +85,18 @@ Run the offline gate with:
 make adapter-contracts
 ```
 
-It prints bootstrap and enforced profile IDs independently, never calls a
-provider, and never rewrites a fixture. The raw-byte scan covers every file
-under each `testdata/contracts` root, including shared event files that are not
-yet attributed to an enforced profile. Failure output contains only a clean
-repository-relative fixture path, never its bytes.
+It rejects any checked-in `bootstrap` profile, never calls a provider, and
+never rewrites a fixture. The raw-byte scan covers every file under each
+`testdata/contracts` root, including shared event files. Failure output
+contains only a clean repository-relative fixture path, never its bytes.
 
 ## Common semantic cases
 
-The following is the required case inventory for an `enforced` profile. The
-currently checked-in `bootstrap` profiles may declare only a subset while their
-dedicated coverage work is in progress; bootstrap status must not be read as a
-claim that these cases already exist for every provider. An enforced profile
-has either a success fixture or an explicit compile-rejection fixture for each
-applicable row:
+The following is the required case inventory for an `enforced` profile. A
+`bootstrap` profile may declare only a subset while its dedicated coverage work
+is in progress, but it cannot be part of the checked-in release matrix. An
+enforced profile has either a success fixture or an explicit compile-rejection
+fixture for each applicable row:
 
 | Area | Cases |
 | --- | --- |
@@ -215,6 +214,8 @@ llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic/
 Each listed profile has a `manifest.yaml` listing its declared matrix cases.
 Error fixtures live beside the provider profile that emits them, and security
 cases are package tests rather than a root-level fixture directory. Bootstrap
-profiles are structurally checked now; enforced profiles are compared against
-the complete code-owned required-case list, so adding a new semantic field or
-enum fails every enforced adapter until support/rejection fixtures are added.
+profiles are structurally checked during isolated profile development, while
+repository validation requires every checked-in profile to be enforced.
+Enforced profiles are compared against the complete code-owned required-case
+list, so adding a new semantic field or enum fails every enforced adapter until
+support/rejection fixtures are added.
