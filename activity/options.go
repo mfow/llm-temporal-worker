@@ -10,16 +10,19 @@ import (
 )
 
 type ActivityPolicy struct {
-	StartToClose       time.Duration
-	ScheduleToClose    time.Duration
-	HeartbeatTimeout   time.Duration
-	InitialRetry       time.Duration
-	BackoffCoefficient float64
-	MaximumRetry       time.Duration
-	MaximumAttempts    int32
-	RetryHorizon       time.Duration
-	OperationRetention time.Duration
-	ProviderTimeout    time.Duration
+	StartToClose     time.Duration
+	ScheduleToClose  time.Duration
+	HeartbeatTimeout time.Duration
+	// HeartbeatKeepaliveInterval must match the worker's configured bounded
+	// provider-wait cadence. It is independent of ProviderTimeout.
+	HeartbeatKeepaliveInterval time.Duration
+	InitialRetry               time.Duration
+	BackoffCoefficient         float64
+	MaximumRetry               time.Duration
+	MaximumAttempts            int32
+	RetryHorizon               time.Duration
+	OperationRetention         time.Duration
+	ProviderTimeout            time.Duration
 }
 
 func (policy ActivityPolicy) Validate() error {
@@ -31,6 +34,12 @@ func (policy ActivityPolicy) Validate() error {
 	}
 	if policy.HeartbeatTimeout <= 0 || policy.HeartbeatTimeout >= policy.StartToClose {
 		return fmt.Errorf("heartbeat timeout must be positive and shorter than start-to-close")
+	}
+	if policy.HeartbeatKeepaliveInterval < 0 {
+		return fmt.Errorf("heartbeat keepalive interval must not be negative")
+	}
+	if policy.KeepaliveInterval() > policy.HeartbeatTimeout/3 {
+		return fmt.Errorf("heartbeat keepalive interval must be no more than one third of heartbeat timeout")
 	}
 	if policy.InitialRetry < 0 || policy.MaximumRetry < 0 {
 		return fmt.Errorf("retry intervals must not be negative")
@@ -51,6 +60,16 @@ func (policy ActivityPolicy) Validate() error {
 		return fmt.Errorf("provider timeout must leave time for Activity finalization")
 	}
 	return nil
+}
+
+// KeepaliveInterval returns the expected provider-wait cadence. Workflow
+// callers set HeartbeatKeepaliveInterval to their worker configuration; zero
+// uses the documented default.
+func (policy ActivityPolicy) KeepaliveInterval() time.Duration {
+	if policy.HeartbeatKeepaliveInterval == 0 {
+		return DefaultHeartbeatKeepaliveInterval
+	}
+	return policy.HeartbeatKeepaliveInterval
 }
 
 func (policy ActivityPolicy) TemporalOptions() (workflow.ActivityOptions, error) {

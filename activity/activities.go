@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/engine"
 	"github.com/mfow/llm-temporal-worker/internal/observability"
@@ -13,11 +14,16 @@ import (
 )
 
 type Activities struct {
-	Engine             llm.Engine
-	Heartbeater        Heartbeater
-	HeartbeaterFactory func() Heartbeater
-	Tracer             *observability.Tracer
-	PayloadLimits      PayloadLimits
+	Engine                     llm.Engine
+	Heartbeater                Heartbeater
+	HeartbeaterFactory         func() Heartbeater
+	HeartbeatKeepaliveInterval time.Duration
+	Tracer                     *observability.Tracer
+	PayloadLimits              PayloadLimits
+
+	// heartbeatTickerFactory is a test seam. Production leaves it nil and uses
+	// the bounded real-time ticker in startHeartbeatKeepalive.
+	heartbeatTickerFactory func(time.Duration) heartbeatTicker
 }
 
 func (activities *Activities) Generate(ctx context.Context, payload GenerateRequest) (GenerateResponse, error) {
@@ -29,15 +35,36 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 	if err != nil {
 		return GenerateResponse{}, ToTemporalError(err)
 	}
-	heartbeater := activities.newHeartbeater()
-	if heartbeater != nil {
-		heartbeater = &deduplicatingHeartbeater{target: heartbeater}
+	keepaliveInterval, err := activities.keepaliveInterval()
+	if err != nil {
+		return GenerateResponse{}, ToTemporalError(err)
+	}
+	var heartbeater Heartbeater
+	generateContext := ctx
+	var keepalive *heartbeatKeepalive
+	if rawHeartbeater := activities.newHeartbeater(); rawHeartbeater != nil {
+		serializedHeartbeater := &serializedHeartbeater{target: rawHeartbeater}
+		heartbeater = &deduplicatingHeartbeater{target: serializedHeartbeater}
 		ctx = engine.WithHeartbeat(ctx, heartbeater)
 		if err := heartbeater.Beat(ctx, engine.Progress{Phase: "planning"}); err != nil {
 			return GenerateResponse{}, ToTemporalError(err)
 		}
+		generateContext, keepalive = startHeartbeatKeepalive(ctx, serializedHeartbeater, keepaliveInterval, activities.heartbeatTickerFactory)
+		defer func() {
+			if keepalive != nil {
+				_ = keepalive.stop()
+			}
+		}()
 	}
-	response, err := activities.Engine.Generate(ctx, request)
+	response, err := activities.Engine.Generate(generateContext, request)
+	keepaliveErr := keepalive.stop()
+	keepalive = nil
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return GenerateResponse{}, ToTemporalError(ctxErr)
+	}
+	if keepaliveErr != nil {
+		return GenerateResponse{}, ToTemporalError(heartbeatKeepaliveFailure(keepaliveErr))
+	}
 	if err != nil {
 		return GenerateResponse{}, ToTemporalError(err)
 	}
@@ -76,6 +103,38 @@ func (activities *Activities) newHeartbeater() Heartbeater {
 		return activities.HeartbeaterFactory()
 	}
 	return activities.Heartbeater
+}
+
+func (activities *Activities) keepaliveInterval() (time.Duration, error) {
+	if activities == nil || activities.HeartbeatKeepaliveInterval == 0 {
+		return DefaultHeartbeatKeepaliveInterval, nil
+	}
+	if activities.HeartbeatKeepaliveInterval < 0 {
+		return 0, provider.NewError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "Activity heartbeat keepalive interval must be positive")
+	}
+	return activities.HeartbeatKeepaliveInterval, nil
+}
+
+// serializedHeartbeater prevents the periodic provider-wait heartbeat from
+// racing lifecycle heartbeats emitted by the engine on the same Activity.
+type serializedHeartbeater struct {
+	target Heartbeater
+	mu     sync.Mutex
+}
+
+func (heartbeater *serializedHeartbeater) Beat(ctx context.Context, progress engine.Progress) error {
+	if heartbeater == nil || heartbeater.target == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	heartbeater.mu.Lock()
+	defer heartbeater.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return heartbeater.target.Beat(ctx, progress)
 }
 
 // deduplicatingHeartbeater suppresses duplicate lifecycle facts emitted by an

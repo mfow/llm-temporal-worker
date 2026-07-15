@@ -99,11 +99,12 @@
     },
     "worker": {
       "type": "object", "additionalProperties": false,
-      "required": ["max_concurrent_activities", "max_concurrent_activity_task_polls", "graceful_stop_timeout"],
+      "required": ["max_concurrent_activities", "max_concurrent_activity_task_polls", "graceful_stop_timeout", "heartbeat_keepalive_interval"],
       "properties": {
         "max_concurrent_activities": { "type": "integer", "minimum": 1 },
         "max_concurrent_activity_task_polls": { "type": "integer", "minimum": 1 },
-        "graceful_stop_timeout": { "$ref": "#/$defs/duration" }
+        "graceful_stop_timeout": { "$ref": "#/$defs/duration" },
+        "heartbeat_keepalive_interval": { "$ref": "#/$defs/duration" }
       }
     },
     "state": {

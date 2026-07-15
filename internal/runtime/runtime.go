@@ -198,17 +198,10 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		MaxConcurrentActivities:        configuration.Temporal.Worker.MaxConcurrentActivities,
 		MaxConcurrentActivityTaskPolls: configuration.Temporal.Worker.MaxConcurrentActivityTaskPolls,
 		GracefulStopTimeout:            time.Duration(configuration.Temporal.Worker.GracefulStopTimeout),
-		Activities: &activity.Activities{
-			Engine: dynamic,
-			HeartbeaterFactory: func() activity.Heartbeater {
-				return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
-			},
-			Tracer:        tracer,
-			PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
-		},
-		Health:  health,
-		Metrics: metrics,
-		Factory: options.WorkerFactory,
+		Activities:                     newRuntimeActivities(configuration, dynamic, metrics, tracer),
+		Health:                         health,
+		Metrics:                        metrics,
+		Factory:                        options.WorkerFactory,
 	})
 	if err != nil {
 		_ = tracer.Shutdown(context.Background())
@@ -268,6 +261,21 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
 		readinessProbeTimeout:  time.Duration(configuration.Server.ReadinessProbeTimeout),
 	}, nil
+}
+
+// newRuntimeActivities keeps the worker's Activity-bound configuration in one
+// composition point. In particular, the periodic provider-wait cadence is a
+// worker setting, never a provider SDK timeout.
+func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer) *activity.Activities {
+	return &activity.Activities{
+		Engine:                     dynamic,
+		HeartbeatKeepaliveInterval: time.Duration(configuration.Temporal.Worker.HeartbeatKeepaliveInterval),
+		HeartbeaterFactory: func() activity.Heartbeater {
+			return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
+		},
+		Tracer:        tracer,
+		PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
+	}
 }
 
 func newMetrics(configuration config.Config) (*observability.Metrics, error) {

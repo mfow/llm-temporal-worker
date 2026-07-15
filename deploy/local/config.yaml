@@ -23,6 +23,7 @@ temporal:
     max_concurrent_activities: 4
     max_concurrent_activity_task_polls: 2
     graceful_stop_timeout: 30s
+    heartbeat_keepalive_interval: 1s
 
 state:
   kind: redis

@@ -125,6 +125,18 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	}
 }
 
+func TestRuntimeActivitiesUseConfiguredHeartbeatKeepaliveInterval(t *testing.T) {
+	configuration, err := config.Load(runtimeConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration.Temporal.Worker.HeartbeatKeepaliveInterval = config.Duration(250 * time.Millisecond)
+	activities := newRuntimeActivities(configuration, testEngine{}, nil, nil)
+	if got, want := activities.HeartbeatKeepaliveInterval, 250*time.Millisecond; got != want {
+		t.Fatalf("Activity heartbeat keepalive interval = %s, want %s", got, want)
+	}
+}
+
 func TestFactoryErrorsDoNotLeakSecretText(t *testing.T) {
 	marker := "provider-secret-marker"
 	_, err := New(context.Background(), runtimeConfig(t), Options{

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/config"
 	"github.com/mfow/llm-temporal-worker/llm"
@@ -39,6 +40,25 @@ func TestLoadCompleteExample(t *testing.T) {
 	}
 	if _, ok := classes[llm.ServiceClass("provider_default")]; ok {
 		t.Fatal("configuration exposed a provider-default public service class")
+	}
+	if got, want := time.Duration(loaded.Temporal.Worker.HeartbeatKeepaliveInterval), time.Second; got != want {
+		t.Fatalf("worker heartbeat keepalive interval = %s, want %s", got, want)
+	}
+}
+
+func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
+	withoutSetting := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s\n", "", 1)
+	loaded, err := config.Load([]byte(withoutSetting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := time.Duration(loaded.Temporal.Worker.HeartbeatKeepaliveInterval), time.Second; got != want {
+		t.Fatalf("default worker heartbeat keepalive interval = %s, want %s", got, want)
+	}
+
+	invalid := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s", "    heartbeat_keepalive_interval: -1s", 1)
+	if _, err := config.Load([]byte(invalid)); err == nil || !strings.Contains(err.Error(), "heartbeat_keepalive_interval") {
+		t.Fatalf("invalid heartbeat keepalive interval error = %v", err)
 	}
 }
 
