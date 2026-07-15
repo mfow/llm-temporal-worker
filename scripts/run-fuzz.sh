@@ -64,6 +64,9 @@ case "$mode" in
       echo "fuzz shard must be 0, 1, or 2" >&2
       exit 64
     fi
+    # Go accepts a duration or an Nx execution budget for -fuzztime. Trusted
+    # master supplies 250000x so each target has a fixed workload; the local
+    # default remains a short duration for ad-hoc shard runs.
     duration="${FUZZ_TIME:-45s}"
     for index in "${!targets[@]}"; do
       if (( index % 3 != shard )); then
