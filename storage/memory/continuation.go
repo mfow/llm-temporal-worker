@@ -83,14 +83,14 @@ func (store *ContinuationStore) GetForTenant(ctx context.Context, tenant string,
 	if tenant == "" {
 		return state.Continuation{}, state.ErrInvalidHandle
 	}
+	if _, err := store.keyring.Verify(tenant, handle.String()); err != nil {
+		return state.Continuation{}, state.ErrInvalidHandle
+	}
 	value, err := store.Get(ctx, handle)
 	if err != nil {
 		return state.Continuation{}, err
 	}
 	if value.Tenant != tenant {
-		return state.Continuation{}, state.ErrInvalidHandle
-	}
-	if _, err := store.keyring.Verify(tenant, handle.String()); err != nil {
 		return state.Continuation{}, state.ErrInvalidHandle
 	}
 	return value, nil

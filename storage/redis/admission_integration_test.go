@@ -4,12 +4,10 @@ package redis
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/admission"
-	redisclient "github.com/redis/go-redis/v9"
 )
 
 // Run with a pinned Redis image and persistence profile whose admission
@@ -22,17 +20,9 @@ import (
 // enabled, AOF/RDB settings matching the target profile, and the concurrent
 // exact-boundary scenarios from docs/testing/strategy.md.
 func TestLiveRedisAdmission(t *testing.T) {
-	address := os.Getenv("LLMTW_REDIS_ADDR")
-	if address == "" {
-		t.Skip("set LLMTW_REDIS_ADDR to run the pinned live Redis gate")
-	}
-	client := redisclient.NewClient(&redisclient.Options{Addr: address})
-	t.Cleanup(func() { _ = client.Close() })
+	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		t.Fatalf("Redis ping: %v", err)
-	}
 	store, err := NewAdmissionStore(AdmissionOptions{
 		Client:          client,
 		Mode:            AdmissionModeFunction,
