@@ -1,0 +1,15 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-anthropic-aws-best-effort-loss",
+  "model": "claude-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "best_effort",
+  "instructions": [],
+  "input": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "best effort loss"}]}],
+  "tools": [],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "sampling": {"seed": 1},
+  "continuation": null,
+  "extensions": {}
+}

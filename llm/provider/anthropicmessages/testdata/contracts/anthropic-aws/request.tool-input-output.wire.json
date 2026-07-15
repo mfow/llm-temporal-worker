@@ -1,0 +1,21 @@
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "content": [{"text": "look up Sydney", "type": "text"}],
+      "role": "user"
+    },
+    {
+      "content": [{"id": "toolu-input", "input": {"q": "sydney"}, "name": "lookup", "type": "tool_use"}],
+      "role": "assistant"
+    },
+    {
+      "content": [{"content": [{"text": "Sydney", "type": "text"}], "is_error": false, "tool_use_id": "toolu-input", "type": "tool_result"}],
+      "role": "user"
+    }
+  ],
+  "model": "claude-contract",
+  "service_tier": "standard_only",
+  "tool_choice": {"disable_parallel_tool_use": true, "type": "auto"},
+  "tools": [{"description": "look up a city", "input_schema": {"properties": {"q": {"type": "string"}}, "required": ["q"], "type": "object"}, "name": "lookup", "strict": true}]
+}

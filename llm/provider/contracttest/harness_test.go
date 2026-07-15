@@ -278,6 +278,123 @@ generated_field_exemptions: []
 	}
 }
 
+func TestValidateRepositoryRequiresDecoderFixturesWhenDeclared(t *testing.T) {
+	for _, missingCase := range []string{"full-stream", "fragmented-stream"} {
+		t.Run(missingCase, func(t *testing.T) {
+			root := t.TempDir()
+			profileDir := testProfileDir(root)
+			remainingCase := "full-stream"
+			if missingCase == remainingCase {
+				remainingCase = "fragmented-stream"
+			}
+			mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+id: example
+provider: example
+family: chat
+coverage: enforced
+metadata: metadata.yaml
+cases:
+  - id: semantic-request
+    artifacts:
+      semantic: semantic.json
+  - id: captured-wire-request
+    artifacts:
+      wire: wire.json
+  - id: response
+    artifacts:
+      semantic: semantic.json
+      wire: wire.json
+  - id: classified-error
+    artifacts:
+      wire: wire.json
+  - id: security-redaction
+    artifacts:
+      wire: wire.json
+  - id: `+remainingCase+`
+    artifacts:
+      events: events.stream
+`)
+			mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), `profile: example
+upstream_url: https://example.test/contracts
+upstream_date: "2026-07-14"
+sdk_version: example-sdk/v1
+provenance: synthetic
+redactions:
+  - credentials
+capability_facts:
+  usage: unsupported
+  streaming: unsupported
+  stream_decoder: supported
+  strict_loss: unsupported
+  best_effort: unsupported
+  service_class: unsupported
+  continuation: unsupported
+generated_field_exemptions: []
+`)
+			mustWriteFile(t, filepath.Join(profileDir, "semantic.json"), `{}`)
+			mustWriteFile(t, filepath.Join(profileDir, "wire.json"), `{}`)
+			mustWriteFile(t, filepath.Join(profileDir, "events.stream"), "event: completed\n")
+
+			_, err := ValidateRepository(root)
+			if err == nil || !strings.Contains(err.Error(), `missing required case "`+missingCase+`"`) {
+				t.Fatalf("decoder fixture error = %v, want missing %q", err, missingCase)
+			}
+		})
+	}
+}
+
+func TestValidateRepositoryRejectsEnforcedProfileWithoutStreamDecoderFact(t *testing.T) {
+	root := t.TempDir()
+	profileDir := testProfileDir(root)
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+id: example
+provider: example
+family: chat
+coverage: enforced
+metadata: metadata.yaml
+cases:
+  - id: semantic-request
+    artifacts:
+      semantic: semantic.json
+  - id: captured-wire-request
+    artifacts:
+      wire: wire.json
+  - id: response
+    artifacts:
+      semantic: semantic.json
+      wire: wire.json
+  - id: classified-error
+    artifacts:
+      wire: wire.json
+  - id: security-redaction
+    artifacts:
+      wire: wire.json
+`)
+	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), `profile: example
+upstream_url: https://example.test/contracts
+upstream_date: "2026-07-14"
+sdk_version: example-sdk/v1
+provenance: synthetic
+redactions:
+  - credentials
+capability_facts:
+  usage: unsupported
+  streaming: unsupported
+  strict_loss: unsupported
+  best_effort: unsupported
+  service_class: unsupported
+  continuation: unsupported
+generated_field_exemptions: []
+`)
+	mustWriteFile(t, filepath.Join(profileDir, "semantic.json"), `{}`)
+	mustWriteFile(t, filepath.Join(profileDir, "wire.json"), `{}`)
+
+	_, err := ValidateRepository(root)
+	if err == nil || !strings.Contains(err.Error(), "missing enforced capability fact") {
+		t.Fatalf("missing stream decoder fact error = %v", err)
+	}
+}
+
 func TestReportRequireAllEnforcedRejectsBootstrapProfiles(t *testing.T) {
 	err := (Report{Bootstrap: []Profile{{ID: "example"}}}).RequireAllEnforced()
 	if err == nil || !strings.Contains(err.Error(), "example") {

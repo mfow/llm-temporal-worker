@@ -1,0 +1,34 @@
+event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":4}}}
+
+event: content_block_start
+data: {"index":0,"content_block":{"type":"thinking"}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"thinking_delta","thinking":"private "}}
+
+event: content_block_delta
+data: {"index":0,"delta":{"type":"signature_delta","signature":"sig-stream"}}
+
+event: content_block_stop
+data: {"index":0}
+
+event: content_block_start
+data: {"index":1,"content_block":{"type":"tool_use","id":"toolu-stream","name":"lookup"}}
+
+event: content_block_delta
+data: {"index":1,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}
+
+event: content_block_delta
+data: {"index":1,"delta":{"type":"input_json_delta","partial_json":"\"sydney\"}"}}
+
+event: content_block_stop
+data: {"index":1}
+
+event: message_delta
+data: {"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {}
+
+: terminal

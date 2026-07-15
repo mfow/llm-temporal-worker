@@ -1,0 +1,24 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fixture-anthropic-aws-tool-input-output",
+  "model": "claude-contract",
+  "service_class": "standard",
+  "service_class_fallbacks": [],
+  "portability": "strict",
+  "instructions": [],
+  "input": [
+    {"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "look up Sydney"}]},
+    {"kind": "tool_call", "id": "toolu-input", "name": "lookup", "arguments": {"q": "sydney"}},
+    {"kind": "tool_result", "call_id": "toolu-input", "name": "lookup", "content": [{"kind": "text", "text": "Sydney"}], "is_error": false}
+  ],
+  "tools": [
+    {
+      "name": "lookup",
+      "description": "look up a city",
+      "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+    }
+  ],
+  "tool_policy": {"mode": "auto", "parallel": false},
+  "continuation": null,
+  "extensions": {}
+}

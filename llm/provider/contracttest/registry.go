@@ -31,12 +31,28 @@ var caseRegistry = []CaseRequirement{
 	{ID: "classified-error", Artifacts: []ArtifactKind{ArtifactWire}},
 	{ID: "security-redaction", Artifacts: []ArtifactKind{ArtifactWire}},
 	{ID: "usage-cost", Capability: "usage", Artifacts: []ArtifactKind{ArtifactSemantic, ArtifactWire}},
-	{ID: "full-stream", Capability: "streaming", Artifacts: []ArtifactKind{ArtifactEvents}},
-	{ID: "fragmented-stream", Capability: "streaming", Artifacts: []ArtifactKind{ArtifactEvents}},
+	// Decoder fixtures prove captured event reconstruction. They do not claim a
+	// public adapter streaming invocation, which remains governed separately by
+	// the streaming capability fact.
+	{ID: "full-stream", Capability: "stream_decoder", Artifacts: []ArtifactKind{ArtifactEvents}},
+	{ID: "fragmented-stream", Capability: "stream_decoder", Artifacts: []ArtifactKind{ArtifactEvents}},
 	{ID: "strict-loss", Capability: "strict_loss", Artifacts: []ArtifactKind{ArtifactSemantic, ArtifactWire}},
 	{ID: "best-effort-diagnostic", Capability: "best_effort", Artifacts: []ArtifactKind{ArtifactSemantic}},
 	{ID: "class-facts", Capability: "service_class", Artifacts: []ArtifactKind{ArtifactSemantic, ArtifactWire}},
 	{ID: "continuation-compatibility", Capability: "continuation", Artifacts: []ArtifactKind{ArtifactSemantic, ArtifactWire}},
+}
+
+// governedCapabilityFacts remain mandatory metadata for every enforced
+// profile, including facts such as public streaming that do not themselves
+// require an offline fixture artifact.
+var governedCapabilityFacts = []string{
+	"usage",
+	"streaming",
+	"stream_decoder",
+	"strict_loss",
+	"best_effort",
+	"service_class",
+	"continuation",
 }
 
 // RequiredCases returns the complete matrix applicable to the profile's
@@ -111,6 +127,9 @@ func validateEnforcedCapabilityFacts(capabilityFacts map[string]string) error {
 
 func registryCapabilities() []string {
 	capabilities := make(map[string]struct{})
+	for _, capability := range governedCapabilityFacts {
+		capabilities[capability] = struct{}{}
+	}
 	for _, requirement := range caseRegistry {
 		if requirement.Capability != "" {
 			capabilities[requirement.Capability] = struct{}{}

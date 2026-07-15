@@ -1,0 +1,35 @@
+{
+  "api_version": "llm.temporal/v1",
+  "continuation": {"endpoint_id": "anthropic-aws", "handle": "anthropic-messages:msg-aws-fixture", "model": "claude-contract", "pinned": true},
+  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "diagnostics": [],
+  "operation_key": "fixture-anthropic-aws",
+  "output": [{"actor": "model", "content": [{"kind": "text", "text": "hello from aws"}], "kind": "message"}],
+  "provider": {
+    "finish_reason": "end_turn",
+    "request_id": "req-anthropic-aws-fixture",
+    "response_id": "msg-aws-fixture"
+  },
+  "route": {
+    "api_family": "anthropic_messages",
+    "endpoint_id": "anthropic-aws",
+    "requested_model": "claude-contract",
+    "resolved_model": "claude-contract"
+  },
+  "service": {
+    "actual": "standard",
+    "attempted": "standard",
+    "fallback_index": 0,
+    "provider_value": "standard",
+    "requested": "standard"
+  },
+  "status": "completed",
+  "usage": {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "input_tokens": 4,
+    "output_tokens": 3,
+    "provider_raw": {"input_tokens": 4, "output_tokens": 3, "service_tier": "standard"},
+    "reasoning_tokens": 0
+  }
+}

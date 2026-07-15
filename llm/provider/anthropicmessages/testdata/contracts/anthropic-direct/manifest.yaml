@@ -38,6 +38,10 @@ cases:
     artifacts:
       semantic: strict-loss.semantic.json
       wire: strict-loss.wire.json
+  - id: best-effort-diagnostic
+    artifacts:
+      semantic: best-effort-diagnostic.semantic.json
+      wire: best-effort-diagnostic.wire.json
   - id: class-facts
     artifacts:
       semantic: class-facts.semantic.json
