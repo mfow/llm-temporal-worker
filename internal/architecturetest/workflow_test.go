@@ -323,8 +323,9 @@ func TestWorkflowVerificationEntrypoint(t *testing.T) {
 	if !strings.Contains(script, "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12") {
 		t.Fatal("workflow policy helper does not pin actionlint v1.7.12")
 	}
-	if !strings.Contains(script, "go test ./internal/architecturetest -run '^TestWorkflow'") {
-		t.Fatal("workflow policy helper does not execute the workflow contract tests")
+	const workflowPolicyTests = "go test ./internal/architecturetest -run '^(TestWorkflow|TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile)$'"
+	if !strings.Contains(script, workflowPolicyTests) {
+		t.Fatal("workflow policy helper does not execute the live-provider workflow contract test")
 	}
 }
 
