@@ -206,9 +206,9 @@ func TestV1TraceabilityMakeTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Makefile: %v", err)
 	}
-	const want = "traceability-verify:\n\t$(GO) test ./internal/architecturetest -run '^TestV1TraceabilityCatalog'"
+	const want = "traceability-verify:\n\t$(GO) test ./internal/architecturetest -run '^TestV1Traceability' -count=1"
 	if !strings.Contains(string(makefile), want) {
-		t.Fatalf("traceability-verify must run the catalog validator; want %q", want)
+		t.Fatalf("traceability-verify must run the complete traceability suite; want %q", want)
 	}
 }
 

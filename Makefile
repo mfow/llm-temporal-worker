@@ -27,7 +27,7 @@ docs-verify:
 	$(GO) test ./internal/documentationtest
 
 traceability-verify:
-	$(GO) test ./internal/architecturetest -run '^TestV1TraceabilityCatalog'
+	$(GO) test ./internal/architecturetest -run '^TestV1Traceability' -count=1
 
 workflow-verify:
 	bash scripts/check-workflow-policy.sh
