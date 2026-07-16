@@ -36,9 +36,28 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 	ctx = observability.WithTracer(ctx, activities.Tracer)
 	ctx = observability.WithMetrics(ctx, activities.Metrics)
 	started := time.Now()
+	var rawEngineErr error
+	var outputValidationFailure bool
 	defer func() {
 		status, errorClass := activityMetricOutcome(resultErr)
 		activities.Metrics.RecordActivity(status, errorClass, time.Since(started), "total")
+		if activityCanceled(resultErr) {
+			return
+		}
+		if outputValidationFailure {
+			activities.Metrics.RecordActivityFailure("worker")
+			return
+		}
+		failureErr := resultErr
+		if rawEngineErr != nil {
+			// ToTemporalError intentionally turns untyped engine failures into a
+			// caller-safe invalid-argument response. Preserve the original engine
+			// error for worker-SLO attribution so unknown provenance fails closed.
+			failureErr = rawEngineErr
+		}
+		if origin, failed := activityFailureOrigin(failureErr); failed {
+			activities.Metrics.RecordActivityFailure(origin)
+		}
 	}()
 	if activities.Engine == nil {
 		return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "Activity engine is unavailable"))
@@ -78,16 +97,18 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 		return GenerateResponse{}, ToTemporalError(heartbeatKeepaliveFailure(keepaliveErr))
 	}
 	if err != nil {
+		rawEngineErr = err
 		return GenerateResponse{}, ToTemporalError(err)
 	}
-	return activities.completeGenerate(ctx, response, heartbeater)
+	result, resultErr, outputValidationFailure = activities.completeGenerate(ctx, response, heartbeater)
+	return result, resultErr
 }
 
 func activityMetricOutcome(err error) (status, errorClass string) {
 	if err == nil {
 		return "completed", "none"
 	}
-	if errors.Is(err, context.Canceled) || temporal.IsCanceledError(err) {
+	if activityCanceled(err) {
 		return "canceled", "none"
 	}
 	var applicationErr *temporal.ApplicationError
@@ -102,17 +123,72 @@ func activityMetricOutcome(err error) (status, errorClass string) {
 	return "failed", "internal"
 }
 
-func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response, heartbeater Heartbeater) (GenerateResponse, error) {
+func activityCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) || temporal.IsCanceledError(err)
+}
+
+// activityFailureOrigin keeps the worker SLO classification separate from the
+// stable activity_total label schema. Unknown errors deliberately count as
+// worker-origin failures so an unrecognized failure cannot improve the SLO.
+func activityFailureOrigin(err error) (origin string, failed bool) {
+	if err == nil || activityCanceled(err) {
+		return "", false
+	}
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		if providerErr.Code == provider.CodeCanceled && !errors.Is(providerErr, provider.ErrProviderPreDispatch) {
+			return "", false
+		}
+		return activityFailureOriginDetails(SafeErrorDetails{Code: string(providerErr.Code), Phase: string(providerErr.Phase)})
+	}
+	var applicationErr *temporal.ApplicationError
+	if !errors.As(err, &applicationErr) {
+		return "worker", true
+	}
+	var details SafeErrorDetails
+	if applicationErr.Details(&details) != nil {
+		return "worker", true
+	}
+	return activityFailureOriginDetails(details)
+}
+
+func activityFailureOriginDetails(details SafeErrorDetails) (origin string, failed bool) {
+	switch provider.Code(details.Code) {
+	case provider.CodeConfiguration, provider.CodeInternal, provider.CodeStateUnavailable, provider.CodeStateCorrupt:
+		return "worker", true
+	case provider.CodeNoRoute:
+		if provider.Phase(details.Phase) == provider.PhasePrice {
+			return "worker", true
+		}
+		return "caller", true
+	case provider.CodeAuthentication, provider.CodePermissionDenied,
+		provider.CodeProviderRateLimited, provider.CodeProviderUnavailable,
+		provider.CodeProviderInvalidResponse, provider.CodeDeadlineExceeded,
+		provider.CodeAmbiguousDispatch:
+		return "provider", true
+	case provider.CodeCanceled:
+		return "", false
+	case provider.CodeInvalidArgument, provider.CodeUnsupportedCapability,
+		provider.CodeOperationConflict:
+		return "caller", true
+	case provider.CodeBudgetDenied:
+		return "budget", true
+	default:
+		return "worker", true
+	}
+}
+
+func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response, heartbeater Heartbeater) (GenerateResponse, error, bool) {
 	result := GenerateResponse{APIVersion: APIVersion, Response: response, Metadata: ResultMetadata{OperationID: response.OperationID}}
 	if err := result.Validate(activities.PayloadLimits.inlineBytes()); err != nil {
-		return GenerateResponse{}, ToTemporalError(err)
+		return GenerateResponse{}, ToTemporalError(err), true
 	}
 	if heartbeater != nil {
 		if err := heartbeater.Beat(ctx, engine.Progress{OperationID: response.OperationID, Phase: "finalization"}); err != nil {
-			return GenerateResponse{}, ToTemporalError(err)
+			return GenerateResponse{}, ToTemporalError(err), false
 		}
 	}
-	return result, nil
+	return result, nil, false
 }
 
 // generateTemporal keeps the Temporal Activity result absent when Generate

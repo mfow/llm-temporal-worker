@@ -145,6 +145,9 @@ require a restart when changed.
 Metric labels use bounded configured IDs, never tenant-provided free text:
 
 - `llmtw_activity_total{status,error_class}`;
+- `llmtw_activity_failure_total{origin}` where Activity classification emits
+  `worker`, `provider`, `caller`, or `budget`; `other` is a bounded defensive
+  fallback for invalid direct recorder calls only;
 - `llmtw_activity_duration_seconds{phase}`;
 - `llmtw_provider_attempt_total{endpoint,model,class,outcome}`;
 - `llmtw_provider_duration_seconds{endpoint,model,class}`;
@@ -173,6 +176,27 @@ Temporal Activity boundary; its terminal counter uses only `completed`,
 `provider_unavailable`, or `internal` error class. Cost `method` is one of
 `provider_reported`, `catalog_usage`, `reconstructed_usage`, or
 `retained_reservation`.
+
+`llmtw_activity_failure_total` is additive: it does not change the established
+`llmtw_activity_total` schema. Unknown or missing Activity error details fail
+closed to `origin="worker"`; they never use the defensive `other` series. Use
+the following worker-origin error rate across completed Activity attempts plus
+worker-origin failed Activity attempts:
+
+```promql
+sum(rate(llmtw_activity_failure_total{origin="worker"}[5m]))
+/
+(
+  sum(rate(llmtw_activity_total{status="completed"}[5m]))
+  + sum(rate(llmtw_activity_failure_total{origin="worker"}[5m]))
+)
+```
+
+The denominator intentionally excludes provider, caller, and budget terminal
+failed attempts, so their volume cannot dilute worker failures. It counts
+Temporal Activity attempts: a worker-origin failed retry followed by a
+completed retry contributes two observations. This query defines the metric
+semantics only; it is not live SLO or release evidence.
 
 `llmtw_budget_reserved_micro_usd` is intentionally not written by the engine:
 an engine-local value would incorrectly overwrite the aggregate reservation of

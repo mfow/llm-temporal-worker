@@ -51,6 +51,7 @@ type Metrics struct {
 	mu       sync.RWMutex
 
 	activityTotal        *prometheus.CounterVec
+	activityFailureTotal *prometheus.CounterVec
 	activityDuration     *prometheus.HistogramVec
 	providerAttemptTotal *prometheus.CounterVec
 	providerDuration     *prometheus.HistogramVec
@@ -69,6 +70,13 @@ type Metrics struct {
 type labelAllowList struct {
 	endpoints, models, policies, windows, errors, phases, statuses,
 	outcomes, methods, operationStates, continuationDecisions map[string]struct{}
+}
+
+var activityFailureOrigins = map[string]struct{}{
+	"worker":   {},
+	"provider": {},
+	"caller":   {},
+	"budget":   {},
 }
 
 func values(values []string) map[string]struct{} {
@@ -95,6 +103,7 @@ func (allowed AllowedValues) lists() labelAllowList {
 func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m := &Metrics{registry: prometheus.NewRegistry(), allowed: allowed.lists()}
 	m.activityTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_total", Help: "Completed and failed Temporal activity calls."}, []string{"status", "error_class"})
+	m.activityFailureTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_failure_total", Help: "Failed Temporal activity attempts by bounded error origin."}, []string{"origin"})
 	m.activityDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_activity_duration_seconds", Help: "Activity duration by lifecycle phase."}, []string{"phase"})
 	m.providerAttemptTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_attempt_total", Help: "Provider attempts by configured route."}, []string{"endpoint", "model", "class", "outcome"})
 	m.providerDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_provider_duration_seconds", Help: "Provider attempt duration by configured route."}, []string{"endpoint", "model", "class"})
@@ -109,7 +118,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	collectors := []prometheus.Collector{
-		m.activityTotal, m.activityDuration, m.providerAttemptTotal, m.providerDuration,
+		m.activityTotal, m.activityFailureTotal, m.activityDuration, m.providerAttemptTotal, m.providerDuration,
 		m.serviceClassActual, m.budgetAdmission, m.budgetReserved, m.costTotal,
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
 		m.workerPolling, m.heartbeatAge,
@@ -170,6 +179,17 @@ func (metrics *Metrics) RecordActivity(status, errorClass string, duration time.
 	defer metrics.mu.RUnlock()
 	metrics.activityTotal.WithLabelValues(metrics.builtIn(status, metrics.allowed.statuses), metrics.builtIn(errorClass, metrics.allowed.errors)).Inc()
 	metrics.activityDuration.WithLabelValues(metrics.builtIn(phase, metrics.allowed.phases)).Observe(duration.Seconds())
+}
+
+// RecordActivityFailure records a terminal failed Activity attempt. Origin is
+// intentionally restricted to the fixed vocabulary.
+func (metrics *Metrics) RecordActivityFailure(origin string) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.activityFailureTotal.WithLabelValues(metrics.builtIn(origin, activityFailureOrigins)).Inc()
 }
 
 func (metrics *Metrics) RecordProviderAttempt(endpoint, model, class, outcome string, duration time.Duration) {
