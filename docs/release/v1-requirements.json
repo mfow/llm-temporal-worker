@@ -663,6 +663,74 @@
       }
     },
     {
+      "id": "v1.slo.admission-compilation-p99",
+      "source": {
+        "path": "docs/scope.md",
+        "anchor": "#quality-targets",
+        "quote": "Admission and compilation p99 | Under 25 ms with memory state; under 75 ms with same-region Redis"
+      },
+      "implementation_paths": [
+        "Makefile",
+        "docs/testing/strategy.md",
+        "engine/benchmark_redis_test.go",
+        "engine/benchmark_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "benchmark",
+          "redis-benchmark",
+          "redis-benchmark-compile"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.slo.worker-caused-error-rate",
+      "source": {
+        "path": "docs/scope.md",
+        "anchor": "#quality-targets",
+        "quote": "Worker-caused successful-call error rate | Below 0.1%"
+      },
+      "implementation_paths": [
+        "activity/activities.go",
+        "activity/metrics_test.go",
+        "docs/architecture/deployment-and-operations.md",
+        "internal/observability/metrics.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
       "id": "v1.state.memory-redis-conformance",
       "source": {
         "path": "docs/index.md",
