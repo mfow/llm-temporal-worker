@@ -41,6 +41,8 @@ var expectedV1TraceabilityIDs = []string{
 	"v1.publication.guarded-preflight",
 	"v1.publication.irreversible-operations",
 	"v1.routing.deterministic-explicit-fallback",
+	"v1.slo.admission-compilation-p99",
+	"v1.slo.worker-caused-error-rate",
 	"v1.state.memory-redis-conformance",
 	"v1.temporal.activity-lifecycle",
 }
@@ -120,6 +122,79 @@ func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing
 		Quote:  "Every adapter has request, response, error, and usage golden tests; strict-mode lossy conversions fail before dispatch.",
 	}); got != want {
 		t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
+	}
+}
+
+func TestV1TraceabilitySLORequirements(t *testing.T) {
+	root := repositoryRoot(t)
+	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
+	if err != nil {
+		t.Fatalf("canonicalize catalog: %v", err)
+	}
+	var catalog v1TraceabilityCatalog
+	if err := json.Unmarshal(canonical, &catalog); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+
+	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
+	for _, requirement := range catalog.Requirements {
+		requirements[requirement.ID] = requirement
+	}
+
+	for _, want := range []v1TraceabilityRequirement{
+		{
+			ID: "v1.slo.admission-compilation-p99",
+			Source: v1TraceabilitySource{
+				Path:   "docs/scope.md",
+				Anchor: "#quality-targets",
+				Quote:  "Admission and compilation p99 | Under 25 ms with memory state; under 75 ms with same-region Redis",
+			},
+			ImplementationPaths: []string{
+				"Makefile",
+				"docs/testing/strategy.md",
+				"engine/benchmark_redis_test.go",
+				"engine/benchmark_test.go",
+			},
+			Verification: v1TraceabilityVerification{
+				MakeTargets: []string{"benchmark", "redis-benchmark", "redis-benchmark-compile"},
+				WorkflowJobs: []v1TraceabilityWorkflowJob{
+					{Path: ".github/workflows/master.yml", Job: "verify"},
+					{Path: ".github/workflows/pull-request.yml", Job: "verify"},
+				},
+			},
+			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
+		},
+		{
+			ID: "v1.slo.worker-caused-error-rate",
+			Source: v1TraceabilitySource{
+				Path:   "docs/scope.md",
+				Anchor: "#quality-targets",
+				Quote:  "Worker-caused successful-call error rate | Below 0.1%",
+			},
+			ImplementationPaths: []string{
+				"activity/activities.go",
+				"activity/metrics_test.go",
+				"docs/architecture/deployment-and-operations.md",
+				"internal/observability/metrics.go",
+			},
+			Verification: v1TraceabilityVerification{
+				MakeTargets: []string{"test"},
+				WorkflowJobs: []v1TraceabilityWorkflowJob{
+					{Path: ".github/workflows/master.yml", Job: "verify"},
+					{Path: ".github/workflows/pull-request.yml", Job: "verify"},
+				},
+			},
+			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
+		},
+	} {
+		got, exists := requirements[want.ID]
+		if !exists {
+			t.Errorf("catalog is missing SLO requirement %q", want.ID)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("SLO requirement %q = %#v, want %#v", want.ID, got, want)
+		}
 	}
 }
 
