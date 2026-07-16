@@ -21,7 +21,7 @@ NUL-delimited Go source paths to `gofmt -l`, excludes `vendor` and
 `.worktrees`, and returns formatter failures instead of treating them as a
 clean result. It never modifies the checkout.
 The fuzz target is selected explicitly rather than through a placeholder name;
-for example, a 30-second provider stream smoke is:
+for example, a 30-second legacy provider decoder smoke is:
 
 ```sh
 go test ./llm/provider/openairesponses -run=^$ -fuzz=FuzzDecodeStream -fuzztime=30s
@@ -134,14 +134,14 @@ Every adapter package runs the same suite:
 - usage, cache, reasoning, cost, finish status, IDs, and errors;
 - provider-state byte and order preservation;
 - continuation compatible/incompatible route facts;
-- non-streaming and streaming equivalence.
 
 Tests use official SDK types and redacted wire fixtures so an SDK upgrade cannot
 silently change encoding.
 
-### Streaming tests
+### Legacy decoder regression tests
 
-The checked-in provider decoder tests currently exercise representative streams
+The checked-in provider decoder tests currently exercise representative provider
+event payloads
 as complete input, one byte at a time, and deterministic seeded random chunks.
 The chunk readers tolerate zero-length reads, but the provider tests do not yet
 inject empty chunks or enumerate every two-part split point and CR/LF boundary.
@@ -151,22 +151,12 @@ the decoder must produce the same typed events and final response. Tests also co
 duplicate/out-of-order IDs, invalid UTF-8, partial JSON/tool arguments, missing
 terminal event, terminal error after deltas, cancellation, and oversized event.
 
-The engine stream contract suite additionally proves that a non-streaming
-adapter is rejected before admission or provider dispatch with a direct typed
-error (rather than an EventStream or a fabricated `Generate` result), event
-order is preserved, and every returned stream has exactly one typed terminal
-followed by EOF. It covers bounded-buffer backpressure, cancellation closing
-the provider source, duplicate-terminal rejection, byte-exact opaque provider
-state, completed-operation replay, pre-write fallback retry, ambiguous
-post-write replay refusal, filtered stream-only budget reservations, and
-equivalent finalized stream/non-stream responses. Those engine-level stream
-tests are separate from the Temporal boundary. Activity and integration tests
-prove that a one-shot `Generate` call remains live through a delayed provider
-response and returns its final response; they do not consume a stream or use a
-streaming fallback. The generic stream API remains outside the Temporal
-Activity/runtime boundary. Live raw stream deltas never appear in heartbeat
-details or as separate return records; only bounded progress and the final
-semantic response cross the Temporal boundary.
+These decoder tests do not establish a streaming API, engine dispatch path, or
+Temporal capability. Activity and integration tests prove that one-shot
+`Generate` remains live through a delayed provider response and returns its
+final response. Live raw token deltas never appear in heartbeat details or as
+separate return records; only bounded progress and the final semantic response
+cross the Temporal boundary.
 
 ### Property and fuzz tests
 
@@ -176,7 +166,7 @@ Fuzz targets include:
 - request normalization idempotence;
 - semantic item encode/decode;
 - schema depth/size/subset validation;
-- every provider stream decoder;
+- retained provider event-payload decoders;
 - provider error-body decoder with leak checks;
 - decimal price parsing/multiplication/ceil/overflow;
 - budget window boundary and retry-after calculation;
@@ -292,7 +282,7 @@ go test -race ./integration
 
 Tests use `httptest.Server` or SDK-supported transports that can:
 
-- block before read, read partially, then close, accept and delay, and stream;
+- block before read, read partially, then close, and accept and delay;
 - capture exact headers/body after secret redaction;
 - return fixed request IDs, tiers, usage, and costs;
 - assert one network submission despite Activity retries;
@@ -316,7 +306,7 @@ response.wire.json
 response.semantic.json
 ```
 
-Shared stream fixtures may live once at the parent `testdata/contracts` root:
+Shared legacy decoder fixtures may live once at the parent `testdata/contracts` root:
 
 ```text
 events.wire
@@ -344,14 +334,8 @@ make adapter-contracts
 
 For each enforced profile, its adapter fixture test uses the shared
 `contracttest.VerifySemanticRoundTrip` helper for reversible semantic
-conversion and `contracttest.VerifyStreamAssemblyEquivalent` for
-stream/non-stream response assembly. Both helpers compare JSON after removing
-only that profile's explicit generated-field exemptions.
-
-That adapter-contract helper verifies decoder and semantic-assembly behavior;
-it does not implement the live `StreamingAdapter` port or exercise
-`llm.Engine.Stream` provider dispatch. The typed engine-stream lifecycle stays
-separate until a production adapter supplies that port.
+conversion. Decoder and semantic-assembly helpers remain parser-regression
+coverage only; they do not establish a v1 dispatch API.
 
 Golden updates require an intentional `-update` test flag locally, a human
 reviewable diff, and source-contract update. Normal tests never rewrite files.

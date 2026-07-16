@@ -9,8 +9,7 @@ retry. Its responsibilities are:
 1. declare capabilities for an endpoint/model/service-class tuple;
 2. lower one normalized semantic request to SDK parameter types;
 3. invoke the SDK exactly once with the supplied context and dispatch observer;
-4. lift a one-shot response, or optional library-stream events, into semantic
-   output and typed usage;
+4. lift a one-shot response into semantic output and typed usage;
 5. classify the provider result without deciding whether another route runs.
 
 Every SDK client is constructed with automatic retries disabled. This prevents
@@ -68,7 +67,6 @@ service class, and capability-catalog version. Relevant capabilities include:
 - JSON Schema output and the accepted schema subset;
 - reasoning controls, summaries, and opaque thinking state;
 - continuation identifiers and storage behavior;
-- streaming event types and usage reporting;
 - maximum context and output tokens;
 - service-class request and response fields;
 - request IDs, idempotency headers, and provider-reported cost.
@@ -163,28 +161,13 @@ Usage distinguishes:
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
 
-## Streaming
+## Legacy decoder regression coverage
 
-Each provider stream decoder is a deterministic state machine. It accepts
-arbitrary transport fragmentation and emits provider-neutral events:
-
-```go
-type Event interface{ isEvent() }
-
-type OutputStarted struct{ Index int }
-type TextDelta struct{ Index int; Text string }
-type ToolArgumentsDelta struct{ Index int; CallID, Fragment string }
-type ReasoningDelta struct{ Index int; Opaque []byte }
-type UsageUpdated struct{ Usage llm.Usage }
-type OutputFinished struct{ Index int; Item llm.Item }
-type StreamCompleted struct{ Response llm.Response }
-```
-
-The decoder validates event order, stable indexes, UTF-8 boundaries, tool JSON
-completion, terminal usage, and exactly one terminal event. This decoder and
-the optional `StreamingAdapter` path are for reusable-library callers. The
-Temporal Activity does not consume a network stream: it invokes one-shot
-`Engine.Generate` and returns the final response.
+Some provider packages retain decoders for fragmented provider event payloads.
+They are parser-regression coverage only: v1 has no supported streaming adapter
+or token-event API, and this code must not be wired into Temporal dispatch.
+The supported adapter boundary lifts a one-shot provider response into the
+final normalized response.
 
 ## Error decoding
 
@@ -209,7 +192,8 @@ An adapter is not registered until it has:
 - request and response tier fixtures for every public service-class mapping;
 - errors before write, after possible write, rate limit, auth, invalid input,
   timeout, cancellation, and malformed response;
-- stream fixtures fragmented at every byte boundary for representative events;
+- retained decoder regression fixtures for representative fragmented provider
+  payloads, where those fixtures exist;
 - strict rejection fixtures for every unsupported/lossy feature;
 - provider-state byte-preservation and continuation-pinning tests;
 - a redacted fixture provenance record tied to an upstream API/SDK version.

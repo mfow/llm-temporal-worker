@@ -115,11 +115,10 @@ exactly-once semantics.
 ## Heartbeats
 
 `Generate` invokes `llm.Engine.Generate` once and returns that final normalized
-response. It does not request an `EventStream`, type-assert
-`llm.StreamingEngine`, or use a stream-first fallback. Text/JSON deltas, tool
-arguments, and opaque provider-state events never enter Temporal history; the
-optional streaming API is for reusable Go-library callers outside this Activity
-boundary.
+response. No streaming or token-event API is supported in v1, including for
+reusable library callers. Text/JSON deltas, tool arguments, and opaque
+provider-state events never enter Temporal history. Residual decoder code is
+not a Temporal dispatch path.
 
 Heartbeats contain small, redacted progress only:
 

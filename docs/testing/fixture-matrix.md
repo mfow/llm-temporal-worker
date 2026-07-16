@@ -22,7 +22,7 @@ Azure OpenAI Chat composition is intentionally verified separately in
 `llm/provider/openaichat/azure_test.go` and
 `internal/runtime/factory_test.go`: those tests assert the required deployment
 path, declared API version, `Api-Key` header, and configuration model pin. It
-is not registered as a generic compatible or streaming fixture profile.
+is not registered as a generic compatible or decoder-fixture profile.
 
 ## Manifest governance and staged coverage
 
@@ -52,17 +52,16 @@ Every checked-in production profile is currently `enforced` for its declared
 capability facts. `bootstrap` remains available only while a new profile's
 dedicated coverage task is incomplete; repository validation rejects it from
 the checked-in release matrix until it supplies the required semantic request,
-captured wire request, response, usage/cost, error, stream, loss/diagnostic,
+captured wire request, response, usage/cost, error, loss/diagnostic,
 service-class, continuation, and security fixtures.
 
 The Bedrock suite proves exact opaque-state replay, service-tier
 lowering/lifting, classified-error redaction, and captured SSE decoding and
 assembly across deterministic fragment boundaries. Anthropic Direct declares
 its native usage, service-class, strict-loss, and continuation paths; its
-checked-in stream fixture proves decoder behavior only because the adapter does
-not yet implement streaming dispatch. In both cases, captured SSE coverage is
-protocol evidence only; it does not by itself claim a client
-`StreamingAdapter` dispatch path. The registry is intentionally code-owned so
+checked-in decoder fixture proves parser behavior only. In both cases, captured
+SSE coverage is protocol evidence only; it does not establish a v1 client
+dispatch path. The registry is intentionally code-owned so
 a future semantic field or capability cannot silently escape an enforced
 profile's fixture matrix.
 
@@ -73,8 +72,7 @@ fixture roots, provenance/redaction records, deterministic conversion tests,
 and enforced continuation-compatibility fixtures. Their stream artifacts
 exercise the decoder with full input, every split point, an empty read,
 one-byte fragments, and deterministic random fragments. Those artifacts are
-deliberately decoder-only: both profiles declare `streaming: unsupported`
-because the package has no typed stream adapter or official SDK stream
+deliberately decoder-only and do not establish any supported v1 token-event
 dispatch. The Azure fixture also tests its own `/openai/v1/responses` path and
 authentication shape; it is not evidence that a direct OpenAI model/tier is
 available from an Azure deployment.
@@ -159,17 +157,16 @@ Every profile covers:
 | HTTP/provider rejection | auth, permission, invalid, rate, capacity | profile-specific rejected/cost fact |
 | Headers then disconnect | with/without request ID | accepted or ambiguous |
 | Body | malformed JSON, unknown block, usage overflow | accepted; cost reconciled conservatively |
-| Stream | malformed event, truncated terminal, error after delta | accepted/ambiguous as profile specifies |
+| Decoder input | malformed event, truncated terminal, error after delta | parser result as profile specifies |
 | Cancellation | caller cancel/deadline before writable connection; during body; after terminal before finalize | not dispatched/never; ambiguous, or accepted |
 
 Assertions include common code, phase, retry disposition, reservation treatment,
 request ID, safe Temporal details, and no raw body leakage.
 
-## Stream event matrix
+## Legacy decoder fixture matrix
 
-For an enforced streaming profile, each supported event type has a standalone
-fixture and appears in one compound stream. Bootstrap profiles can be missing
-these artifacts until their streaming coverage task is complete:
+Retained parser-regression fixtures may cover provider event payloads in one
+compound input. They are not a supported v1 streaming profile:
 
 - response/message start;
 - content/output item start and finish;
@@ -181,11 +178,9 @@ these artifacts until their streaming coverage task is complete:
 - provider tier and response metadata;
 - terminal success, terminal provider error, and truncated stream.
 
-The checked-in provider tests currently execute representative fixtures as full
-streams, single-byte chunks, and deterministic seeded random chunks. The v1
-acceptance matrix still requires explicit every-split-point, empty-read, and
-CR/LF-boundary cases; those are not yet covered by the current provider test
-suite.
+The checked-in provider tests execute representative fixtures as complete
+inputs, single-byte chunks, and deterministic seeded random chunks. This
+coverage remains limited to parser behavior and is not a v1 API claim.
 
 ## Reverse-conversion assertions
 
@@ -195,7 +190,6 @@ For semantics supported natively:
 semantic -> provider parameters -> captured wire
 captured provider response -> semantic
 semantic -> provider -> semantic equivalence
-stream events -> assembled response == non-stream response
 ```
 
 Equivalence ignores only fields explicitly marked generated (provider IDs and

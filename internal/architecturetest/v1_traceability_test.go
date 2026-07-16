@@ -93,6 +93,36 @@ func TestV1TraceabilityCatalog(t *testing.T) {
 	}
 }
 
+func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing.T) {
+	root := repositoryRoot(t)
+	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
+	if err != nil {
+		t.Fatalf("canonicalize catalog: %v", err)
+	}
+	var catalog v1TraceabilityCatalog
+	if err := json.Unmarshal(canonical, &catalog); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	const id = "v1.contract.adapter-golden-strict"
+	var requirement *v1TraceabilityRequirement
+	for index := range catalog.Requirements {
+		if catalog.Requirements[index].ID == id {
+			requirement = &catalog.Requirements[index]
+			break
+		}
+	}
+	if requirement == nil {
+		t.Fatalf("catalog is missing %q", id)
+	}
+	if got, want := requirement.Source, (v1TraceabilitySource{
+		Path:   "docs/index.md",
+		Anchor: "#v1-completion-gate",
+		Quote:  "Every adapter has request, response, error, and usage golden tests; strict-mode lossy conversions fail before dispatch.",
+	}); got != want {
+		t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
+	}
+}
+
 func TestV1TraceabilityLiveProviderRequirements(t *testing.T) {
 	root := repositoryRoot(t)
 	raw := readV1TraceabilityCatalog(t, root)

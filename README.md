@@ -3,9 +3,10 @@
 This repository contains the contract, implementation foundation, and staged
 plans for a reusable Go inference library and Temporal Activity Worker. The
 implemented foundation covers the semantic request/response API, strict
-configuration snapshots, official-SDK provider adapters, fragmented stream
-normalization, deterministic routing, tenant-bound continuation handles, exact
-pricing, and in-memory admission. The process runtime composition now includes
+configuration snapshots, official-SDK provider adapters, deterministic
+one-shot-response normalization, deterministic routing, tenant-bound
+continuation handles, exact pricing, and in-memory admission. The process
+runtime composition now includes
 reloadable snapshots, probe servers, graceful worker shutdown, TLS-safe
 Temporal client wiring, verified catalog loading, provider adapters, Redis
 state, and blob-backed result replay. `EngineFactory` remains an injectable

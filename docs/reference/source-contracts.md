@@ -33,6 +33,14 @@ Task 6 must add the typed stream contract, direct and Azure SDK dispatch, and
 deterministic transport coverage before either profile can claim enforced
 streaming coverage.
 
+### Current v1 scope (superseding the Task 6 record)
+
+The 2026-07-14 Task 6 record above is retained as historical upstream research.
+V1 now supports only one-shot `Generate` and a completed normalized response;
+it has no supported streaming or token-event API. Retained decoders are legacy
+parser-regression coverage, not a v1 client dispatch path, and must not be
+wired into the Temporal runtime.
+
 ### Responses fixture boundary
 
 The direct `openai-responses` and `azure-responses` profiles each have an
@@ -40,10 +48,9 @@ enforced offline fixture matrix selected by their declared capability facts.
 Both exercise Responses lowering/lifting, opaque response state,
 continuation-compatibility, usage, service classes, classified errors,
 strict-loss handling, and redaction in their own fixture roots. Their
-`streaming: unsupported` facts remain deliberate: the full and fragmented
-decoder fixture corpora prove SSE reconstruction only, not end-to-end client
-streaming dispatch. Azure continuation evidence validates the adapter's
-endpoint-pinned conversion path offline; it is not evidence of Azure
+full and fragmented decoder fixture corpora prove SSE reconstruction only, not
+an end-to-end client dispatch API. Azure continuation evidence validates the
+adapter's endpoint-pinned conversion path offline; it is not evidence of Azure
 deployment capability.
 
 ## Azure OpenAI
@@ -57,7 +64,7 @@ Design consequence: each Azure deployment has its own capability profile.
 OpenAI compatibility is not evidence that every OpenAI field/tier works.
 The independently owned Azure Responses fixtures validate the configured path
 and auth construction offline, but they do not establish deployment-specific
-model, economy-tier, continuation, or streaming availability.
+model, economy-tier, continuation, or token-event availability.
 
 ## Anthropic and AWS
 
@@ -98,7 +105,7 @@ classified errors, and source-date/redaction checks. Opaque state remains
 endpoint-pinned: direct Anthropic and AWS-gateway continuation state cannot be
 replayed through the Bedrock adapter without an explicit portable transcript.
 The captured SSE fixtures prove decoder and assembler semantics under
-fragmentation; they are not evidence of an end-to-end client streaming-dispatch
+fragmentation; they are not evidence of an end-to-end client dispatch
 implementation.
 
 ## OpenAI-compatible endpoints
@@ -117,9 +124,8 @@ implementation.
 Design consequence: direct Chat, OpenRouter, and Exa retain separately
 enforced fixtures for lowering, response lifting, service class, error,
 strict-loss, redaction, and decoder behavior despite using an
-OpenAI-compatible SDK transport. Decoder fixtures do not advertise streaming
-dispatch: that remains unsupported until the Chat adapter implements an
-`OpenStream` boundary. OpenRouter hidden provider fallback is disabled by
+OpenAI-compatible SDK transport. Decoder fixtures do not advertise a v1
+dispatch API. OpenRouter hidden provider fallback is disabled by
 default, and Exa's authoritative cost is preferred when available.
 
 ## Temporal
@@ -169,5 +175,5 @@ An SDK or API upgrade PR must update:
 1. dependency/source date and pinned version;
 2. affected capability and price catalog provenance;
 3. redacted golden wire fixtures;
-4. service-tier, retry, error, stream, usage, and continuation assertions;
+4. service-tier, retry, error, decoder, usage, and continuation assertions;
 5. this source-contract record when behavior changed.
