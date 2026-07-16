@@ -8,6 +8,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"unicode"
@@ -23,6 +25,14 @@ var expectedV1TraceabilityIDs = []string{
 	"v1.contract.adapter-golden-strict",
 	"v1.contract.azure-openai-chat",
 	"v1.contract.cross-protocol",
+	"v1.contract.live-provider.anthropic-aws",
+	"v1.contract.live-provider.anthropic-direct",
+	"v1.contract.live-provider.azure-responses",
+	"v1.contract.live-provider.bedrock-anthropic",
+	"v1.contract.live-provider.exa-chat",
+	"v1.contract.live-provider.openai-chat",
+	"v1.contract.live-provider.openai-responses",
+	"v1.contract.live-provider.openrouter-chat",
 	"v1.decision.service-class.no-provider-default",
 	"v1.decision.service-class.omission-normalizes-standard",
 	"v1.decision.service-class.public-enum",
@@ -80,6 +90,74 @@ func TestV1TraceabilityCatalog(t *testing.T) {
 	root := repositoryRoot(t)
 	if err := validateV1TraceabilityCatalog(root, readV1TraceabilityCatalog(t, root)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestV1TraceabilityLiveProviderRequirements(t *testing.T) {
+	root := repositoryRoot(t)
+	raw := readV1TraceabilityCatalog(t, root)
+	canonical, err := llm.CanonicalJSON(raw)
+	if err != nil {
+		t.Fatalf("canonicalize catalog: %v", err)
+	}
+	var catalog v1TraceabilityCatalog
+	if err := json.Unmarshal(canonical, &catalog); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+
+	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
+	for _, requirement := range catalog.Requirements {
+		requirements[requirement.ID] = requirement
+	}
+
+	var gotIDs []string
+	for _, profile := range liveProviderWorkflowProfiles {
+		id := "v1.contract.live-provider." + profile.id
+		gotIDs = append(gotIDs, id)
+		requirement, ok := requirements[id]
+		if !ok {
+			t.Errorf("catalog is missing protected live-provider requirement %q", id)
+			continue
+		}
+		if got, want := requirement.Source, (v1TraceabilitySource{
+			Path:   "docs/reference/live-provider-contracts.md",
+			Anchor: "#pinned-profiles",
+			Quote:  profile.id,
+		}); got != want {
+			t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
+		}
+		if got, want := requirement.ImplementationPaths, []string{
+			".github/workflows/live-provider-contracts.yml",
+			"integration/live/harness.go",
+			"integration/live/runner.go",
+			"internal/architecturetest/live_provider_workflow_test.go",
+		}; !reflect.DeepEqual(got, want) {
+			t.Errorf("requirement %q implementation paths = %#v, want %#v", id, got, want)
+		}
+		if got, want := requirement.Verification, (v1TraceabilityVerification{
+			MakeTargets: []string{"test", "workflow-verify"},
+			WorkflowJobs: []v1TraceabilityWorkflowJob{
+				{Path: ".github/workflows/live-provider-contracts.yml", Job: profile.id},
+				{Path: ".github/workflows/master.yml", Job: "verify"},
+				{Path: ".github/workflows/pull-request.yml", Job: "verify"},
+			},
+		}); !reflect.DeepEqual(got, want) {
+			t.Errorf("requirement %q verification = %#v, want %#v", id, got, want)
+		}
+		if got, want := requirement.Evidence, (v1TraceabilityEvidence{Mode: "protected_manual", Status: "awaiting_protected_run"}); got != want {
+			t.Errorf("requirement %q evidence = %#v, want %#v", id, got, want)
+		}
+	}
+	sort.Strings(gotIDs)
+
+	var catalogIDs []string
+	for _, requirement := range catalog.Requirements {
+		if strings.HasPrefix(requirement.ID, "v1.contract.live-provider.") {
+			catalogIDs = append(catalogIDs, requirement.ID)
+		}
+	}
+	if !reflect.DeepEqual(catalogIDs, gotIDs) {
+		t.Errorf("catalog protected live-provider IDs = %#v, want %#v", catalogIDs, gotIDs)
 	}
 }
 
