@@ -167,6 +167,18 @@ attempting to parse logs for configuration content.
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
 
+`llmtw_activity_duration_seconds{phase="total"}` measures the complete
+Temporal Activity boundary; its terminal counter uses only `completed`,
+`failed`, or `canceled` status and the bounded `none`, `budget_denied`,
+`provider_unavailable`, or `internal` error class. Cost `method` is one of
+`provider_reported`, `catalog_usage`, `reconstructed_usage`, or
+`retained_reservation`.
+
+`llmtw_budget_reserved_micro_usd` is intentionally not written by the engine:
+an engine-local value would incorrectly overwrite the aggregate reservation of
+other workers sharing an admission store. It remains reserved for a future
+shared-store aggregate read with Redis conformance coverage.
+
 ## Logs and traces
 
 Structured logs use the configured JSON or text format and only admit the

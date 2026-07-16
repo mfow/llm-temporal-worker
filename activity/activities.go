@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -18,6 +20,7 @@ type Activities struct {
 	Heartbeater                Heartbeater
 	HeartbeaterFactory         func() Heartbeater
 	HeartbeatKeepaliveInterval time.Duration
+	Metrics                    *observability.Metrics
 	Tracer                     *observability.Tracer
 	PayloadLimits              PayloadLimits
 
@@ -26,11 +29,20 @@ type Activities struct {
 	heartbeatTickerFactory func(time.Duration) heartbeatTicker
 }
 
-func (activities *Activities) Generate(ctx context.Context, payload GenerateRequest) (GenerateResponse, error) {
-	if activities == nil || activities.Engine == nil {
+func (activities *Activities) Generate(ctx context.Context, payload GenerateRequest) (result GenerateResponse, resultErr error) {
+	if activities == nil {
 		return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "Activity engine is unavailable"))
 	}
 	ctx = observability.WithTracer(ctx, activities.Tracer)
+	ctx = observability.WithMetrics(ctx, activities.Metrics)
+	started := time.Now()
+	defer func() {
+		status, errorClass := activityMetricOutcome(resultErr)
+		activities.Metrics.RecordActivity(status, errorClass, time.Since(started), "total")
+	}()
+	if activities.Engine == nil {
+		return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "Activity engine is unavailable"))
+	}
 	request, err := payload.Validate(activities.PayloadLimits.inlineBytes())
 	if err != nil {
 		return GenerateResponse{}, ToTemporalError(err)
@@ -69,6 +81,25 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 		return GenerateResponse{}, ToTemporalError(err)
 	}
 	return activities.completeGenerate(ctx, response, heartbeater)
+}
+
+func activityMetricOutcome(err error) (status, errorClass string) {
+	if err == nil {
+		return "completed", "none"
+	}
+	if errors.Is(err, context.Canceled) || temporal.IsCanceledError(err) {
+		return "canceled", "none"
+	}
+	var applicationErr *temporal.ApplicationError
+	if errors.As(err, &applicationErr) {
+		switch applicationErr.Type() {
+		case ErrorTypeBudgetWait:
+			return "failed", "budget_denied"
+		case ErrorTypeProviderTransient:
+			return "failed", "provider_unavailable"
+		}
+	}
+	return "failed", "internal"
 }
 
 func (activities *Activities) completeGenerate(ctx context.Context, response llm.Response, heartbeater Heartbeater) (GenerateResponse, error) {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/admission"
+	"github.com/mfow/llm-temporal-worker/internal/observability"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"github.com/mfow/llm-temporal-worker/pricing"
@@ -84,6 +85,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	if err := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual.MicroUSD, ResultRef: ref, Attempt: attempt}); err != nil {
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation completion failed", err)
 	}
+	recordCompletion(ctx, response)
 	response.Cost.ReservedMicroUSD = int64(operation.ReservedMicroUSD)
 	return response, nil
 }
@@ -156,6 +158,9 @@ func (engine *Engine) persistContinuation(ctx context.Context, request llm.Reque
 		if rootErr != nil {
 			return nil, engineError(provider.CodeStateUnavailable, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetrySameOperation, "continuation root write failed", rootErr)
 		}
+	}
+	if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+		metrics.RecordContinuation("created")
 	}
 	return &llm.Continuation{Handle: handle.String(), EndpointID: candidate.EndpointID, Model: candidate.Model, ExpiresAt: timePtr(child.ExpiresAt), Pinned: true}, nil
 }

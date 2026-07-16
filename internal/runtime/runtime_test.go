@@ -91,12 +91,17 @@ func TestNewFailsClosedWithoutProviderFactory(t *testing.T) {
 }
 
 func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
-	metrics, err := newMetrics(config.Config{Telemetry: config.TelemetryConfig{Metrics: config.MetricsConfig{Enabled: true}}})
+	metrics, err := newMetrics(config.Config{Telemetry: config.TelemetryConfig{Metrics: config.MetricsConfig{Enabled: true}}, Models: map[string]config.ModelConfig{
+		"logical-model": {Routes: []config.RouteConfig{{Model: "provider-model"}}},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	metrics.RecordActivity("success", "none", time.Millisecond, "response_received")
+	metrics.RecordActivity("completed", "none", time.Millisecond, "total")
 	metrics.RecordActivity("success", "none", time.Millisecond, "streaming")
+	metrics.RecordCost("endpoint", "model", "standard", "catalog_usage", 1)
+	metrics.RecordProviderAttempt("endpoint", "provider-model", "standard", "success", time.Millisecond)
 	families, err := metrics.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +122,46 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	if _, ok := phases["response_received"]; !ok {
 		t.Fatalf("activity metric phases = %v, want response_received", phases)
 	}
+	if _, ok := phases["total"]; !ok {
+		t.Fatalf("activity metric phases = %v, want total", phases)
+	}
 	if _, ok := phases["streaming"]; ok {
 		t.Fatalf("activity metric phases = %v, must not allow streaming for the Temporal runtime", phases)
 	}
 	if _, ok := phases["other"]; !ok {
 		t.Fatalf("activity metric phases = %v, want disallowed streaming to map to other", phases)
+	}
+	methods := make(map[string]struct{})
+	for _, family := range families {
+		if family.GetName() != "llmtw_cost_micro_usd_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "method" {
+					methods[label.GetValue()] = struct{}{}
+				}
+			}
+		}
+	}
+	if _, ok := methods["catalog_usage"]; !ok {
+		t.Fatalf("cost metric methods = %v, want catalog_usage", methods)
+	}
+	providerModels := make(map[string]struct{})
+	for _, family := range families {
+		if family.GetName() != "llmtw_provider_attempt_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "model" {
+					providerModels[label.GetValue()] = struct{}{}
+				}
+			}
+		}
+	}
+	if _, ok := providerModels["provider-model"]; !ok {
+		t.Fatalf("provider metric models = %v, want provider-model", providerModels)
 	}
 }
 
