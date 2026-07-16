@@ -127,6 +127,310 @@
       }
     },
     {
+      "id": "v1.contract.live-provider.anthropic-aws",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "anthropic-aws"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "anthropic-aws"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.anthropic-direct",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "anthropic-direct"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "anthropic-direct"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.azure-responses",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "azure-responses"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "azure-responses"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.bedrock-anthropic",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "bedrock-anthropic"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "bedrock-anthropic"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.exa-chat",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "exa-chat"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "exa-chat"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.openai-chat",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "openai-chat"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "openai-chat"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.openai-responses",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "openai-responses"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "openai-responses"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.contract.live-provider.openrouter-chat",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "openrouter-chat"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "integration/live/harness.go",
+        "integration/live/runner.go",
+        "internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "openrouter-chat"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
       "id": "v1.decision.service-class.no-provider-default",
       "source": {
         "path": "docs/decisions/0002-service-classes.md",
