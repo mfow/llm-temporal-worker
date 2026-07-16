@@ -14,7 +14,24 @@ import (
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"github.com/mfow/llm-temporal-worker/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/routing"
+	redisclient "github.com/redis/go-redis/v9"
 )
+
+func TestDefaultRedisFactoryDisablesClientRetries(t *testing.T) {
+	client, err := defaultRedisFactory(context.Background(), config.RedisConfig{Addresses: []string{"127.0.0.1:6379"}}, "", "")
+	if err != nil {
+		t.Fatalf("defaultRedisFactory() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	standalone, ok := client.(*redisclient.Client)
+	if !ok {
+		t.Fatalf("defaultRedisFactory() client = %T, want *redis.Client", client)
+	}
+	if got := standalone.Options().MaxRetries; got != 0 {
+		t.Fatalf("MaxRetries = %d, want effective zero retries", got)
+	}
+}
 
 func TestProductionFactoryProviderSecretFailsClosed(t *testing.T) {
 	called := false

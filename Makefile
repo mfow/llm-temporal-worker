@@ -15,7 +15,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= go1.26.5
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -41,10 +41,25 @@ test:
 build:
 	$(GO) build ./...
 
+# Compiles the opt-in Redis benchmark without running its tests or benchmark.
+# It has no operator gates and cannot connect to Redis or a provider.
+redis-benchmark-compile:
+	$(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^$$'
+
 # Runs an opt-in local performance proxy. It has no Redis server or provider
 # network request, so its p99 output is not an SLO proof.
 benchmark:
 	$(GO) test ./engine -run '^$$' -bench '^BenchmarkGenerateMemoryAdmissionAndCompile$$' -benchmem -count=1
+
+# Measures Generate against an explicitly addressed, already-provisioned Redis
+# deployment. This target is deliberately operator-only: it refuses CI, never
+# starts Redis, and never loads Functions or invokes a live provider.
+redis-benchmark:
+	@test "$${LLMTW_REDIS_BENCHMARK:-}" = "1" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK=1" >&2; exit 2; }
+	@test "$${LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION:-}" = "1" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1" >&2; exit 2; }
+	@test -n "$${LLMTW_REDIS_BENCHMARK_ADDR:-}" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK_ADDR" >&2; exit 2; }
+	@test -z "$${CI:-}" || { echo "redis-benchmark refuses CI" >&2; exit 2; }
+	LLMTW_REDIS_BENCHMARK=1 LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1 LLMTW_REDIS_BENCHMARK_ADDR="$${LLMTW_REDIS_BENCHMARK_ADDR}" $(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^BenchmarkGenerateRedisAdmissionAndCompile$$' -benchmem -count=1 -benchtime=10s
 
 integration:
 	$(GO) test -race ./integration/...
@@ -348,4 +363,4 @@ mutation-verify:
 release-verify:
 	bash scripts/release/verify.sh --artifact-dir "release-artifacts" --evidence "release-artifacts/evidence.json"
 
-verify: fmt-check schema-verify docs-verify vet test build
+verify: fmt-check schema-verify docs-verify vet test build redis-benchmark-compile

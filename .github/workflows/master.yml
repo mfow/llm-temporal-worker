@@ -132,6 +132,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -tags=live ./integration/live -run '^$'
 
+      - name: Compile guarded Redis benchmark
+        if: steps.go.outputs.present == 'true'
+        run: make redis-benchmark-compile
+
       - name: Verify source safety and supply chain
         id: security_verify
         if: steps.go.outputs.present == 'true'

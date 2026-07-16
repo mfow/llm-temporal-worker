@@ -795,7 +795,9 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 	if err != nil {
 		return nil, err
 	}
-	return redis.NewUniversalClient(&redis.UniversalOptions{Addrs: append([]string(nil), value.Addresses...), Username: username, Password: password, DialTimeout: time.Duration(value.DialTimeout), ReadTimeout: time.Duration(value.OperationTimeout), WriteTimeout: time.Duration(value.OperationTimeout), PoolSize: value.MaxConnections, MaxRetries: 0, TLSConfig: tlsConfig}), nil
+	// go-redis uses -1, rather than zero, to disable retries. Redis admission
+	// mutations are not safely replayable after an ambiguous transport failure.
+	return redis.NewUniversalClient(&redis.UniversalOptions{Addrs: append([]string(nil), value.Addresses...), Username: username, Password: password, DialTimeout: time.Duration(value.DialTimeout), ReadTimeout: time.Duration(value.OperationTimeout), WriteTimeout: time.Duration(value.OperationTimeout), PoolSize: value.MaxConnections, MaxRetries: -1, TLSConfig: tlsConfig}), nil
 }
 
 func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, io.Closer, error) {
