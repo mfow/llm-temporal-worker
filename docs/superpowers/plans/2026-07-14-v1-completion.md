@@ -2,8 +2,26 @@
 
 **Date:** 2026-07-14
 
-**Status:** Active execution plan
+**Status:** Active execution plan; streaming requirements are superseded as described below
 **Purpose:** Finish the documented v1 product through small, independently reviewed pull requests. This plan supersedes neither the approved architecture nor the historical phase plans; it turns their completion gate into an auditable delivery sequence.
+
+## Current v1 scope (superseding streaming plan requirements)
+
+On 2026-07-15, the Generate-only v1 boundary superseded every requirement in
+this plan that calls for typed streaming, provider SDK stream dispatch, or
+Temporal runtime stream dispatch. V1 supports only one-shot `Generate` and a
+completed normalized response. It does not require a streaming adapter, SDK
+stream dispatch, or Temporal runtime dispatch.
+
+Accordingly, Baseline finding 3, the streaming global constraint, Tasks 5--9,
+and any profile-enforcement condition in this plan that treats streaming as a
+prerequisite are historical planning context, not current delivery work.
+Retained decoder fixtures are parser-regression coverage only. A checked-in
+production profile is `enforced` according to its declared non-streaming
+capability facts; unsupported streaming neither lowers that fixture obligation
+nor blocks enforcement. The current sources of truth are [ADR 0005](../../decisions/0005-streaming-boundary.md), the [v1 scope](../../scope.md), and the
+[adapter fixture matrix](../../testing/fixture-matrix.md). Do not edit the
+historical checkboxes below merely to make the plan appear current.
 
 ## Release target
 

@@ -2,9 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Govern the direct OpenAI and Azure Responses golden fixtures independently, prove every currently implemented request/response conversion fact, and make the unresolved end-to-end streaming boundary explicit rather than overstating parser coverage.
+## Current v1 scope (2026-07-15; supersedes this plan's streaming prerequisite)
 
-**Architecture:** Each provider profile owns a separate manifest, metadata record, and synthetic redacted fixture set below `llm/provider/openairesponses/testdata/contracts/`. Package tests deserialize the semantic fixtures, exercise the real SDK lowering/lifting or Azure transport construction, and compare canonical JSON. The contract harness continues to classify both profiles as `bootstrap` until Task 6 supplies a typed streaming adapter and official SDK stream dispatch.
+V1 exposes only one-shot `Generate` and a completed normalized response.
+Current v1 enforcement depends on each profile's declared non-streaming
+capability facts; it does not require a streaming adapter, SDK stream dispatch,
+or Temporal runtime dispatch. The Task 6 streaming prerequisite below is
+retained as historical planning context only: decoder fixtures remain
+parser-regression coverage and do not create a client-dispatch requirement or
+prevent a checked-in production profile from being `enforced` for its declared
+facts. See [ADR 0005](../../decisions/0005-streaming-boundary.md) and the
+[fixture matrix](../../testing/fixture-matrix.md) for the current boundary and
+enforcement rule.
+
+**Goal:** Record the direct OpenAI and Azure Responses fixture work that
+independently proves each implemented request/response conversion fact. The
+original plan also made its then-unresolved end-to-end streaming boundary
+explicit rather than overstating parser coverage; that prerequisite is now
+superseded by the Generate-only v1 boundary above.
+
+**Architecture:** Each provider profile owns a separate manifest, metadata record, and synthetic redacted fixture set below `llm/provider/openairesponses/testdata/contracts/`. Package tests deserialize the semantic fixtures, exercise the real SDK lowering/lifting or Azure transport construction, and compare canonical JSON. At the time of this plan, the harness was to classify both profiles as `bootstrap` until Task 6 supplied a typed streaming adapter and official SDK stream dispatch. That condition is historical and is not a current v1 enforcement rule.
 
 **Tech Stack:** Go 1.26, OpenAI Go SDK v3.42.0, `go.yaml.in/yaml/v4`, offline HTTP transports, Go test.
 
@@ -12,9 +29,9 @@
 
 - Keep direct OpenAI and Azure fixtures separate; no Azure fact is inferred from a direct fixture.
 - Fixtures are synthetic, use only public example URLs and explicit redaction markers, and never contain credentials, deployment secrets, or unstable provider IDs.
-- `streaming` means end-to-end adapter dispatch. The existing decoder remains fixture-tested but is not a streaming capability until Task 6 adds the stream port and SDK client path.
+- **Historical prerequisite, superseded:** `streaming` meant end-to-end adapter dispatch. The existing decoder remains fixture-tested but could not have established that capability without Task 6 adding the stream port and SDK client path.
 - Keep the public service classes limited to economy, standard, and priority. Azure's fixture represents its declared deployment profile independently of the direct OpenAI mapping.
-- Do not mark a profile `enforced` while the required streaming dispatch prerequisite is absent.
+- **Superseded enforcement rule:** this plan did not mark a profile `enforced` while its required streaming dispatch prerequisite was absent. The current Generate-only v1 rule instead evaluates the profile's declared non-streaming capability facts.
 
 ---
 
