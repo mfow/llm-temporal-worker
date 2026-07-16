@@ -782,10 +782,10 @@ func (factory *ProductionEngineFactory) unsupportedAuth(endpointID, kind string)
 
 func (factory *ProductionEngineFactory) azureAPIVersion(endpointID string, endpoint config.EndpointConfig) string {
 	if value := factory.options.AzureAPIVersions[endpointID]; strings.TrimSpace(value) != "" {
-		return value
+		return strings.TrimSpace(value)
 	}
 	if value, ok := endpoint.Extensions["azure"]["api_version"].(string); ok {
-		return value
+		return strings.TrimSpace(value)
 	}
 	return ""
 }

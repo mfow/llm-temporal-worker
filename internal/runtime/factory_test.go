@@ -207,6 +207,7 @@ func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *te
 		want   string
 	}{
 		{name: "missing API version", mutate: func(endpoint *config.EndpointConfig) { endpoint.Extensions["azure"]["api_version"] = "" }, want: "Azure API version is required"},
+		{name: "whitespace API version", mutate: func(endpoint *config.EndpointConfig) { endpoint.Extensions["azure"]["api_version"] = " \t " }, want: "Azure API version is required"},
 		{name: "missing deployment", mutate: func(endpoint *config.EndpointConfig) { delete(endpoint.Extensions["azure"], "deployment") }, want: "Azure deployment is required"},
 		{name: "non-string deployment", mutate: func(endpoint *config.EndpointConfig) { endpoint.Extensions["azure"]["deployment"] = 7 }, want: "Azure deployment is required"},
 		{name: "bearer auth", mutate: func(endpoint *config.EndpointConfig) {
