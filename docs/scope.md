@@ -62,8 +62,8 @@ controller:
 - Sampling, stop sequences, output limits, and reasoning intent where supported.
 - Provider-state parts that remain opaque and byte-for-byte stable.
 - Strict and best-effort portability with machine-readable diagnostics.
-- Typed streaming events for reusable Go-library callers, outside the
-  one-shot Temporal Activity boundary.
+- One-shot `Generate` and a final normalized response only. No live streaming
+  or token-event API is supported in v1.
 - Exactly three request service classes: `economy`, `standard`, and `priority`.
 - Explicit ordered service-class fallback, disabled by default.
 - Durable continuation and endpoint pinning.
@@ -95,6 +95,7 @@ controller:
 - Exactly-once claims for external LLM APIs that do not expose a supported
   idempotency contract.
 - Persisting secrets, raw credentials, or bearer tokens in Temporal payloads.
+- Live streaming, token-event delivery, and interactive response transports.
 
 ## Behavioral invariants
 

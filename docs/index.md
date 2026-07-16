@@ -24,7 +24,7 @@ tests are the source of truth for behavior that has already been implemented.
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
 | Shared state | Redis is the v1 production backend; memory is for tests and single-process development only |
 | Activity scope | Inference only; tool execution and agent-loop orchestration stay in caller workflows |
-| Streaming | Optional typed stream APIs are for reusable-library callers; the Temporal Activity invokes one-shot `Generate` and returns the final normalized response |
+| Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported |
 | Deployment | One stateless worker image, horizontally scalable when Redis is enabled |
 | Go baseline | Go 1.26, using the latest security patch in that release line |
 
@@ -64,8 +64,8 @@ The first release is complete only when all of these statements are true:
   OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on
   AWS, and Amazon Bedrock Anthropic profiles supported by the capability
   matrix.
-- Every adapter has request, response, error, usage, and fragmented-stream
-  golden tests; strict-mode lossy conversions fail before dispatch.
+- Every adapter has request, response, error, and usage golden tests;
+  strict-mode lossy conversions fail before dispatch.
 - The router is deterministic for a fixed configuration snapshot and never
   changes service class without an explicit request fallback.
 - The operation ledger returns a cached completed result on an Activity retry

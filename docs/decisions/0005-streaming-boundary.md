@@ -11,10 +11,11 @@ provider stream objects would couple callers to SDKs and make recovery unclear.
 
 ## Current decision (superseding this ADR)
 
-The reusable Go library retains typed stream events through optional
-`llm.StreamingEngine`. The Temporal `llm.generate.v1` Activity instead depends
-only on `llm.Engine`, invokes `Generate` once, and returns one completed
-response. It neither consumes nor heartbeats provider token events.
+V1 supports only one-shot `llm.Engine.Generate` and one completed normalized
+response. No streaming or token-event API is supported, including for reusable
+Go-library callers. Residual decoder or public API code is unsupported in v1
+and must not be wired into Temporal dispatch; this decision does not claim that
+the residual code has been physically deleted.
 
 ## Historical decision (superseded)
 

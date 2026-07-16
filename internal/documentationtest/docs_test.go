@@ -95,6 +95,85 @@ func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.
 	}
 }
 
+func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, test := range []struct {
+		path      string
+		required  string
+		forbidden []string
+	}{
+		{
+			path:      "docs/index.md",
+			required:  "The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported",
+			forbidden: []string{"Optional typed stream APIs are for reusable-library callers"},
+		},
+		{
+			path:      "docs/scope.md",
+			required:  "No live streaming or token-event API is supported in v1.",
+			forbidden: []string{"Typed streaming events for reusable Go-library callers"},
+		},
+		{
+			path:     "docs/architecture/provider-adapters.md",
+			required: "v1 has no supported streaming adapter or token-event API, and this code must not be wired into Temporal dispatch.",
+		},
+		{
+			path:     "docs/architecture/temporal-worker.md",
+			required: "No streaming or token-event API is supported in v1, including for reusable library callers.",
+		},
+		{
+			path:     "docs/architecture/system-overview.md",
+			required: "`Engine.Generate` is the only supported v1 inference entry point.",
+		},
+		{
+			path:      "docs/architecture/unified-api.md",
+			required:  "No streaming or token-event API is supported in v1.",
+			forbidden: []string{"A caller that needs typed events may require `llm.StreamingEngine`"},
+		},
+		{
+			path:     "docs/decisions/0005-streaming-boundary.md",
+			required: "Residual decoder or public API code is unsupported in v1 and must not be wired into Temporal dispatch; this decision does not claim that the residual code has been physically deleted.",
+		},
+		{
+			path:      "docs/testing/strategy.md",
+			required:  "These decoder tests do not establish a streaming API, engine dispatch path, or Temporal capability.",
+			forbidden: []string{"The generic stream API remains outside the Temporal Activity/runtime boundary."},
+		},
+		{
+			path:     "docs/testing/fixture-matrix.md",
+			required: "They are not a supported v1 streaming profile:",
+		},
+		{
+			path:     "docs/reference/source-contracts.md",
+			required: "V1 now supports only one-shot `Generate` and a completed normalized response; it has no supported streaming or token-event API.",
+		},
+		{
+			path:     "llm/engine.go",
+			required: "Deprecated: streaming is unsupported in v1. This interface remains for source compatibility only and MUST NOT be wired into the Temporal runtime.",
+		},
+		{
+			path:     "engine/stream.go",
+			required: "Deprecated: streaming is unsupported in v1. This method remains for source compatibility only and MUST NOT be wired into the Temporal runtime.",
+		},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(root, test.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(strings.Fields(strings.ReplaceAll(string(data), "// ", "")), " ")
+			required := strings.Join(strings.Fields(test.required), " ")
+			if !strings.Contains(text, required) {
+				t.Fatalf("%s must state %q", test.path, test.required)
+			}
+			for _, forbidden := range test.forbidden {
+				if strings.Contains(text, strings.Join(strings.Fields(forbidden), " ")) {
+					t.Fatalf("%s must not claim %q", test.path, forbidden)
+				}
+			}
+		})
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()

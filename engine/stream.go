@@ -17,12 +17,9 @@ import (
 
 const streamBufferCapacity = 16
 
-// Stream starts one provider-neutral event stream. It never calls Generate or
-// synthesizes a stream from a completed response. Before admission, it filters
-// the quoted route plan to adapters that expose provider.StreamingAdapter and
-// currently advertise streaming support. If none remain, Stream returns a
-// typed pre-admission unsupported-capability error directly and creates no
-// EventStream or durable operation.
+// Stream is a deprecated residual provider-neutral event-stream API.
+// Deprecated: streaming is unsupported in v1. This method remains for source
+// compatibility only and MUST NOT be wired into the Temporal runtime.
 func (engine *Engine) Stream(ctx context.Context, request llm.Request) (llm.EventStream, error) {
 	if engine == nil {
 		return nil, engineError(provider.CodeInternal, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "engine is nil", nil)

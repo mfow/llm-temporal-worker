@@ -295,75 +295,18 @@ fallback: `fallback_index` remains zero but the diagnostic is required.
 Status is one of `completed`, `tool_calls`, `refused`, `length`, or
 `content_filtered`. Provider-native finish reasons remain in provider metadata.
 
-## Typed stream
+## One-shot Generate boundary
 
-`llm.Engine` is the one-shot `Generate` boundary. A caller that needs typed
-events may require `llm.StreamingEngine` and call
-`StreamingEngine.Stream(ctx, request)`, which returns a pull-based
-`EventStream`; callers read with `Next(ctx)` and must call `Close` when they
-stop before a terminal event. It follows the same request normalization, route
-plan, admission, continuation, dispatch-certainty, result-store, and
-ledger-finalization path as `Generate`. Before admission it filters the quoted
-route plan to real `StreamingAdapter` implementations that currently support
-streaming. If none remain, it returns a direct typed `unsupported_capability`
-error with `not_dispatched` certainty and creates neither an event stream nor a
-durable operation. It never fabricates a stream by calling `Generate` first.
+`llm.Engine.Generate` is the v1 public inference boundary. It accepts one
+normalized request and returns one final normalized response after admission,
+dispatch certainty, continuation handling, and ledger finalization.
 
-The reusable library emits an ordered, closed Go `Event` union:
-
-- `response_started`
-- `content_started`
-- `text_delta`
-- `json_delta`
-- `tool_call_started`
-- `tool_arguments_delta`
-- `content_completed`
-- `usage_updated`
-- `response_completed`
-- `provider_state_delta`
-- `stream_errored`
-
-Every event has `sequence`, `operation_id`, and optional item/content indices.
-Adapters must tolerate arbitrary network chunk boundaries and emit semantic
-events independent of those boundaries. `response_started` is emitted only
-after durable admission assigns an operation ID. Exactly one terminal event is
-then emitted: `response_completed`, containing the final normalized response
-after durable finalization, or `stream_errored`, containing a classified safe
-error. `Next` returns EOF after that terminal; a provider event after its own
-terminal is rejected rather than silently choosing one result.
-
-The stream is bounded and backpressured. Individual text, JSON, tool-argument,
-usage, opaque-provider-state, and error payloads are limited to 64 KiB, so an
-adapter must split larger deltas. Completed semantic items and the final
-response use the normal response/Activity payload limit instead: this prevents
-a valid finalized result from becoming undeliverable solely because it is the
-terminal event. Opaque provider-state bytes are copied and preserved exactly;
-they are never decoded merely to make a stream portable.
-
-An adapter must implement the separate provider streaming port to use this
-API. It calls the dispatch observer immediately before its first possible
-provider write and reports dispatch certainty with its event source. A route
-whose adapter lacks that port is rejected without capability lookup,
-compilation, or provider dispatch. If no eligible streaming route remains,
-the direct pre-admission error above is returned; it cannot expose a fabricated
-success stream. A full consumer buffer stops further provider reads until the
-caller drains it, and `Close` or context cancellation stops the provider source
-promptly.
-
-Task 5 supplies this engine lifecycle and the provider-port contract only;
-the checked-in production adapters do not implement `StreamingAdapter` yet.
-Their decoder coverage remains distinct from an end-to-end engine stream until
-the follow-on adapter wiring lands.
-
-Each provider-port `tool_arguments_delta` must already include a nonempty,
-stable call ID and tool name. The lower-level assembler can accumulate a
-provider protocol that discovers those fields later, but a streaming adapter
-must buffer or normalize those early fragments before exposing them; the engine
-rejects an identity-less fragment at the provider boundary rather than emit an
-invalid public event.
-
-Temporal Activity payloads do not expose the live event stream. The Activity
+No streaming or token-event API is supported in v1. The Temporal Activity
 depends only on `llm.Engine`, invokes `Generate` once, and returns the final
-normalized response; it does not request or fall back from an `EventStream`.
-Raw deltas, tool arguments, and opaque provider state never enter workflow
-history as heartbeat details.
+normalized response. Raw deltas, tool arguments, and opaque provider state
+never enter workflow history as heartbeat details.
+
+Some packages retain decoder code for fragmented provider payloads. That code
+is legacy parser-regression coverage, not a supported v1 dispatch path; it must
+not be wired into the engine or Temporal runtime. This boundary does not claim
+that residual public types have been physically deleted.

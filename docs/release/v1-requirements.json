@@ -39,7 +39,7 @@
       "source": {
         "path": "docs/index.md",
         "anchor": "#v1-completion-gate",
-        "quote": "Every adapter has request, response, error, usage, and fragmented-stream golden tests; strict-mode lossy conversions fail before dispatch."
+        "quote": "Every adapter has request, response, error, and usage golden tests; strict-mode lossy conversions fail before dispatch."
       },
       "implementation_paths": [
         "llm/provider/anthropicmessages/contract_fixture_test.go",
