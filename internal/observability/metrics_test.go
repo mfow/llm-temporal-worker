@@ -19,6 +19,8 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 	}
 	metrics.RecordProviderAttempt("endpoint-a", "model-a", "priority", "success", time.Second)
 	metrics.RecordProviderAttempt("secret-endpoint", "secret-model", "secret-class", "secret-outcome", time.Second)
+	metrics.RecordActivityFailure("worker")
+	metrics.RecordActivityFailure("secret-origin")
 	metrics.RecordCost("endpoint-a", "model-a", "standard", "provider", 7)
 	metrics.RecordCost("endpoint-a", "model-a", "standard", "tenant-secret", 3)
 
@@ -34,7 +36,7 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 		}
 	}
 	output := response.String()
-	for _, forbidden := range []string{"secret-endpoint", "secret-model", "secret-class", "secret-outcome", "tenant-secret"} {
+	for _, forbidden := range []string{"secret-endpoint", "secret-model", "secret-class", "secret-outcome", "secret-origin", "tenant-secret"} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("metrics leaked %q: %s", forbidden, output)
 		}
@@ -44,5 +46,8 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 	}
 	if !strings.Contains(output, `endpoint="other"`) {
 		t.Fatalf("unconfigured endpoint was not bounded: %s", output)
+	}
+	if !strings.Contains(output, `origin="worker"`) || !strings.Contains(output, `origin="other"`) {
+		t.Fatalf("failure origins were not restricted to the fixed vocabulary: %s", output)
 	}
 }
