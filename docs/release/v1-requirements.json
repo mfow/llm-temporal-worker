@@ -1,0 +1,389 @@
+{
+  "schema_version": 1,
+  "catalog_state": "partial",
+  "requirements": [
+    {
+      "id": "v1.ci.green-scheduled",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "Pull-request and master GitHub Actions are green; master also builds daily at 05:00 in Australia/Sydney."
+      },
+      "implementation_paths": [
+        ".github/workflows/master.yml",
+        ".github/workflows/pull-request.yml",
+        "internal/architecturetest/workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.contract.adapter-golden-strict",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "Every adapter has request, response, error, usage, and fragmented-stream golden tests; strict-mode lossy conversions fail before dispatch."
+      },
+      "implementation_paths": [
+        "llm/provider/anthropicmessages/contract_fixture_test.go",
+        "llm/provider/bedrockmessages/contract_fixture_test.go",
+        "llm/provider/contracttest",
+        "llm/provider/openaichat/contract_fixture_test.go",
+        "llm/provider/openairesponses/contract_fixture_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "adapter-contracts"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.contract.cross-protocol",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, and Amazon Bedrock Anthropic profiles supported by the capability matrix."
+      },
+      "implementation_paths": [
+        "llm/provider/anthropicmessages",
+        "llm/provider/bedrockmessages",
+        "llm/provider/contracttest",
+        "llm/provider/openaichat",
+        "llm/provider/openairesponses"
+      ],
+      "verification": {
+        "make_targets": [
+          "adapter-contracts"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.decision.service-class.no-provider-default",
+      "source": {
+        "path": "docs/decisions/0002-service-classes.md",
+        "anchor": "#decision",
+        "quote": "There is no public provider-default value."
+      },
+      "implementation_paths": [
+        "llm/provider/openairesponses/lower_test.go",
+        "llm/request_json_test.go",
+        "llm/service_class.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.decision.service-class.omission-normalizes-standard",
+      "source": {
+        "path": "docs/decisions/0002-service-classes.md",
+        "anchor": "#decision",
+        "quote": "Omission normalizes to standard before request hashing."
+      },
+      "implementation_paths": [
+        "llm/request.go",
+        "llm/request_json_test.go",
+        "llm/service_class.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.decision.service-class.public-enum",
+      "source": {
+        "path": "docs/decisions/0002-service-classes.md",
+        "anchor": "#decision",
+        "quote": "economy | standard | priority"
+      },
+      "implementation_paths": [
+        "llm/request_json_test.go",
+        "llm/service_class.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.deploy.runtime-smoke",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "The container runs as a non-root user, Kubernetes probes exercise real readiness dependencies, and two-replica Redis-backed smoke tests pass."
+      },
+      "implementation_paths": [
+        "deploy/kubernetes/base/deployment.yaml",
+        "integration/compose/live_lifecycle_test.go",
+        "integration/kubernetes/manifests_test.go",
+        "integration/readiness_integration_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "compose-live-integration",
+          "deployment-policy-verify",
+          "image-verify",
+          "readiness-integration"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.ledger.retry-and-ambiguity",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "The operation ledger returns a cached completed result on an Activity retry and refuses to replay an ambiguous provider dispatch."
+      },
+      "implementation_paths": [
+        "engine/engine_test.go",
+        "storage/conformance/conformance.go",
+        "storage/memory/conformance_test.go",
+        "storage/redis/conformance_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "redis-integration",
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.publication.guarded-preflight",
+      "source": {
+        "path": "docs/release/runbook.md",
+        "anchor": "#guarded-manual-publication-boundary",
+        "quote": "Task 24 adds .github/workflows/release.yml as a deliberately incomplete publication control. It has only a workflow_dispatch trigger, and both jobs reject a dispatch that is not started from master."
+      },
+      "implementation_paths": [
+        ".github/workflows/release.yml",
+        "internal/architecturetest/release_publication_test.go",
+        "scripts/release/guard.sh"
+      ],
+      "verification": {
+        "make_targets": [
+          "release-verify",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/release.yml",
+            "job": "preflight"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
+      "id": "v1.publication.irreversible-operations",
+      "source": {
+        "path": "docs/release/runbook.md",
+        "anchor": "#guarded-manual-publication-boundary",
+        "quote": "The protected job always exits nonzero after preflight. It does not sign, publish, push, create a tag, or create a release."
+      },
+      "implementation_paths": [
+        ".github/workflows/release.yml",
+        "internal/architecturetest/release_publication_test.go",
+        "scripts/release/guard.sh"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/release.yml",
+            "job": "protected-signing-publication"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "external_authorization_required",
+        "status": "authorization_required"
+      }
+    },
+    {
+      "id": "v1.routing.deterministic-explicit-fallback",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "The router is deterministic for a fixed configuration snapshot and never changes service class without an explicit request fallback."
+      },
+      "implementation_paths": [
+        "engine/engine_test.go",
+        "routing/planner.go",
+        "routing/planner_property_test.go",
+        "routing/planner_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.state.memory-redis-conformance",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "Memory and Redis budget backends pass the same conformance suite, including concurrent overlapping-window admission tests."
+      },
+      "implementation_paths": [
+        "storage/conformance/conformance.go",
+        "storage/memory/conformance_test.go",
+        "storage/redis/conformance_test.go",
+        "storage/redis/shared_state_conformance_integration_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "redis-integration"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
+      "id": "v1.temporal.activity-lifecycle",
+      "source": {
+        "path": "docs/index.md",
+        "anchor": "#v1-completion-gate",
+        "quote": "The worker passes Temporal Activity tests for retry, heartbeat, cancellation, graceful shutdown, and non-retryable error typing."
+      },
+      "implementation_paths": [
+        "activity/activities_test.go",
+        "activity/errors_test.go",
+        "integration/temporal/live_recovery_test.go",
+        "integration/temporal_lifecycle_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "compose-live-integration",
+          "integration"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    }
+  ]
+}

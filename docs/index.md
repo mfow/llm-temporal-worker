@@ -78,3 +78,10 @@ The first release is complete only when all of these statements are true:
   readiness dependencies, and two-replica Redis-backed smoke tests pass.
 - Pull-request and master GitHub Actions are green; master also builds daily at
   05:00 in `Australia/Sydney`.
+
+## v1 traceability status
+
+The [partial v1 traceability catalog](release/v1-requirements.json) records
+source-backed implementation and verification references. Its recorded states
+are not release evidence: they do not claim a candidate, provider invocation,
+signing, publication, tag, or release result.
