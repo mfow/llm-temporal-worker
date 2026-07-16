@@ -147,6 +147,14 @@ func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
 			required: "V1 now supports only one-shot `Generate` and a completed normalized response; it has no supported streaming or token-event API.",
 		},
 		{
+			path:     "docs/superpowers/plans/2026-07-14-openai-fixture-coverage.md",
+			required: "Current v1 enforcement depends on each profile's declared non-streaming capability facts; it does not require a streaming adapter, SDK stream dispatch, or Temporal runtime dispatch.",
+		},
+		{
+			path:     "docs/superpowers/plans/2026-07-14-v1-completion.md",
+			required: "V1 supports only one-shot `Generate` and a completed normalized response. It does not require a streaming adapter, SDK stream dispatch, or Temporal runtime dispatch.",
+		},
+		{
 			path:     "llm/engine.go",
 			required: "Deprecated: streaming is unsupported in v1. This interface remains for source compatibility only and MUST NOT be wired into the Temporal runtime.",
 		},
