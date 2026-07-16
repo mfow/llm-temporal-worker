@@ -75,6 +75,24 @@ func TestTemporalOneShotActivityBoundaryRejectsStreamingFixtures(t *testing.T) {
 			wantReferences: []string{"OpenStream"},
 		},
 		{
+			name: "activity declares Stream API",
+			source: activitiesSource + `
+
+func (activities *Activities) Stream(ctx context.Context) {}
+`,
+			validator:      validateActivitiesOneShotBoundary,
+			wantReferences: []string{"Stream"},
+		},
+		{
+			name: "activity declares OpenStream API",
+			source: activitiesSource + `
+
+func (activities *Activities) OpenStream(ctx context.Context) {}
+`,
+			validator:      validateActivitiesOneShotBoundary,
+			wantReferences: []string{"OpenStream"},
+		},
+		{
 			name: "activity captures Stream method value",
 			source: replaceArchitectureSource(t, activitiesSource,
 				"response, err := activities.Engine.Generate(generateContext, request)",
@@ -353,6 +371,9 @@ func hasExactlyNamedSelectorParameter(fields *ast.FieldList, name, packageName, 
 func forbiddenTemporalStreamingReferences(file *ast.File) []string {
 	found := make(map[string]struct{})
 	imports := streamingImports(file)
+	for _, reference := range activitiesStreamingMethodReferences(file) {
+		found[reference] = struct{}{}
+	}
 	for _, reference := range activitiesEngineStreamingReferences(file) {
 		found[reference] = struct{}{}
 	}
@@ -373,6 +394,26 @@ func forbiddenTemporalStreamingReferences(file *ast.File) []string {
 		}
 		return true
 	})
+	references := make([]string, 0, len(found))
+	for reference := range found {
+		references = append(references, reference)
+	}
+	sort.Strings(references)
+	return references
+}
+
+func activitiesStreamingMethodReferences(file *ast.File) []string {
+	found := make(map[string]struct{})
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Recv == nil || len(function.Recv.List) != 1 || namedType(function.Recv.List[0].Type) != "Activities" {
+			continue
+		}
+		switch function.Name.Name {
+		case "Stream", "OpenStream":
+			found[function.Name.Name] = struct{}{}
+		}
+	}
 	references := make([]string, 0, len(found))
 	for reference := range found {
 		references = append(references, reference)
