@@ -106,6 +106,10 @@ jobs:
         if: steps.go.outputs.present == 'true'
         run: go test -tags=live ./integration/live -run '^$'
 
+      - name: Compile guarded Redis benchmark
+        if: steps.go.outputs.present == 'true'
+        run: make redis-benchmark-compile
+
       - name: Replay semantic fuzz seeds and mutation invariants
         if: steps.go.outputs.present == 'true'
         run: |

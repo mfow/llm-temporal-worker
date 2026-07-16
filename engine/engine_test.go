@@ -136,7 +136,7 @@ func resultRef(operationID string) state.BlobRef {
 
 type testHarness struct {
 	engine    *Engine
-	admission *memory.AdmissionStore
+	admission admission.AdmissionStore
 	results   *fakeResultStore
 	clock     time.Time
 }
@@ -144,6 +144,17 @@ type testHarness struct {
 func newHarness(t testing.TB, adapter provider.Adapter) testHarness {
 	t.Helper()
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	return newHarnessWithAdmission(t, adapter, memory.NewAdmissionStore(memory.AdmissionOptions{Clock: func() time.Time { return now }}), func() time.Time { return now })
+}
+
+func newHarnessWithAdmission(t testing.TB, adapter provider.Adapter, admissionStore admission.AdmissionStore, clock func() time.Time) testHarness {
+	t.Helper()
+	if admissionStore == nil {
+		t.Fatal("admission store is required")
+	}
+	if clock == nil {
+		t.Fatal("clock is required")
+	}
 	classes := []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
 	tiers := map[llm.ServiceClass]string{
 		llm.ServiceClassEconomy:  "economy-tier",
@@ -168,21 +179,20 @@ func newHarness(t testing.TB, adapter provider.Adapter) testHarness {
 		t.Fatal(err)
 	}
 	results := &fakeResultStore{values: make(map[string]llm.Response)}
-	admissionStore := memory.NewAdmissionStore(memory.AdmissionOptions{Clock: func() time.Time { return now }})
 	engineValue, err := New(Dependencies{
 		Snapshots:   StaticSnapshot{Value: Snapshot{Version: "snapshot-1", Routes: routes, Prices: pricing.NewResolver(priceCatalog), ReservationLease: time.Minute, OperationRetention: time.Hour}},
 		Planner:     routing.DeterministicPlanner{},
 		Adapters:    AdapterMap{"endpoint-1": adapter},
 		Admission:   admissionStore,
 		Results:     results,
-		Clock:       func() time.Time { return now },
+		Clock:       clock,
 		Estimator:   budget.Estimator{MaxOutput: 1},
 		MaxAttempts: 8,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return testHarness{engine: engineValue, admission: admissionStore, results: results, clock: now}
+	return testHarness{engine: engineValue, admission: admissionStore, results: results, clock: clock()}
 }
 
 func baseRequest(operationKey string) llm.Request {

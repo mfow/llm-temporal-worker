@@ -53,6 +53,32 @@ normal CI gate because runner scheduling and hardware change latency samples.
 Do not compare its p99 output with the service objectives until repeatable,
 controlled memory and same-region Redis evidence is available.
 
+## Controlled Redis measurement
+
+For a controlled, same-region Redis measurement, an operator may run:
+
+```sh
+LLMTW_REDIS_BENCHMARK=1 \
+LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1 \
+LLMTW_REDIS_BENCHMARK_ADDR=redis.example.internal:6379 \
+make redis-benchmark
+```
+
+This is deliberately not a normal CI target: it refuses any `CI` environment,
+requires both explicit operator gates and an explicit Redis address, and does
+not start Redis, load a Redis Function, or invoke a live provider. The target
+requires a dedicated non-production Redis 7+ deployment with the exact
+preloaded `llmtw_admission_v1` / `admission_v1` Function. It creates state
+only beneath a randomly generated bounded key prefix and cleans up only keys
+under that prefix; it never flushes a database.
+
+The reported `p99_ms/op` is a measurement to retain with the deployment,
+region, Redis configuration, sample count, and run timestamp. The benchmark
+does not itself assert that a p99 or error-rate objective has been met.
+Both CI workflows run `make redis-benchmark-compile`, which compiles the
+build-tagged code with tests and benchmarks disabled; it has no Redis address,
+operator gate, provider call, or Docker dependency.
+
 ## Local release gates
 
 The repository also exposes bounded release-gate targets. They are safe to run

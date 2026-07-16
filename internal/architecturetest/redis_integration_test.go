@@ -43,6 +43,57 @@ func TestRedisIntegrationFailureRedactorRunsThroughBash(t *testing.T) {
 	}
 }
 
+func TestRedisBenchmarkIsOperatorGatedAndExcludedFromCI(t *testing.T) {
+	root := repositoryRoot(t)
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := redisBenchmarkTarget(t, string(makefile))
+	for _, required := range []string{
+		"LLMTW_REDIS_BENCHMARK=1",
+		"LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1",
+		"LLMTW_REDIS_BENCHMARK_ADDR",
+		"CI",
+		"-tags=redisbenchmark",
+		"BenchmarkGenerateRedisAdmissionAndCompile",
+	} {
+		if !strings.Contains(target, required) {
+			t.Errorf("redis-benchmark is missing required operator guard %q", required)
+		}
+	}
+	for _, forbidden := range []string{"docker", "FunctionLoad", "LLMTW_REDIS_TEST_PROVISION"} {
+		if strings.Contains(target, forbidden) {
+			t.Errorf("redis-benchmark must not contain %q", forbidden)
+		}
+	}
+	compileTarget := redisBenchmarkCompileTarget(t, string(makefile))
+	for _, required := range []string{
+		"$(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^$$'",
+	} {
+		if !strings.Contains(compileTarget, required) {
+			t.Errorf("redis-benchmark-compile is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"LLMTW_REDIS_BENCHMARK", "docker", "Function", "redis-benchmark:"} {
+		if strings.Contains(compileTarget, forbidden) {
+			t.Errorf("redis-benchmark-compile must not contain %q", forbidden)
+		}
+	}
+	for _, workflow := range []string{"master.yml", "pull-request.yml"} {
+		data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", workflow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "make redis-benchmark-compile") {
+			t.Fatalf("%s must compile the build-tagged Redis benchmark", workflow)
+		}
+		if strings.Contains(string(data), "make redis-benchmark\n") {
+			t.Fatalf("%s must not execute the operator-only redis-benchmark target", workflow)
+		}
+	}
+}
+
 func TestRedisPersistenceReopensAtCurrentContainerAddressAfterRestart(t *testing.T) {
 	root := repositoryRoot(t)
 	testSource, err := os.ReadFile(filepath.Join(root, "storage", "redis", "shared_state_conformance_integration_test.go"))
@@ -97,6 +148,36 @@ func redisIntegrationTarget(t *testing.T, makefile string) string {
 	endOffset := strings.Index(makefile[startOffset:], end)
 	if endOffset < 0 {
 		t.Fatal("redis-integration is missing its target boundary")
+	}
+	return makefile[startOffset : startOffset+endOffset]
+}
+
+func redisBenchmarkTarget(t *testing.T, makefile string) string {
+	t.Helper()
+	const start = "redis-benchmark:\n"
+	const end = "\n\n# Runs the readiness recovery gate"
+	startOffset := strings.Index(makefile, start)
+	if startOffset < 0 {
+		t.Fatal("Makefile is missing redis-benchmark")
+	}
+	endOffset := strings.Index(makefile[startOffset:], end)
+	if endOffset < 0 {
+		t.Fatal("redis-benchmark is missing its target boundary")
+	}
+	return makefile[startOffset : startOffset+endOffset]
+}
+
+func redisBenchmarkCompileTarget(t *testing.T, makefile string) string {
+	t.Helper()
+	const start = "redis-benchmark-compile:\n"
+	const end = "\n\n# Measures Generate"
+	startOffset := strings.Index(makefile, start)
+	if startOffset < 0 {
+		t.Fatal("Makefile is missing redis-benchmark-compile")
+	}
+	endOffset := strings.Index(makefile[startOffset:], end)
+	if endOffset < 0 {
+		t.Fatal("redis-benchmark-compile is missing its target boundary")
 	}
 	return makefile[startOffset : startOffset+endOffset]
 }
