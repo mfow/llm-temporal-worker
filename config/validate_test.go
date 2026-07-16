@@ -273,3 +273,29 @@ func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "family: openai_responses", "family: azure_openai_chat", 1)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Endpoints["openai-prod"].Family; got != "azure_openai_chat" {
+		t.Fatalf("endpoint family = %q, want azure_openai_chat", got)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err != nil {
+		t.Fatal(err)
+	}
+}

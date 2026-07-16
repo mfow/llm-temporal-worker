@@ -21,6 +21,7 @@ const v1TraceabilityCatalogPath = "docs/release/v1-requirements.json"
 var expectedV1TraceabilityIDs = []string{
 	"v1.ci.green-scheduled",
 	"v1.contract.adapter-golden-strict",
+	"v1.contract.azure-openai-chat",
 	"v1.contract.cross-protocol",
 	"v1.decision.service-class.no-provider-default",
 	"v1.decision.service-class.omission-normalizes-standard",

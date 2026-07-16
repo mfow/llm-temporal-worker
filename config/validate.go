@@ -14,6 +14,7 @@ import (
 var supportedFamilies = map[string]struct{}{
 	"openai_responses":           {},
 	"azure_openai_responses":     {},
+	"azure_openai_chat":          {},
 	"openai_chat":                {},
 	"anthropic_messages":         {},
 	"anthropic_aws_messages":     {},

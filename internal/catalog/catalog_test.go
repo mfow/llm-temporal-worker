@@ -258,6 +258,9 @@ entries:
 }
 
 func TestEndpointFamilyMapsAnthropicAWSWithoutConflatingBedrock(t *testing.T) {
+	if got := endpointFamily("azure_openai_chat"); got != provider.FamilyOpenAIChat {
+		t.Fatalf("Azure Chat family = %q, want %q", got, provider.FamilyOpenAIChat)
+	}
 	if got := endpointFamily("anthropic_aws_messages"); got != provider.FamilyAnthropicMessages {
 		t.Fatalf("Anthropic AWS family = %q, want %q", got, provider.FamilyAnthropicMessages)
 	}

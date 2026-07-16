@@ -271,6 +271,8 @@ func endpointFamily(value string) provider.Family {
 	switch value {
 	case "azure_openai_responses":
 		return provider.FamilyOpenAIResponses
+	case "azure_openai_chat":
+		return provider.FamilyOpenAIChat
 	case "anthropic_aws_messages":
 		return provider.FamilyAnthropicMessages
 	case "bedrock_anthropic_messages":

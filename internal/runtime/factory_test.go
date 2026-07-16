@@ -154,6 +154,9 @@ func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
 	if got := endpointFamily("azure_openai_responses"); got != provider.FamilyOpenAIResponses {
 		t.Fatalf("Azure family = %q, want %q", got, provider.FamilyOpenAIResponses)
 	}
+	if got := endpointFamily("azure_openai_chat"); got != provider.FamilyOpenAIChat {
+		t.Fatalf("Azure Chat family = %q, want %q", got, provider.FamilyOpenAIChat)
+	}
 	if got := endpointFamily("bedrock_anthropic_messages"); got != provider.FamilyBedrockMessages {
 		t.Fatalf("Bedrock family = %q, want %q", got, provider.FamilyBedrockMessages)
 	}
@@ -163,4 +166,97 @@ func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
 	if !llm.ServiceClassPriority.Valid() {
 		t.Fatal("priority service class is unexpectedly invalid")
 	}
+}
+
+func TestProductionFactoryBuildsAzureOpenAIChatAdapter(t *testing.T) {
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+			if ref.Kind != config.SecretEnv || ref.Name != "AZURE_OPENAI_API_KEY" {
+				t.Fatalf("resolved unexpected secret reference: %#v", ref)
+			}
+			return []byte("test-key"), nil
+		}),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		HTTPClient:     &http.Client{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"})
+	adapter, err := factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter == nil || adapter.Name() != "openai.chat/azure-chat" {
+		t.Fatalf("adapter = %#v, want Azure OpenAI Chat adapter", adapter)
+	}
+	_, err = adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "azure-model-pin", Model: "other-deployment", ServiceClass: llm.ServiceClassStandard},
+		Query:   provider.CapabilityQuery{EndpointID: "azure-chat", Family: provider.FamilyOpenAIChat, Model: "other-deployment"},
+		Strict:  true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pinned profile model") {
+		t.Fatalf("model pin error = %v", err)
+	}
+}
+
+func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*config.EndpointConfig)
+		want   string
+	}{
+		{name: "missing API version", mutate: func(endpoint *config.EndpointConfig) { endpoint.Extensions["azure"]["api_version"] = "" }, want: "Azure API version is required"},
+		{name: "whitespace API version", mutate: func(endpoint *config.EndpointConfig) { endpoint.Extensions["azure"]["api_version"] = " \t " }, want: "Azure API version is required"},
+		{name: "missing deployment", mutate: func(endpoint *config.EndpointConfig) { delete(endpoint.Extensions["azure"], "deployment") }, want: "Azure deployment is required"},
+		{name: "non-string deployment", mutate: func(endpoint *config.EndpointConfig) { endpoint.Extensions["azure"]["deployment"] = 7 }, want: "Azure deployment is required"},
+		{name: "bearer auth", mutate: func(endpoint *config.EndpointConfig) {
+			endpoint.Auth = config.AuthConfig{Kind: "bearer_env", Name: "AZURE_OPENAI_API_KEY"}
+		}, want: "provider authentication mode is unsupported"},
+		{name: "Azure default credential", mutate: func(endpoint *config.EndpointConfig) {
+			endpoint.Auth = config.AuthConfig{Kind: "azure_default_credential"}
+		}, want: "provider authentication mode is unsupported"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved := false
+			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+				Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+					resolved = true
+					return []byte("must-not-resolve"), nil
+				}),
+				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+				HTTPClient:     &http.Client{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"})
+			endpoint := value.Endpoints["azure-chat"]
+			test.mutate(&endpoint)
+			value.Endpoints["azure-chat"] = endpoint
+			_, err = factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("buildAdapter() error = %v, want %q", err, test.want)
+			}
+			if resolved {
+				t.Fatal("invalid Azure Chat configuration resolved a secret")
+			}
+		})
+	}
+}
+
+func azureOpenAIChatConfig(auth config.AuthConfig) config.Config {
+	return config.Config{Endpoints: map[string]config.EndpointConfig{
+		"azure-chat": {
+			Family: "azure_openai_chat", BaseURL: "https://example.openai.azure.com", OutboundHosts: []string{"example.openai.azure.com"}, Auth: auth,
+			ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "default"}},
+			Extensions:     map[string]map[string]any{"azure": {"api_version": "2025-01-01", "deployment": "chat-deployment"}},
+		},
+	}}
+}
+
+func azureOpenAIChatSnapshot() engine.Snapshot {
+	return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: "azure-chat", Capabilities: routing.CapabilitySet{Version: "azure-chat/v1"}}}},
+	}}}
 }
