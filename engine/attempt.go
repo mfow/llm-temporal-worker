@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/admission"
+	"github.com/mfow/llm-temporal-worker/internal/observability"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"github.com/mfow/llm-temporal-worker/pricing"
@@ -48,6 +49,7 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 		return err
 	}
 	observer.marked = true
+	recordOperationState(ctx, admission.StateDispatching)
 	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "pre_write", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()}); err != nil {
 		return err
 	}
@@ -113,7 +115,15 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		}
 		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease)}
 		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
+		attemptStarted := time.Now()
 		result, invokeErr := adapter.Invoke(attemptCtx, call, observer)
+		if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+			outcome := "success"
+			if invokeErr != nil {
+				outcome = "failure"
+			}
+			metrics.RecordProviderAttempt(candidate.candidate.EndpointID, candidate.candidate.Model, string(candidate.candidate.AttemptedClass), outcome, time.Since(attemptStarted))
+		}
 		if invokeErr != nil {
 			engine.recordTraceError(attemptCtx, attemptSpan, invokeErr)
 		}
@@ -144,8 +154,13 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 			return llm.Response{}, continueErr
 		}
 		if continued.Denied != nil {
+			if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+				metrics.RecordBudgetAdmission(continued.Denied.PolicyID, "denied")
+			}
 			return llm.Response{}, engineError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchRejected, provider.RetryAfter, "fallback budget reservation denied", nil)
 		}
+		recordOperationState(ctx, continued.Operation.State)
+		recordAdmission(ctx, continued.Operation.Reservations, "accepted")
 		operation = continued.Operation
 	}
 	return llm.Response{}, engine.finishNoDispatch(ctx, operation, request)
@@ -193,6 +208,16 @@ func (engine *Engine) finishFailed(ctx context.Context, operation admission.Oper
 	if err != nil {
 		return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "failed to record provider outcome", err)
 	}
+	state := admission.StateDefiniteFailed
+	if attempt.Dispatch == admission.Accepted || attempt.Dispatch == admission.Ambiguous {
+		state = admission.StateAmbiguous
+	}
+	recordOperationState(ctx, state)
+	if state == admission.StateAmbiguous {
+		if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+			metrics.RecordAmbiguous(candidate.EndpointID)
+		}
+	}
 	failure.OperationID = operation.ID
 	return failure
 }
@@ -203,12 +228,14 @@ func (engine *Engine) finishNoDispatch(ctx context.Context, operation admission.
 		if err != nil {
 			return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetrySameOperation, "failed to close unused reservation", err)
 		}
+		recordOperationState(ctx, admission.StateDispatching)
 	}
 	finalCtx, cancel := engine.finalizationContext(ctx)
 	defer cancel()
 	if err := engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: admission.NotDispatched, Incurred: 0, Attempt: admission.AttemptFacts{ServiceClass: string(request.ServiceClass), Dispatch: admission.NotDispatched}, Reason: "no eligible compiled adapter"}); err != nil {
 		return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetrySameOperation, "failed to close unused reservation", err)
 	}
+	recordOperationState(ctx, admission.StateDefiniteFailed)
 	return engineError(provider.CodeNoRoute, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "no candidate could be compiled", nil)
 }
 
@@ -216,8 +243,12 @@ func (engine *Engine) handleCancellation(ctx context.Context, operation admissio
 	if operation.State == admission.StateReserved {
 		finalCtx, cancel := engine.finalizationContext(ctx)
 		defer cancel()
-		_ = engine.dependencies.Admission.MarkDispatching(finalCtx, admission.DispatchRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, LeaseUntil: engine.dependencies.Clock()})
-		_ = engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: admission.NotDispatched, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, Reason: "canceled before dispatch"})
+		if err := engine.dependencies.Admission.MarkDispatching(finalCtx, admission.DispatchRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, LeaseUntil: engine.dependencies.Clock()}); err == nil {
+			recordOperationState(ctx, admission.StateDispatching)
+		}
+		if err := engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: admission.NotDispatched, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, Reason: "canceled before dispatch"}); err == nil {
+			recordOperationState(ctx, admission.StateDefiniteFailed)
+		}
 		failure := engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause)
 		failure.OperationID = operation.ID
 		return failure

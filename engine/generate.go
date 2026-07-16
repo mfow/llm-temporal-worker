@@ -9,6 +9,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/admission"
 	"github.com/mfow/llm-temporal-worker/budget"
+	"github.com/mfow/llm-temporal-worker/internal/observability"
 	"github.com/mfow/llm-temporal-worker/llm"
 	"github.com/mfow/llm-temporal-worker/llm/provider"
 	"github.com/mfow/llm-temporal-worker/pricing"
@@ -163,6 +164,9 @@ func (engine *Engine) loadContinuation(ctx context.Context, request llm.Request,
 	if err := continuation.Validate(now); err != nil {
 		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeStateCorrupt, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation is invalid", err)
 	}
+	if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+		metrics.RecordContinuation("reused")
+	}
 	providerValue := toProviderContinuation(continuation)
 	request.Continuation = providerValue
 	return request, continuation.Constraints(request.Portability), continuationPointer(continuation), nil
@@ -276,10 +280,17 @@ func (engine *Engine) beginOrResume(ctx context.Context, request llm.Request, sn
 		return admission.Operation{}, false, engineError(provider.CodeStateUnavailable, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetrySameOperation, "admission failed", err)
 	}
 	if result.Denied != nil {
+		if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+			metrics.RecordBudgetAdmission(result.Denied.PolicyID, "denied")
+		}
 		mapped := engineError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryAfter, "budget reservation denied", nil)
 		mapped.RetryAfter = result.Denied.RetryAfter
 		mapped.SafeDetails = map[string]string{"policy_id": result.Denied.PolicyID, "window_id": result.Denied.WindowID}
 		return admission.Operation{}, false, mapped
+	}
+	if !result.Existing {
+		recordOperationState(ctx, result.Operation.State)
+		recordAdmission(ctx, result.Operation.Reservations, "accepted")
 	}
 	return result.Operation, result.Existing, nil
 }
@@ -304,6 +315,7 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 			if completeErr := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual, Attempt: operation.Attempt}); completeErr != nil {
 				return nil, false, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation finalization failed", completeErr)
 			}
+			recordCompletion(ctx, response)
 			return &response, false, nil
 		}
 		if !errors.Is(err, ErrResultNotFound) {

@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"sync"
@@ -12,6 +13,20 @@ import (
 )
 
 var safeLabelPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/-]{1,96}$`)
+
+type metricsContextKey struct{}
+
+// WithMetrics binds the process metrics implementation to one request path.
+// A nil metrics value is deliberately retained as a no-op binding.
+func WithMetrics(ctx context.Context, metrics *Metrics) context.Context {
+	return context.WithValue(ctx, metricsContextKey{}, metrics)
+}
+
+// MetricsFromContext returns the request-bound metrics implementation, if any.
+func MetricsFromContext(ctx context.Context) *Metrics {
+	metrics, _ := ctx.Value(metricsContextKey{}).(*Metrics)
+	return metrics
+}
 
 // AllowedValues contains configured identifiers that are safe to expose as
 // metric labels. Tenant IDs are deliberately absent: tenant labels are never

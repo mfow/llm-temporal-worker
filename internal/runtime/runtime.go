@@ -273,6 +273,7 @@ func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metri
 		HeartbeaterFactory: func() activity.Heartbeater {
 			return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
 		},
+		Metrics:       metrics,
 		Tracer:        tracer,
 		PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
 	}
@@ -292,8 +293,11 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	for endpoint := range configuration.Endpoints {
 		endpoints = append(endpoints, endpoint)
 	}
-	for model := range configuration.Models {
-		models = append(models, model)
+	for modelID, model := range configuration.Models {
+		models = append(models, modelID)
+		for _, route := range model.Routes {
+			models = append(models, route.Model)
+		}
 	}
 	for _, policy := range configuration.Budgets.Policies {
 		policies = append(policies, policy.ID)
@@ -301,10 +305,10 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	return observability.NewMetrics(observability.AllowedValues{
 		Endpoints: endpoints, Models: models, Policies: policies,
 		Outcomes:              []string{"success", "failure", "accepted", "rejected", "denied"},
-		Phases:                []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization", "continuation_write"},
+		Phases:                []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization", "continuation_write", "total"},
 		Statuses:              []string{"completed", "failed", "canceled"},
 		ErrorClasses:          []string{"none", "internal", "provider_unavailable", "budget_denied"},
-		Methods:               []string{"provider_reported", "usage"},
+		Methods:               []string{"provider_reported", "catalog_usage", "reconstructed_usage", "retained_reservation"},
 		OperationStates:       []string{"reserved", "dispatching", "completed", "failed", "ambiguous"},
 		ContinuationDecisions: []string{"created", "reused", "dropped"},
 	})
