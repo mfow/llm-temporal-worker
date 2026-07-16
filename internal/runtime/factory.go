@@ -444,6 +444,32 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		default:
 			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
 		}
+	case "azure_openai_chat":
+		apiVersion := factory.azureAPIVersion(endpointID, endpoint)
+		if apiVersion == "" {
+			return nil, fmt.Errorf("endpoint %q: Azure API version is required", endpointID)
+		}
+		deployment, err := azureDeployment(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+		}
+		if endpoint.Auth.Kind != "header_env" {
+			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
+		}
+		key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
+		if err != nil {
+			return nil, err
+		}
+		azureClient, err := openaichat.NewAzureClient(openaichat.AzureClientConfig{Endpoint: endpoint.BaseURL, APIVersion: apiVersion, APIKey: string(key), HTTPClient: client})
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+		}
+		tiers, actual := endpointTiers(endpoint)
+		adapter, err := openaichat.NewAzureAdapter(azureClient, endpointID, openaichat.AzureProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Deployment: deployment, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual})
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+		}
+		return adapter, nil
 	case "openai_chat":
 		chatProfile, err := factory.chatProfile(endpointID, endpoint, capabilities, profile)
 		if err != nil {
@@ -708,6 +734,14 @@ func extensionValue(endpoint config.EndpointConfig, namespace, field string) any
 		return values[field]
 	}
 	return nil
+}
+
+func azureDeployment(endpoint config.EndpointConfig) (string, error) {
+	value, ok := extensionValue(endpoint, "azure", "deployment").(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("Azure deployment is required")
+	}
+	return value, nil
 }
 
 func stringSlice(value any) ([]string, error) {

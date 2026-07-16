@@ -143,6 +143,32 @@ endpoints:
         # Azure API versions are deployment-specific and must be declared.
         api_version: 2024-10-21
 
+  azure-chat-au:
+    # Azure Chat is a separate family: never configure this as generic
+    # openai_chat or infer it from the Azure host name.
+    family: azure_openai_chat
+    base_url: https://example.openai.azure.com
+    outbound_hosts: [example.openai.azure.com]
+    auth:
+      # Azure Chat currently accepts an API key only. Token/default-credential
+      # modes fail closed until a dedicated token client is implemented.
+      kind: header_env
+      name: AZURE_OPENAI_API_KEY
+    account_region: australiaeast
+    timeout: 115s
+    service_classes:
+      standard:
+        provider_value: default
+      priority:
+        provider_value: priority
+    capability_profile: azure-chat-au-v1
+    price_catalog: catalog-2026-07-13
+    extensions:
+      azure:
+        # Both values are deployment-specific and required before auth lookup.
+        api_version: 2025-01-01
+        deployment: gpt-example-chat-deployment
+
   openrouter-pinned:
     family: openai_chat
     base_url: https://openrouter.ai/api/v1

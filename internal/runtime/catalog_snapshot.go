@@ -303,6 +303,9 @@ func endpointFamily(value string) provider.Family {
 	if value == "azure_openai_responses" {
 		return provider.FamilyOpenAIResponses
 	}
+	if value == "azure_openai_chat" {
+		return provider.FamilyOpenAIChat
+	}
 	if value == "anthropic_aws_messages" {
 		return provider.FamilyAnthropicMessages
 	}

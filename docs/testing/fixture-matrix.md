@@ -18,6 +18,12 @@ The initial fixture suite defines one exact test profile for each path:
 An optional compatible endpoint copies `openrouter-chat`'s common suite but must
 add its own profile directory and difference fixtures before registration.
 
+Azure OpenAI Chat composition is intentionally verified separately in
+`llm/provider/openaichat/azure_test.go` and
+`internal/runtime/factory_test.go`: those tests assert the required deployment
+path, declared API version, `Api-Key` header, and configuration model pin. It
+is not registered as a generic compatible or streaming fixture profile.
+
 ## Manifest governance and staged coverage
 
 Every profile directory owns a strict `manifest.yaml` and `metadata.yaml`.

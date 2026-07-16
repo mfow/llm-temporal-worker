@@ -65,6 +65,38 @@
       }
     },
     {
+      "id": "v1.contract.azure-openai-chat",
+      "source": {
+        "path": "docs/scope.md",
+        "anchor": "#endpoint-profiles",
+        "quote": "Azure OpenAI for Responses and Chat Completions where the deployment supports the selected operation."
+      },
+      "implementation_paths": [
+        "api/schema/v1/config.schema.json",
+        "config/validate.go",
+        "internal/catalog/catalog.go",
+        "internal/runtime/catalog_snapshot.go",
+        "internal/runtime/factory.go",
+        "internal/runtime/factory_test.go",
+        "llm/provider/openaichat/azure_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
       "id": "v1.contract.cross-protocol",
       "source": {
         "path": "docs/index.md",
