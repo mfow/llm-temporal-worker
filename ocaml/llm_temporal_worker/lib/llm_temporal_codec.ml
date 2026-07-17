@@ -48,7 +48,7 @@ let optional name fields = List.assoc_opt name fields
 let validate_fields context allowed fields =
   let rec validate seen = function
         | [] -> Ok fields
-        | (name, _) :: remaining when List.mem name seen ->
+        | (name, _) :: _remaining when List.mem name seen ->
             Error (codec_error "%s contains duplicate field %S" context name)
         | (name, _) :: _ when not (List.mem name allowed) ->
             Error (codec_error "%s contains unknown field %S" context name)
