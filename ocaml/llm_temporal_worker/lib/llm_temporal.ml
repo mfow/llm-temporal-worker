@@ -268,7 +268,7 @@ let json_object context = function
   | `Assoc _ as value -> Ok value
   | _ -> Error (codec_error "%s must be a JSON object" context)
 
-let provider_state_payload_to_json state =
+let provider_state_payload_to_json (state : provider_state) =
   `Assoc [ ("provider", `String state.provider); ("endpoint_family", `String state.endpoint_family); ("media_type", `String state.media_type); ("opaque", `String state.opaque) ]
 
 let media_source_to_json = function
@@ -585,7 +585,7 @@ let reasoning_to_json reasoning =
   let summary = match reasoning.summary with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed" in
   `Assoc ([ ("mode", `String mode); ("effort", `String effort); ("summary", `String summary) ] @ option_field "token_budget" (fun value -> `Int value) reasoning.token_budget)
 
-let provider_state_to_json state =
+let provider_state_to_json (state : provider_state) =
   `Assoc [ ("kind", `String "provider_state"); ("provider", `String state.provider); ("endpoint_family", `String state.endpoint_family); ("media_type", `String state.media_type); ("opaque", `String state.opaque) ]
 
 let continuation_to_json continuation =

@@ -127,7 +127,7 @@ let () =
         (match List.assoc "content" message with
          | `List (`Assoc text :: rest) ->
              `List [ `Assoc (replace_field "content"
-               (`List (`Assoc (("unexpected", `Bool true) :: text) :: rest)) message ]
+               (`List (`Assoc (("unexpected", `Bool true) :: text) :: rest)) message) ]
          | _ -> failwith "request text content")
     | _ -> failwith "request input"
   in
