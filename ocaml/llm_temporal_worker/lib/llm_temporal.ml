@@ -103,7 +103,7 @@ type cost = {
   catalog_version : string;
 }
 type provider = { response_id : string option; request_id : string option; generation_id : string option; finish_reason : string option; raw : (string * Yojson.Safe.t) list }
-type diagnostic_severity = Info | Warning | Error
+type diagnostic_severity = Info | Warning | Diagnostic_error
 type diagnostic = { code : string; message : string; severity : diagnostic_severity; path : string option; details : (string * string) list option }
 type response_metadata = { operation_id : string option }
 
@@ -657,7 +657,7 @@ let provider_to_json provider = `Assoc (
   @ if provider.raw = [] then [] else [ ("raw", `Assoc provider.raw) ])
 
 let diagnostic_to_json diagnostic =
-  let severity = match diagnostic.severity with Info -> "info" | Warning -> "warning" | Error -> "error" in
+  let severity = match diagnostic.severity with Info -> "info" | Warning -> "warning" | Diagnostic_error -> "error" in
   `Assoc ([ ("code", `String diagnostic.code); ("message", `String diagnostic.message); ("severity", `String severity) ] @ option_field "path" (fun value -> `String value) diagnostic.path @ option_field "details" (fun value -> `Assoc (List.map (fun (key, text) -> (key, `String text)) value)) diagnostic.details)
 
 let metadata_to_json metadata =
@@ -931,7 +931,7 @@ let diagnostic_of_json value =
   let* code = required_value "diagnostic" "code" string fields in
   let* message = required_value "diagnostic" "message" string fields in
   let* severity = required_value "diagnostic" "severity" string fields in
-  let* severity = match severity with "info" -> Ok Info | "warning" -> Ok Warning | "error" -> Ok Error | value -> Error (codec_error "invalid diagnostic severity %S" value) in
+  let* severity = match severity with "info" -> Ok Info | "warning" -> Ok Warning | "error" -> Ok Diagnostic_error | value -> Error (codec_error "invalid diagnostic severity %S" value) in
   let* path = optional_value "diagnostic" "path" string fields in
   let* details = match optional "details" fields with None | Some `Null -> Ok None | Some value -> let* values = unique_object "diagnostic details" value in let* values = map_result (fun (name, value) -> Result.map (fun value -> (name, value)) (string "diagnostic detail" value)) values in Ok (Some values) in
   Ok { code; message; severity; path; details }

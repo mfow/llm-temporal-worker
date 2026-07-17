@@ -80,7 +80,7 @@ type service = { requested : service_class; attempted : service_class; actual : 
 type usage = { input_tokens : int64; output_tokens : int64; reasoning_tokens : int64; cache_read_tokens : int64; cache_write_tokens : int64; provider_raw : (string * Yojson.Safe.t) list option }
 type cost = { status : cost_status option; currency : string; reserved_microusd : int64; actual_microusd : int64; method_ : string; catalog_version : string }
 type provider = { response_id : string option; request_id : string option; generation_id : string option; finish_reason : string option; raw : (string * Yojson.Safe.t) list }
-type diagnostic_severity = Info | Warning | Error
+type diagnostic_severity = Info | Warning | Diagnostic_error
 type diagnostic = { code : string; message : string; severity : diagnostic_severity; path : string option; details : (string * string) list option }
 type response_metadata = { operation_id : string option }
 
