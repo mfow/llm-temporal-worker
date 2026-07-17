@@ -1,0 +1,6 @@
+(lang dune 3.18)
+(name llm-temporal-ocaml)
+(generate_opam_files false)
+
+(source
+ (github mfow/llm-temporal-worker))

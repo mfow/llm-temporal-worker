@@ -1,0 +1,4 @@
+(library
+ (name llm_temporal)
+ (public_name llm-temporal-ocaml)
+ (libraries temporal-sdk yojson))

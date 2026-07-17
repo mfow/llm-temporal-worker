@@ -1,0 +1,21 @@
+opam-version: "2.0"
+synopsis: "One-shot OCaml workflow wrapper for llm-temporal-worker"
+description: "Typed Temporal codecs and a one-shot workflow wrapper for the llm.generate.v1 Go activity."
+maintainer: "mfow"
+authors: "mfow"
+license: "MIT"
+homepage: "https://github.com/mfow/llm-temporal-worker"
+bug-reports: "https://github.com/mfow/llm-temporal-worker/issues"
+depends: [
+  "ocaml" {>= "5.2"}
+  "dune" {>= "3.18"}
+  "temporal-sdk"
+  "yojson" {>= "3.0"}
+]
+pin-depends: [
+  [ "temporal-sdk.dev" "git+https://github.com/mfow/ocaml-temporal.git#52ddf8625fca25839250881bf37725368af8dc00" ]
+]
+build: [
+  ["dune" "subst"] {dev}
+  ["dune" "build" "-p" name "-j" jobs]
+]
