@@ -50,8 +50,8 @@ jobs:
         working-directory: ocaml/llm_temporal_worker
         run: |
           set -euo pipefail
-          dune build
-          dune runtest
+          opam exec -- dune build
+          opam exec -- dune runtest
 
       - name: Prove remote Git subpath installation
         env:
