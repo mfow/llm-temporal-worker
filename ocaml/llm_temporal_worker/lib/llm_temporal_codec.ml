@@ -551,7 +551,7 @@ let diagnostic_to_json diagnostic =
   let severity = match diagnostic.severity with Info -> "info" | Warning -> "warning" | Diagnostic_error -> "error" in
   `Assoc ([ ("code", `String (Diagnostic_code.to_string diagnostic.code)); ("message", `String diagnostic.message); ("severity", `String severity) ] @ option_field "path" (fun value -> `String value) diagnostic.path @ option_field "details" (fun value -> `Assoc (List.map (fun (key, text) -> (key, `String text)) value)) diagnostic.details)
 
-let metadata_to_json metadata =
+let metadata_to_json (metadata : response_metadata) =
   `Assoc (option_field "operation_id" (fun value -> `String (Operation_id.to_string value)) metadata.operation_id)
 
 let response_metadata response =
