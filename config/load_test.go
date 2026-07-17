@@ -121,6 +121,37 @@ func TestLoadRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsProductionRedisWithoutTLS(t *testing.T) {
+	_, err := config.Load(redisTLSDisabledYAML(t))
+	if err == nil || !strings.Contains(err.Error(), "state.redis.tls.enabled") {
+		t.Fatalf("production Redis without TLS error = %v", err)
+	}
+}
+
+func TestLoadAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
+	data := strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", 1)
+	if _, err := config.Load([]byte(data)); err != nil {
+		t.Fatalf("development Redis without TLS error = %v", err)
+	}
+}
+
+func redisTLSDisabledYAML(t *testing.T) []byte {
+	t.Helper()
+	const enabled = `    tls:
+      enabled: true
+      server_name: redis.example.internal
+      ca_file: /var/run/ca/redis.pem`
+	const disabled = `    tls:
+      enabled: false
+      server_name: redis.example.internal
+      ca_file: /var/run/ca/redis.pem`
+	data := strings.Replace(string(exampleYAML(t)), enabled, disabled, 1)
+	if data == string(exampleYAML(t)) {
+		t.Fatal("example configuration did not contain the Redis TLS block")
+	}
+	return []byte(data)
+}
+
 func developmentFileBlobYAML(t *testing.T) []byte {
 	t.Helper()
 	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)

@@ -46,6 +46,28 @@
       "then": {
         "properties": { "environment": { "const": "development" } }
       }
+    },
+    {
+      "if": {
+        "properties": { "environment": { "const": "production" } },
+        "required": ["environment"]
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "properties": {
+              "redis": {
+                "properties": {
+                  "tls": {
+                    "properties": { "enabled": { "const": true } },
+                    "required": ["enabled"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {

@@ -78,6 +78,51 @@ func TestConfigSchemaRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
 	}
 }
 
+func TestConfigSchemaRejectsProductionRedisWithoutTLS(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.State.Redis.TLS.Enabled = false
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err == nil {
+		t.Fatal("schema accepted a production Redis configuration without TLS")
+	}
+}
+
+func TestConfigSchemaAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
+	loaded, err := config.Load([]byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compiled.Validate(encoded); err != nil {
+		t.Fatalf("development Redis without TLS schema error: %v", err)
+	}
+}
+
 func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
 	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
 	if err != nil {
