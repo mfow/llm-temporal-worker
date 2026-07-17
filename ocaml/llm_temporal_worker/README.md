@@ -33,10 +33,12 @@ Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 ## Use
 
 ```ocaml
+open Llm_temporal
+
 let request : Llm_temporal.request = {
-  operation_key = "invoice-42";
+  operation_key = Llm_temporal.Operation_key.of_string "invoice-42";
   context = None;
-  model = "gpt-5";
+  model = Llm_temporal.Model_selector.of_string "gpt-5";
   service_class = Priority;
   service_class_fallbacks = [ Standard ];
   portability = Strict;
@@ -51,9 +53,17 @@ let request : Llm_temporal.request = {
   extensions = [];
 }
 
-let definition = Llm_temporal.workflow ~task_queue:"go-activities" ()
+let definition =
+  Llm_temporal.workflow
+    ~task_queue:(Llm_temporal.Temporal_task_queue.of_string "go-activities") ()
 (* Register [definition] with the OCaml workflow worker. *)
 ```
+
+Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
+enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
+`Provider_request_id.t` cannot be interchanged, while `of_string` and
+`to_string` make construction and logging explicit.  The encoded payload
+continues to use the unchanged v1 JSON strings.
 
 `workflow` calls `Temporal.Activity.execute` once against the exact Go
 activity name `llm.generate.v1` with `maximum_attempts = 1`. The Go worker

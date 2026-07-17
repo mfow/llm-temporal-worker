@@ -6,10 +6,48 @@ let assert_equal expected actual = if expected <> actual then failwith (Printf.s
 let replace_field name value fields =
   List.map (fun (field, current) -> if field = name then (field, value) else (field, current)) fields
 
+let operation_key = Operation_key.of_string
+let operation_id = Operation_id.of_string
+let model_selector = Model_selector.of_string
+let resolved_model_id = Resolved_model_id.of_string
+let endpoint_id = Endpoint_id.of_string
+let route_id = Route_id.of_string
+let continuation_handle = Continuation_handle.of_string
+let provider_id = Provider_id.of_string
+let endpoint_family = Endpoint_family.of_string
+let api_family = Api_family.of_string
+let provider_response_id = Provider_response_id.of_string
+let provider_request_id = Provider_request_id.of_string
+let tool_name = Tool_name.of_string
+let tenant_id = Tenant_id.of_string
+let project_id = Project_id.of_string
+let cost_catalog_version = Cost_catalog_version.of_string
+let diagnostic_code = Diagnostic_code.of_string
+let task_queue = Temporal_task_queue.of_string
+
+(* This mirrors the README and deliberately uses only the public facade. *)
+let _facade_example : Llm_temporal.request = {
+  operation_key = Llm_temporal.Operation_key.of_string "facade-example";
+  context = None;
+  model = Llm_temporal.Model_selector.of_string "arbitrary-model-name";
+  service_class = Llm_temporal.Standard;
+  service_class_fallbacks = [];
+  portability = Llm_temporal.Strict;
+  instructions = [];
+  input = [];
+  tools = [];
+  tool_policy = { choice = Llm_temporal.Auto; parallel = false };
+  output = None;
+  sampling = None;
+  reasoning = None;
+  continuation = None;
+  extensions = [];
+}
+
 let request_value = {
-  operation_key = "order-42";
-  context = Some { tenant = Some "tenant"; project = Some "project"; actor = None; tags = [ ("region", "au") ] };
-  model = "gpt-test";
+  operation_key = operation_key "order-42";
+  context = Some { tenant = Some (tenant_id "tenant"); project = Some (project_id "project"); actor = None; tags = [ ("region", "au") ] };
+  model = model_selector "gpt-test";
   service_class = Priority;
   service_class_fallbacks = [ Standard ];
   portability = Strict;
@@ -22,15 +60,15 @@ let request_value = {
   reasoning = None;
   continuation =
     Some {
-      handle = "continuation-42";
+      handle = continuation_handle "continuation-42";
       endpoint_id = None;
       model = None;
       expires_at = None;
       pinned = true;
       provider_state =
         Some [{
-          provider = "openai";
-          endpoint_family = "responses";
+          provider = provider_id "openai";
+          endpoint_family = endpoint_family "responses";
           media_type = "application/json";
           opaque = "c3RhdGU=";
         }];
@@ -46,22 +84,22 @@ let usage_value = {
 }
 
 let response_value = {
-  operation_key = "order-42";
-  operation_id = Some "operation-42";
+  operation_key = operation_key "order-42";
+  operation_id = Some (operation_id "operation-42");
   status = Completed;
   output = [ Message { actor = Model; content = [ Refusal { message = "No."; provider_code = Some "policy" } ] } ];
-  route = { route_id = Some "route-1"; endpoint_id = Some "openai"; api_family = Some "responses"; requested_model = Some "gpt-test"; resolved_model = Some "gpt-test" };
+  route = { route_id = Some (route_id "route-1"); endpoint_id = Some (endpoint_id "openai"); api_family = Some (api_family "responses"); requested_model = Some (model_selector "gpt-test"); resolved_model = Some (resolved_model_id "gpt-test") };
   service = service_value;
   usage = usage_value;
   cost = {
     status = Some Cost_known;
     currency = "USD"; reserved_microusd = 10L; actual_microusd = 8L;
-    method_ = "catalog"; catalog_version = "v1";
+    method_ = "catalog"; catalog_version = cost_catalog_version "v1";
   };
-  provider = { response_id = Some "resp-1"; request_id = Some "req-1"; generation_id = None; finish_reason = Some "stop"; raw = [ ("provider_field", `String "value") ] };
+  provider = { response_id = Some (provider_response_id "resp-1"); request_id = Some (provider_request_id "req-1"); generation_id = None; finish_reason = Some "stop"; raw = [ ("provider_field", `String "value") ] };
   continuation = None;
-  diagnostics = [ { code = "translated"; message = "typed"; severity = Info; path = Some "request"; details = Some [ ("source", "test") ] } ];
-  metadata = { operation_id = Some "operation-42" };
+  diagnostics = [ { code = diagnostic_code "translated"; message = "typed"; severity = Info; path = Some "request"; details = Some [ ("source", "test") ] } ];
+  metadata = { operation_id = Some (operation_id "operation-42") };
 }
 
 let () =
@@ -69,7 +107,7 @@ let () =
   assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name (workflow ()));
   if Temporal.Activity.implementation generate_activity <> None then failwith "remote Go activity has an OCaml implementation";
   let valid_tool = {
-    kind = Function; name = "lookup"; description = "lookup";
+    kind = Function; name = tool_name "lookup"; description = "lookup";
     input_schema = `Assoc []; output_schema = None;
   } in
   expect_error
@@ -206,7 +244,7 @@ let () =
     (Temporal.Codec.decode request_codec
        (request_payload_with (replace_field "output" invalid_output encoded_request)));
   let decoded_request = expect_ok (Temporal.Codec.decode request_codec request_payload) in
-  assert_equal "order-42" decoded_request.operation_key;
+  assert_equal "order-42" (Operation_key.to_string decoded_request.operation_key);
   assert_equal "priority" (match decoded_request.service_class with Economy -> "economy" | Standard -> "standard" | Priority -> "priority");
   (match decoded_request.continuation with
    | Some { endpoint_id = None; model = None; provider_state = Some [ _ ]; _ } -> ()
@@ -222,19 +260,20 @@ let () =
   let refusal = match List.assoc "content" output_item with `List [ `Assoc item ] -> item | _ -> failwith "refusal content" in
   assert_equal "No." (match List.assoc "text" refusal with `String value -> value | _ -> failwith "refusal text");
   let decoded_response = expect_ok (Temporal.Codec.decode response_codec response_payload) in
-  assert_equal "operation-42" (Option.get decoded_response.operation_id);
-  assert_equal "operation-42" (Option.get decoded_response.metadata.operation_id);
+  assert_equal "operation-42" (Operation_id.to_string (Option.get decoded_response.operation_id));
+  assert_equal "operation-42" (Operation_id.to_string (Option.get decoded_response.metadata.operation_id));
   let derived_metadata_payload =
     expect_ok
       (Temporal.Codec.encode response_codec
          { response_value with metadata = { operation_id = None } })
   in
   assert_equal "operation-42"
-    (Option.get
-       (expect_ok (Temporal.Codec.decode response_codec derived_metadata_payload)).metadata.operation_id);
+    (Operation_id.to_string
+       (Option.get
+          (expect_ok (Temporal.Codec.decode response_codec derived_metadata_payload)).metadata.operation_id));
   expect_error
     (Temporal.Codec.encode response_codec
-       { response_value with metadata = { operation_id = Some "different-operation" } });
+       { response_value with metadata = { operation_id = Some (operation_id "different-operation") } });
   let mismatched_metadata_payload =
     { response_payload with
       data = Bytes.of_string (Yojson.Safe.to_string (`Assoc [
@@ -249,7 +288,7 @@ let () =
     usage = { usage_value with provider_raw = None };
     cost = { response_value.cost with status = None };
     continuation = Some {
-      handle = "continuation-response-42";
+      handle = continuation_handle "continuation-response-42";
       endpoint_id = None;
       model = None;
       expires_at = None;
@@ -270,8 +309,9 @@ let () =
    | None -> ()
    | Some _ -> failwith "optional cost_status should remain absent");
   (match decoded_without_optional.continuation with
-   | Some { handle = "continuation-response-42"; endpoint_id = None; model = None;
-            provider_state = None; pinned = false; _ } -> ()
+   | Some { handle; endpoint_id = None; model = None;
+            provider_state = None; pinned = false; _ }
+     when Continuation_handle.to_string handle = "continuation-response-42" -> ()
    | _ -> failwith "response continuation optional fields did not decode");
   let unknown_cost_response = {
     response_value with cost = { response_value.cost with status = Some Cost_unknown }
@@ -283,13 +323,13 @@ let () =
    | Some Cost_unknown -> ()
    | _ -> failwith "unknown cost_status did not round trip");
   let calls = ref 0 in
-  let dispatch ?task_queue activity request =
+  let dispatch ?task_queue activity (request : request) =
     incr calls;
-    assert_equal "go-activities" (Option.get task_queue);
+    assert_equal "go-activities" (Temporal_task_queue.to_string (Option.get task_queue));
     assert_equal activity_name (Temporal.Activity.name activity);
-    assert_equal "order-42" request.operation_key;
+    assert_equal "order-42" (Operation_key.to_string request.operation_key);
     Ok response_value
   in
-  ignore (expect_ok (invoke_once ~task_queue:"go-activities" ~dispatch request_value));
+  ignore (expect_ok (invoke_once ~task_queue:(task_queue "go-activities") ~dispatch request_value));
   if !calls <> 1 then failwith "wrapper dispatched more than once";
   print_endline "llm_temporal typed wrapper tests passed"
