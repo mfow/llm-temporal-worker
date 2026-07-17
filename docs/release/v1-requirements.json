@@ -698,6 +698,34 @@
       }
     },
     {
+      "id": "v1.slo.budget-overspend-known-usage",
+      "source": {
+        "path": "docs/scope.md",
+        "anchor": "#quality-targets",
+        "quote": "Budget overspend from known usage | Zero under the documented clock and durability assumptions"
+      },
+      "implementation_paths": [
+        "storage/conformance/conformance.go",
+        "storage/memory/conformance_test.go",
+        "storage/redis/shared_state_conformance_integration_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "redis-integration"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "offline",
+        "status": "unrecorded"
+      }
+    },
+    {
       "id": "v1.slo.worker-caused-error-rate",
       "source": {
         "path": "docs/scope.md",

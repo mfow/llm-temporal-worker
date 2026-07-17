@@ -42,6 +42,7 @@ var expectedV1TraceabilityIDs = []string{
 	"v1.publication.irreversible-operations",
 	"v1.routing.deterministic-explicit-fallback",
 	"v1.slo.admission-compilation-p99",
+	"v1.slo.budget-overspend-known-usage",
 	"v1.slo.worker-caused-error-rate",
 	"v1.state.memory-redis-conformance",
 	"v1.temporal.activity-lifecycle",
@@ -160,6 +161,26 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 				WorkflowJobs: []v1TraceabilityWorkflowJob{
 					{Path: ".github/workflows/master.yml", Job: "verify"},
 					{Path: ".github/workflows/pull-request.yml", Job: "verify"},
+				},
+			},
+			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
+		},
+		{
+			ID: "v1.slo.budget-overspend-known-usage",
+			Source: v1TraceabilitySource{
+				Path:   "docs/scope.md",
+				Anchor: "#quality-targets",
+				Quote:  "Budget overspend from known usage | Zero under the documented clock and durability assumptions",
+			},
+			ImplementationPaths: []string{
+				"storage/conformance/conformance.go",
+				"storage/memory/conformance_test.go",
+				"storage/redis/shared_state_conformance_integration_test.go",
+			},
+			Verification: v1TraceabilityVerification{
+				MakeTargets: []string{"redis-integration"},
+				WorkflowJobs: []v1TraceabilityWorkflowJob{
+					{Path: ".github/workflows/master.yml", Job: "verify"},
 				},
 			},
 			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
