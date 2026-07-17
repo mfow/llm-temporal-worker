@@ -484,7 +484,7 @@ let continuation_to_json continuation =
     @ option_field "expires_at" (fun value -> `String value) continuation.expires_at
     @ option_field "provider_state" (fun value -> `List (List.map provider_state_to_json value)) continuation.provider_state)
 
-let request_to_json request =
+let request_to_json (request : request) =
   `Assoc (
     [
     ("api_version", `String api_version); ("operation_key", `String (Operation_key.to_string request.operation_key));
@@ -569,7 +569,7 @@ let response_metadata response =
            "response metadata operation_id %S does not match response operation_id %S"
            (Operation_id.to_string metadata_operation_id) (Operation_id.to_string operation_id))
 
-let response_to_json response =
+let response_to_json (response : response) =
   let fields = [
     ("api_version", `String api_version); ("operation_key", `String (Operation_key.to_string response.operation_key));
     ("status", `String (status_to_string response.status));
