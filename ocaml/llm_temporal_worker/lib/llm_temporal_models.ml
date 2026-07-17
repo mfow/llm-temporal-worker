@@ -126,6 +126,43 @@ type request = {
   extensions : (string * Yojson.Safe.t) list;
 }
 
+module Request = struct
+  type t = request
+
+  let make
+      ~operation_key
+      ~model
+      ~service_class
+      ~input
+      ?context
+      ?(service_class_fallbacks = [])
+      ?(portability = Strict)
+      ?(instructions = [])
+      ?(tools = [])
+      ?(tool_policy = { choice = Auto; parallel = false })
+      ?output
+      ?sampling
+      ?reasoning
+      ?continuation
+      ?(extensions = [])
+      () =
+    { operation_key;
+      context;
+      model;
+      service_class;
+      service_class_fallbacks;
+      portability;
+      instructions;
+      input;
+      tools;
+      tool_policy;
+      output;
+      sampling;
+      reasoning;
+      continuation;
+      extensions }
+end
+
 type route = {
   route_id : Route_id.t option;
   endpoint_id : Endpoint_id.t option;

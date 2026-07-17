@@ -25,7 +25,7 @@ opam install --yes llm-temporal-ocaml
 ```
 
 Its metadata pins `temporal-sdk` to immutable commit
-`52ddf8625fca25839250881bf37725368af8dc00`. Commit an application lock file
+`4eeb3e6be34eb4c9d71c95bd1d329e9610e97622`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
@@ -35,23 +35,16 @@ Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 ```ocaml
 open Llm_temporal
 
-let request : Llm_temporal.request = {
-  operation_key = Llm_temporal.Operation_key.of_string "invoice-42";
-  context = None;
-  model = Llm_temporal.Model_selector.of_string "gpt-5";
-  service_class = Priority;
-  service_class_fallbacks = [ Standard ];
-  portability = Strict;
-  instructions = [ Text_instruction { level = Application; text = "Return JSON." } ];
-  input = [ Message { actor = Human; content = [ Text "Summarise this invoice." ] } ];
-  tools = [];
-  tool_policy = { choice = Auto; parallel = false };
-  output = Some { max_tokens = Some 200; format = Json_format };
-  sampling = None;
-  reasoning = None;
-  continuation = None;
-  extensions = [];
-}
+let request =
+  Request.make
+    ~operation_key:(Operation_key.of_string "invoice-42")
+    ~model:(Model_selector.of_string "gpt-5")
+    ~service_class:Priority
+    ~input:[ Message { actor = Human; content = [ Text "Summarise this invoice." ] } ]
+    ~instructions:[ Text_instruction { level = Application; text = "Return JSON." } ]
+    ~service_class_fallbacks:[ Standard ]
+    ~output:{ max_tokens = Some 200; format = Json_format }
+    ()
 
 let definition =
   Llm_temporal.workflow
