@@ -610,7 +610,7 @@ let instruction_of_json value =
   let* fields = unique_object "instruction" value in
   let* kind = required_value "instruction" "kind" string fields in
   let allowed = match kind with "text" -> [ "kind"; "level"; "text" ] | "parts" -> [ "kind"; "level"; "content" ] | _ -> [] in
-  let* () = validate_fields "instruction" allowed fields in
+  let* _ = validate_fields "instruction" allowed fields in
   let* level = optional_value "instruction" "level" string fields in
   let* level = match level with None -> Ok Application | Some value -> level_of_string value in
   match kind with
@@ -640,7 +640,7 @@ let policy_of_json value =
   let* fields = unique_object "tool_policy" value in
   let* mode = required_value "tool_policy" "mode" string fields in
   let allowed = match mode with "named" -> [ "mode"; "name"; "parallel" ] | _ -> [ "mode"; "parallel" ] in
-  let* () = validate_fields "tool_policy" allowed fields in
+  let* _ = validate_fields "tool_policy" allowed fields in
   let* parallel = required_value "tool_policy" "parallel" bool fields in
   let* choice = match mode with
     | "auto" -> Ok Auto | "none" -> Ok None_allowed | "required" -> Ok Required
@@ -655,7 +655,7 @@ let output_of_json value =
   let* format_fields = unique_object "output format" format_value in
   let* kind = required_value "output format" "kind" string format_fields in
   let allowed = match kind with "text" | "json" -> [ "kind" ] | "json_schema" -> [ "kind"; "name"; "description"; "schema"; "strict" ] | _ -> [] in
-  let* () = validate_fields "output format" allowed format_fields in
+  let* _ = validate_fields "output format" allowed format_fields in
   let* format = match kind with
     | "text" -> Ok Text_format
     | "json" -> Ok Json_format
