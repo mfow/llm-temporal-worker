@@ -23,7 +23,8 @@ type dispatcher =
   request ->
   (response, Temporal.Error.t) result
 
-let invoke_once ?task_queue ~dispatch input = dispatch ?task_queue generate_activity input
+let invoke_once ?task_queue ~(dispatch : dispatcher) input =
+  dispatch ?task_queue generate_activity input
 
 let one_shot_retry_policy =
   match Temporal.Activity.Retry_policy.make ~initial_interval:(Temporal.Duration.of_ms 1L)
