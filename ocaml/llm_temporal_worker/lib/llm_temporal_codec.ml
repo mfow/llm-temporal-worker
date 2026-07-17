@@ -634,7 +634,7 @@ let tool_of_json value =
         let* schema = json_object "tool output_schema" schema in
         Ok (Some schema)
   in
-  Ok { kind; name; description; input_schema; output_schema }
+  Ok { kind; name = Tool_name.of_string name; description; input_schema; output_schema }
 
 let policy_of_json value =
   let* fields = unique_object "tool_policy" value in
