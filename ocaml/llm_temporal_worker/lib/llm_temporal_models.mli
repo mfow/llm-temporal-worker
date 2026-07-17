@@ -68,6 +68,27 @@ type sampling = { temperature : float option; top_p : float option; top_k : int 
 type reasoning = { mode : reasoning_mode; effort : reasoning_effort; token_budget : int option; summary : reasoning_summary }
 type continuation = { handle : Continuation_handle.t; endpoint_id : Endpoint_id.t option; model : Resolved_model_id.t option; expires_at : string option; pinned : bool; provider_state : provider_state list option }
 type request = { operation_key : Operation_key.t; context : request_context option; model : Model_selector.t; service_class : service_class; service_class_fallbacks : service_class list; portability : portability; instructions : instruction list; input : item list; tools : function_tool list; tool_policy : tool_policy; output : output_spec option; sampling : sampling option; reasoning : reasoning option; continuation : continuation option; extensions : (string * Yojson.Safe.t) list }
+module Request : sig
+  type t = request
+
+  val make :
+    operation_key:Operation_key.t ->
+    model:Model_selector.t ->
+    service_class:service_class ->
+    input:item list ->
+    ?context:request_context ->
+    ?service_class_fallbacks:service_class list ->
+    ?portability:portability ->
+    ?instructions:instruction list ->
+    ?tools:function_tool list ->
+    ?tool_policy:tool_policy ->
+    ?output:output_spec ->
+    ?sampling:sampling ->
+    ?reasoning:reasoning ->
+    ?continuation:continuation ->
+    ?extensions:(string * Yojson.Safe.t) list ->
+    unit -> t
+end
 type route = { route_id : Route_id.t option; endpoint_id : Endpoint_id.t option; api_family : Api_family.t option; requested_model : Model_selector.t option; resolved_model : Resolved_model_id.t option }
 type service = { requested : service_class; attempted : service_class; actual : service_class option; provider_value : string option; fallback_index : int }
 type usage = { input_tokens : int64; output_tokens : int64; reasoning_tokens : int64; cache_read_tokens : int64; cache_write_tokens : int64; provider_raw : (string * Yojson.Safe.t) list option }

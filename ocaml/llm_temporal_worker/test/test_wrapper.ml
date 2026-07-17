@@ -76,6 +76,14 @@ let request_value = {
   extensions = [ ("test.extension", `Assoc [ ("enabled", `Bool true) ]) ];
 }
 
+let make_value =
+  Request.make
+    ~operation_key:(operation_key "make-example")
+    ~model:(model_selector "arbitrary-model")
+    ~service_class:Economy
+    ~input:[ Message { actor = Human; content = [ Text "hello" ] } ]
+    ()
+
 let service_value = { requested = Priority; attempted = Priority; actual = Some Priority; provider_value = Some "priority"; fallback_index = 0 }
 let usage_value = {
   input_tokens = 2L; output_tokens = 1L; reasoning_tokens = 0L;
@@ -103,6 +111,14 @@ let response_value = {
 }
 
 let () =
+  if make_value.context <> None then failwith "Request.make context default";
+  if make_value.service_class_fallbacks <> [] then failwith "Request.make fallback default";
+  if make_value.portability <> Strict then failwith "Request.make portability default";
+  if make_value.instructions <> [] then failwith "Request.make instructions default";
+  if make_value.tools <> [] then failwith "Request.make tools default";
+  if make_value.tool_policy <> { choice = Auto; parallel = false } then failwith "Request.make tool policy default";
+  if make_value.output <> None || make_value.sampling <> None || make_value.reasoning <> None || make_value.continuation <> None then failwith "Request.make optional defaults";
+  if make_value.extensions <> [] then failwith "Request.make extensions default";
   assert_equal "llm.generate.v1" (Temporal.Activity.name generate_activity);
   assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name (workflow ()));
   if Temporal.Activity.implementation generate_activity <> None then failwith "remote Go activity has an OCaml implementation";
