@@ -48,7 +48,14 @@ type output_format = Text_format | Json_format | Json_schema_format of { name : 
 type output_spec = { max_tokens : int option; format : output_format }
 type sampling = { temperature : float option; top_p : float option; top_k : int option; seed : int64 option; presence_penalty : float option; frequency_penalty : float option; stop_sequences : string list option }
 type reasoning = { mode : reasoning_mode; effort : reasoning_effort; token_budget : int option; summary : reasoning_summary }
-type continuation = { handle : string; endpoint_id : string; model : string; expires_at : string option; pinned : bool; provider_state : item list }
+type continuation = {
+  handle : string;
+  endpoint_id : string option;
+  model : string option;
+  expires_at : string option;
+  pinned : bool;
+  provider_state : provider_state list option;
+}
 
 type request = {
   operation_key : string;
@@ -70,11 +77,12 @@ type request = {
 
 type route = { route_id : string option; endpoint_id : string option; api_family : string option; requested_model : string option; resolved_model : string option }
 type service = { requested : service_class; attempted : service_class; actual : service_class option; provider_value : string option; fallback_index : int }
-type usage = { input_tokens : int64; output_tokens : int64; reasoning_tokens : int64; cache_read_tokens : int64; cache_write_tokens : int64; provider_raw : (string * Yojson.Safe.t) list }
-type cost = { currency : string; reserved_microusd : int64; actual_microusd : int64; method_ : string; catalog_version : string }
+type usage = { input_tokens : int64; output_tokens : int64; reasoning_tokens : int64; cache_read_tokens : int64; cache_write_tokens : int64; provider_raw : (string * Yojson.Safe.t) list option }
+type cost = { status : cost_status option; currency : string; reserved_microusd : int64; actual_microusd : int64; method_ : string; catalog_version : string }
 type provider = { response_id : string option; request_id : string option; generation_id : string option; finish_reason : string option; raw : (string * Yojson.Safe.t) list }
 type diagnostic_severity = Info | Warning | Error
 type diagnostic = { code : string; message : string; severity : diagnostic_severity; path : string option; details : (string * string) list option }
+type response_metadata = { operation_id : string option }
 
 type response = {
   operation_key : string;
@@ -88,6 +96,7 @@ type response = {
   provider : provider;
   continuation : continuation option;
   diagnostics : diagnostic list;
+  metadata : response_metadata;
 }
 
 val request_codec : request Temporal.Codec.t
