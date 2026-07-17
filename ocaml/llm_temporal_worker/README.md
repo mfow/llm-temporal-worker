@@ -1,63 +1,62 @@
 # `llm-temporal-ocaml`
 
-This small package schedules the Go worker's exact `llm.generate.v1` Activity
-from an OCaml Temporal workflow. It is deliberately a one-shot boundary:
-there is no provider client, credential handling, token streaming,
-continuation loop, or application retry loop in this package.
+Typed OCaml bindings for one durable, non-streaming `llm.generate.v1` Go
+Activity. The package contains no provider credentials, token streaming,
+continuation loop, polling, or application retry loop. The generated workflow
+schedules exactly one activity attempt.
 
-The Go worker remains the authority for the complete provider-neutral
-`llm.Request` and `llm.Response` schema. This wrapper validates the stable
-`llm.temporal/v1` Activity envelope, `json/plain` payload encoding, duplicate
-JSON keys, canonical object/version fields, and the canonical request/response
-identity fields. It preserves the rest of the canonical JSON exactly instead
-of maintaining a second, drifting copy of the Go model.
+The public API mirrors the v1 request and response records: service classes
+are exactly `Economy | Standard | Priority`; request controls include
+portability, instructions, items, tools, output, sampling, reasoning,
+continuation, and extensions; responses retain route, service, usage, cost,
+provider, continuation, and diagnostics. Only deliberately open contract
+leaves (schemas, tool arguments, extension/provider metadata) use
+`Yojson.Safe.t`.
 
 ## Install
 
-Pin this package at the commit you intend to deploy (replace `<commit>`):
+Pin the nested package at the deployment commit:
 
 ```sh
 opam pin add --yes --kind=git llm-temporal-ocaml \
-  'https://github.com/mfow/llm-temporal-worker.git#<commit>' \
+  'git+https://github.com/mfow/llm-temporal-worker.git#<commit>' \
   --subpath=ocaml/llm_temporal_worker
 opam install --yes llm-temporal-ocaml
 ```
 
-The package metadata pins `temporal-sdk` to
-`52ddf8625fca25839250881bf37725368af8dc00`, so the consuming switch resolves
-the tested SDK revision. For a deployed application, commit the generated
-opam lock file after `opam lock .` and install with `opam install . --locked`.
+Its metadata pins `temporal-sdk` to immutable commit
+`52ddf8625fca25839250881bf37725368af8dc00`. Commit an application lock file
+after `opam lock .`, then deploy with `opam install . --locked`.
 
-Add the library to your Dune stanza:
-
-```lisp
-(libraries llm-temporal-ocaml)
-```
+Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 
 ## Use
 
-Create canonical JSON with the Go contract's required inner API version,
-operation key, and model. The Go worker will perform the full canonical schema
-validation before calling a provider.
-
 ```ocaml
-let request =
-  Llm_temporal.Json.of_string
-    {|{"api_version":"llm.temporal/v1","operation_key":"invoice-42",|}
-    ^ {|"model":"gpt-5","input":[]}|}
-  |> Result.bind Llm_temporal.request
+let request : Llm_temporal.request = {
+  operation_key = "invoice-42";
+  context = None;
+  model = "gpt-5";
+  service_class = Priority;
+  service_class_fallbacks = [ Standard ];
+  portability = Strict;
+  instructions = [ Text_instruction { level = Application; text = "Return JSON." } ];
+  input = [ Message { actor = Human; content = [ Text "Summarise this invoice." ] } ];
+  tools = [];
+  tool_policy = { choice = Auto; parallel = false };
+  output = Some { max_tokens = Some 200; format = Json_format };
+  sampling = None;
+  reasoning = None;
+  continuation = None;
+  extensions = [];
+}
 
 let definition = Llm_temporal.workflow ~task_queue:"go-activities" ()
-(* Register [definition] on the OCaml workflow worker. *)
+(* Register [definition] with the OCaml workflow worker. *)
 ```
 
-`workflow` performs one `Temporal.Activity.execute` call against
-`llm.generate.v1` and sets a Temporal retry policy with `maximum_attempts = 1`.
-The Go Activity must be served on the supplied queue (or on the workflow
-worker's default queue when the argument is omitted). Operational errors are
-returned as `Temporal.Error.t`; the wrapper does not retry, continue, or
-stream after an error.
-
-For testing a workflow-level adapter without a Temporal service, use
-`invoke_once` with a deterministic dispatcher. Production code should call
-`execute` or register the `workflow` definition.
+`workflow` calls `Temporal.Activity.execute` once against the exact Go
+activity name `llm.generate.v1` with `maximum_attempts = 1`. The Go worker
+must serve the provided task queue (or the default queue when omitted).
+Errors return as `Temporal.Error.t`; this package never retries, continues, or
+streams after an activity result.
