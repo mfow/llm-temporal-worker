@@ -138,6 +138,9 @@ let optional_value context name decode fields =
   | None | Some `Null -> Ok None
   | Some value -> Result.map Option.some (decode (context ^ " " ^ name) value)
 
+let optional_json context name decode =
+  optional_value context name (fun _ value -> decode value)
+
 let required_value context name decode fields =
   let* value = required context name fields in
   decode (context ^ " " ^ name) value
@@ -756,10 +759,10 @@ let request_of_json value =
   let* tools = map_result tool_of_json tools in
   let* tool_policy_value = required "request" "tool_policy" fields in
   let* tool_policy = policy_of_json tool_policy_value in
-  let* context = optional_value "request" "context" context_of_json fields in
-  let* output = optional_value "request" "output" output_of_json fields in
-  let* sampling = optional_value "request" "sampling" sampling_of_json fields in
-  let* reasoning = optional_value "request" "reasoning" reasoning_of_json fields in
+  let* context = optional_json "request" "context" context_of_json fields in
+  let* output = optional_json "request" "output" output_of_json fields in
+  let* sampling = optional_json "request" "sampling" sampling_of_json fields in
+  let* reasoning = optional_json "request" "reasoning" reasoning_of_json fields in
   let* continuation_value = required "request" "continuation" fields in
   let* continuation = match continuation_value with `Null -> Ok None | value -> Result.map Option.some (continuation_of_json value) in
   let* extensions_value = required "request" "extensions" fields in
