@@ -12,11 +12,13 @@ state lookup. Additive fields may be introduced within v1 only when old readers
 ignore them safely; enum additions require a new version because generated Go
 clients must not silently accept unknown behavior.
 
-> This chapter describes current v1. The accepted, unimplemented v2 delta,
-> cache, exact USD, Compact, and Query contracts are defined in
+> This chapter describes the current pre-release v1 shape. The accepted,
+> unimplemented delta, cache, exact USD, Compact, and Query contracts replace
+> it in place before the first release and are defined in
 > [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md)
 > and [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md).
-> The breaking cutover removes the generic downstream currency field.
+> No compatibility-only v2 is introduced. The coordinated pre-release change
+> removes the generic downstream currency field.
 
 ## Generate request
 

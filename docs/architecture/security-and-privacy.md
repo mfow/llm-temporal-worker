@@ -1,6 +1,7 @@
 # Security and Privacy
 
-> The accepted post-v1 cache stores a bounded canonical v2 request JSONB per
+> The accepted initial-release cache stores a bounded canonical Generate
+> request JSONB per
 > operation and a digest/reference-only canonical cache manifest JSONB. Access
 > is restricted and neither is broadly indexed; lookup uses tenant-scoped
 > HMAC-SHA-256. See
@@ -110,7 +111,7 @@ provider state are sensitive by default. The worker:
 - records provider storage/retention choices in endpoint profiles;
 - provides content-free audit events for access and deletion.
 
-Post-v1 deliberately stores the bounded delta Activity request as JSONB for
+The initial-release Generate contract deliberately stores the bounded delta Activity request as JSONB for
 audit and cache-key verification. This is encrypted at rest/in transit, limited
 to runtime security principals, retention-governed, and excluded from
 observability and indexes. Large/ancestor content remains in immutable encrypted

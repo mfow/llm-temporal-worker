@@ -2,11 +2,14 @@
 
 ## Status and boundary
 
-This is an accepted post-v1 design and an implementation contract, not a
-description of behavior currently shipped. The current worker exposes
-**llm.generate.v1** and Redis-backed continuations. The design adds
-**llm.generate.v2** and **llm.compact.v1** after the PostgreSQL cutover in
+This is an accepted pre-release design and an implementation contract, not a
+description of behavior currently shipped. The current code exposes an
+unreleased **llm.generate.v1** and Redis-backed continuations. The design
+replaces that contract in place and adds **llm.compact.v1** with the PostgreSQL
+state design in
 [ADR 0007](../decisions/0007-postgresql-authoritative-state-and-response-cache.md).
+There is no v1-to-v2 compatibility phase: schemas, fixtures, Go types, and the
+existing OCaml wrapper all change together before the first release.
 
 The worker still performs one LLM turn per Generate Activity. A response may
 contain tool calls, but the caller's Temporal Workflow executes tools and
@@ -17,7 +20,7 @@ it does not own the agent loop.
 
 Temporal serializes Activity inputs and outputs into Workflow history. Repeating
 an entire transcript for every turn produces quadratic history growth and risks
-service payload/event limits. The v2 boundary sends only:
+service payload/event limits. The Generate boundary sends only:
 
 - one opaque parent checkpoint handle, omitted for a root;
 - new semantic items being appended;
@@ -46,11 +49,11 @@ stored result without mutating the other branches.
 
 ## Activity contracts
 
-### Generate v2 request
+### Generate v1 request
 
 ~~~json
 {
-  "api_version": "llm.temporal/v2",
+  "api_version": "llm.temporal/v1",
   "operation_key": "claim-481-turn-7-branch-2",
   "context": {
     "tenant": "acme",
@@ -172,11 +175,11 @@ If authoritative cache state is unavailable for an opted-in operation, the
 Activity fails before provider dispatch. Silently bypassing the cache could
 turn an intended free test into a paid call.
 
-### Generate v2 response
+### Generate v1 response
 
 ~~~json
 {
-  "api_version": "llm.temporal/v2",
+  "api_version": "llm.temporal/v1",
   "operation_key": "claim-481-turn-7-branch-2",
   "operation_id": "op_01J...",
   "status": "completed",
@@ -218,11 +221,12 @@ If the real charge cannot be established, the response instead has
 The worker never substitutes a catalog guess, reservation, or zero. This shape
 maps to a closed exact/unknown OCaml variant.
 
-A cache hit still creates a distinct completed operation and immutable
-**cache_replay** child. The output template is copied while operation identity,
-timestamps, zero cost, cache diagnostics, and child handle are regenerated. A
-cached response never returns the origin operation key or checkpoint as if it
-were the current call.
+A Generate cache hit still creates a distinct completed operation and immutable
+**cache_replay** child. A Compact cache hit creates a distinct compaction child
+with cache provenance. In both cases the result template is copied while
+operation identity, timestamps, zero cost, cache diagnostics, and child handle
+are regenerated. A cached result never returns the origin operation key or
+checkpoint as if it were the current call.
 
 ## Checkpoint contents and materialization
 
@@ -267,29 +271,37 @@ already durable.
 
 ## Exact-response fingerprint
 
-The cache fingerprint is a versioned HMAC over canonical binary encodings of:
+The cache fingerprint is a versioned HMAC over canonical semantic input. The
+matrix is normative:
 
-- tenant/project cache namespace;
-- materialized canonical conversation digest;
-- materialized settings, tools, output, sampling, reasoning, and extensions;
-- logical model and route eligibility constraints;
-- required provider-state/pinning digest;
-- capability, price, compiler, and cache-schema versions;
-- compaction policy, summarizer model, and prompt/artifact versions.
+| Field class | Cache-key treatment | Reason |
+| --- | --- | --- |
+| Tenant/project cache namespace | Include | Prevent cross-scope disclosure |
+| Operation kind (`generate` or `compact`) | Include as a domain separator | A summary artifact and a normal model answer are different result contracts even when they share input lineage |
+| Materialized canonical conversation, instructions, tool definitions/policy, structured output, sampling/temperature, reasoning controls, and output-affecting extensions | Include | May change provider-visible input or output |
+| Certified model-equivalence ID, semantic compiler/profile version, capability lowering version, and cache epoch | Include | Bind reuse to one verified artifact and lowering |
+| Required opaque provider-state/pinning digest | Include; otherwise caching is ineligible | Required state may change the result and cannot be fabricated on replay |
+| Compaction policy, summarizer equivalence ID, prompt version, and compacted artifact digest | Include when the lineage contains compaction | A lossy context representation is semantic input |
+| Non-negative int32 variant | Separate indexed key component, included exactly once | Selects an explicitly retained stochastic sample |
+| Provider, route, endpoint, account, region, and origin provider request ID | Exclude | Provenance only after certified equivalence; unknown equivalence gets an isolated ID |
+| Requested/attempted service class and fallbacks | Exclude | Scheduling/cost consent, not model semantics; eligibility is still checked before reuse |
+| Price/catalog/FX versions, budgets, health/circuit state, deadlines, retry policy, and Temporal identifiers | Exclude | Admission/operations facts that do not change the cached answer |
+| Operation key/ID, maximum cache age, timestamps, tracing IDs, pagination, and actor-only observability tags | Exclude | Per-call control or telemetry |
+| Credentials and configuration secrets | Never hash into this key or persist in the manifest | Secret rotation must not reveal or silently redefine semantic identity |
 
-The fingerprint excludes:
-
-- operation key and operation ID;
-- requested maximum cache age;
-- timestamps, tracing IDs, actor-only observability tags, and pagination;
-- a provider request ID created after dispatch; and
-- secret values.
+Every extension leaf is included unless its versioned capability/compiler
+profile explicitly certifies it as transport-only. Adapters cannot dynamically
+declare a request field ignorable. Authorization, residency, model-equivalence
+membership, required provider-state availability, and current cache policy are
+checked before lookup; excluding them from the digest where shown does not
+allow a cache hit to authorize work.
 
 An HMAC, rather than a raw content hash, prevents offline confirmation of
 sensitive prompt content from leaked database keys. The canonical encoder is
 shared with request-conflict hashing and has golden fixtures in Go and OCaml.
-Changing semantic normalization or a provider compiler requires a cache epoch
-bump. Old entries may coexist until retention removes them.
+Changing semantic normalization, equivalence evidence, or a provider compiler
+requires a cache epoch bump. Old entries may coexist until retention removes
+them.
 
 PostgreSQL lookup uses that fixed-size HMAC-SHA-256 value plus scope, version,
 and the separate int32 variant. The complete cache key therefore includes
@@ -369,12 +381,24 @@ delete audit lineage or make a lossy summary equal to the original transcript.
 - one parent checkpoint;
 - optional compaction-policy patch;
 - optional summarizer logical model/service class; and
+- optional exact-cache acceptance age using the same cache policy, with variant
+  fixed to zero; and
 - output reserve and retention controls.
 
 It returns a child checkpoint of kind **compaction**, a compacted context
 summary, provenance, usage, and an exact-or-unknown cost state. It does not
 request a normal model answer and does not execute a tool. Reusing the original
 parent remains valid, so callers can branch before or after compaction.
+
+Compaction is an LLM call and therefore participates in opt-in exact-response
+caching. Its fingerprint is domain-separated from Generate and includes parent
+semantic state, retained-turn boundary, prompt/policy/summarizer equivalence,
+compiler/capability versions, and every other summary-affecting control.
+Compaction sampling is fixed to the compaction contract, so a positive cache
+variant is invalid; zero remains a named cache slot even if the underlying
+provider is not perfectly deterministic. On a hit the worker creates a new
+compaction child with cache provenance and exact zero cost. It never returns the
+origin checkpoint as the current operation's child.
 
 ### Automatic trigger
 
@@ -389,10 +413,17 @@ limit is crossed:
 - stored materialized bytes; or
 - provider-native continuation expiry/limit.
 
-Temporal payload size is not the compaction trigger because the v2 payload is
+Temporal payload size is not the compaction trigger because the delta payload is
 already a delta. Token estimates are conservative and model/version specific.
 The policy has hysteresis: compact to a lower target than the trigger so each
 new turn does not compact again.
+
+When the parent Generate opted into exact caching, its automatic compaction
+sub-operation receives the same maximum age but always uses compaction variant
+zero. Omitting cache on Generate also omits cache on automatic compaction. This
+allows a repeated long smoke workflow to avoid paying again for either the
+summary or the final answer without letting the final answer's stochastic
+variant change summary identity.
 
 ### Generic worker compaction
 
@@ -448,10 +479,12 @@ Current provider documentation shows materially different mechanisms:
   [compact endpoint](https://developers.openai.com/api/reference/resources/responses/methods/compact).
 - Anthropic documents server-side
   [context compaction](https://platform.claude.com/docs/en/build-with-claude/compaction)
-  and requires returned compaction blocks to be supplied on later requests.
+  as a beta capability requiring the `compact-2026-01-12` header, and requires
+  returned compaction blocks to be supplied on later requests.
 - Amazon Bedrock documents Claude
   [server-side compaction](https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html)
-  and notes that usage can span multiple iterations.
+  with the same beta header through `InvokeModel`, not `Converse`, and notes
+  that usage can span multiple iterations.
 
 Provider contracts are versioned and reverified during implementation. Usage
 from every native compaction iteration must be aggregated; relying only on a

@@ -1,6 +1,7 @@
 # Routing and Continuation
 
-> This chapter describes current v1 routing. The accepted post-v1 design keeps
+> This chapter describes current pre-release routing. The accepted
+> initial-release design keeps
 > these authorization and pinning invariants, then adds immutable materialized
 > checkpoint graphs, certified cross-provider model equivalence, and soft
 > provider-cache affinity. See

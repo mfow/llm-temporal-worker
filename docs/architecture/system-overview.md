@@ -32,15 +32,17 @@ flowchart LR
     N --> C["Capability compiler"]
     C --> R["Router"]
     R --> P["Price resolver"]
-    P --> B["Budget admission and operation ledger"]
-    B --> L["Provider adapter"]
+    P --> B["Redis exact budget admission"]
+    B --> J["PostgreSQL operation and budget journal"]
+    J --> L["Provider adapter"]
     L --> S["Official provider SDK"]
     S --> X["External LLM endpoint"]
     X --> L
     L --> E
-    E --> T["Continuation store"]
-    B --> D[("Memory or Redis")]
-    T --> D
+    E --> T["Checkpoint and cache store"]
+    B --> D[("Redis budget generation and Stream")]
+    J --> Q[("Worker PostgreSQL namespace")]
+    T --> Q
     E --> O["Logs, metrics, traces"]
 ```
 
@@ -61,9 +63,12 @@ flowchart LR
    when it matches a budget, and otherwise is eligible only under the explicit
    unpriced policy with `cost_status=unknown`.
 5. **Estimate and admit.** The estimator computes the maximum single-attempt
-   bound across the authorized plan. One store operation creates or finds the
-   operation ledger entry and reserves that amount against the union of budget
-   windows that could match any planned candidate.
+   bound across the authorized plan. After PostgreSQL operation replay checks,
+   one Redis Function atomically reserves the exact amount against every
+   matching active window and publishes the budget Stream event. The worker
+   then appends the idempotent PostgreSQL budget journal/projection writes; it
+   does not read PostgreSQL budget state. Dispatch is forbidden until that
+   durable write commits.
 6. **Lower.** The selected adapter converts semantic items to official SDK
    parameter types. Provider extensions are applied only after namespaced
    allow-list validation.
@@ -77,12 +82,13 @@ flowchart LR
    usage. Pricing uses provider-reported cost when authoritative, otherwise the
    pinned exact catalog. If neither establishes the real charge, actual cost is
    NULL with an explicit unknown reason; reservations/bounds remain separate.
-   If a definitely charged failure permits safe fallback, one atomic
-   continuation transition finalizes that attempt and reserves the remaining
-   plan before another dispatch.
+   If a definitely charged failure permits safe fallback, PostgreSQL durably
+   records the attempt/journal transition before Redis atomically reconciles
+   the active windows and reserves the remaining plan before another dispatch.
 10. **Commit result.** The engine atomically records the completed result,
-    creates an immutable child continuation, and refunds unused reservation.
-    A repeated operation key returns the recorded result.
+    child checkpoint, exact-or-unknown cost, and budget journal/projection in
+    PostgreSQL, then idempotently reconciles the Redis reservation. A repeated
+    operation key returns the recorded result without another budget charge.
 
 If a dispatch outcome is ambiguous, step 10 records `ambiguous` and keeps the
 full reservation. It returns a non-retryable error that contains a safe
@@ -112,16 +118,24 @@ type PriceResolver interface {
 	Resolve(context.Context, pricing.Query) (pricing.Quote, error)
 }
 
-type AdmissionStore interface {
-	Begin(context.Context, admission.BeginRequest) (admission.BeginResult, error)
-	MarkDispatching(context.Context, admission.DispatchRequest) error
-	Continue(context.Context, admission.ContinueRequest) (admission.ContinueResult, error)
-	Complete(context.Context, admission.CompleteRequest) error
-	Fail(context.Context, admission.FailRequest) error
+type OperationStore interface {
+	BeginOrReplay(context.Context, operation.BeginRequest) (operation.BeginResult, error)
+	MarkDispatching(context.Context, operation.DispatchRequest) error
+	Complete(context.Context, operation.CompleteRequest) error
 }
 
-type ContinuationStore interface {
-	Get(context.Context, state.Handle) (state.Continuation, error)
+type BudgetStore interface {
+	Acquire(context.Context, budget.AcquireRequest) (budget.AcquireResult, error)
+	Reconcile(context.Context, budget.ReconcileRequest) error
+}
+
+type BudgetJournal interface {
+	AppendReservation(context.Context, budget.ReservationEvent) error
+	AppendCompletion(context.Context, budget.CompletionEvent) error
+}
+
+type CheckpointStore interface {
+	Get(context.Context, state.Handle) (state.Checkpoint, error)
 	PutChild(context.Context, state.PutChildRequest) (state.Handle, error)
 }
 ```
@@ -131,9 +145,12 @@ Activity invokes it once for each Activity execution and returns the final
 normalized response. Residual streaming types or decoders are unsupported in
 v1 and must not be wired into the Temporal runtime.
 
-`AdmissionStore` deliberately joins operation deduplication and budget mutation
-at their one required atomic boundary. Pricing, policy matching, estimation,
-and window semantics remain reusable packages outside the store.
+`BudgetStore` is implemented by the atomic Redis Function and is the only live
+active-window read path. `BudgetJournal` performs PostgreSQL writes before
+dispatch but normal service never calls its read methods; the exceptional
+cold-bootstrap reader is a separate recovery interface available only after
+the fleet/Redis-loss fence. Pricing, policy matching, estimation, and window
+semantics remain reusable packages outside the stores.
 
 ## Configuration snapshots
 
@@ -155,7 +172,8 @@ portability checks permit it.
 | Invalid caller input | Fail before state or provider access; non-retryable |
 | Unsupported semantic feature | Fail before admission in strict mode; diagnostic drop only in best-effort mode |
 | Budget denial | Fail before dispatch; retryable only when `retry_after` fits the Activity schedule |
-| Redis unavailable | Fail closed for production budgets and durable continuations |
+| Redis unavailable or unexplained same-incarnation incomplete | Fail closed for new budgeted work; do not read PostgreSQL. Only a proven full-fleet cold start or verified new Redis incarnation without persisted state may run the fenced rebuild |
+| Worker PostgreSQL unavailable | Fail closed before dispatch because operation and budget journal cannot be made durable |
 | Provider definite transient failure | Release/refund as documented; try next candidate only within route bounds |
 | Provider ambiguous failure | Keep reservation, record ambiguity, stop automatic retries |
 | Worker termination | Temporal retries; ledger returns a completed result or ambiguity instead of blindly repeating |
@@ -164,7 +182,9 @@ portability checks permit it.
 ## Horizontal scaling
 
 With memory state, one worker process is an isolated development environment and
-must not advertise distributed durability. With Redis, any replica can receive
-an Activity task, load continuation state, detect a prior operation, and enforce
-the same shared budgets. Provider SDK clients and compiled configuration are
-process-local and immutable; no sticky routing to a pod is required.
+must not advertise distributed durability. In production any replica can use
+the shared Redis budget generation/Stream and worker PostgreSQL namespace.
+Checkpoints/replay come from PostgreSQL; atomic active-window decisions come
+from Redis. A joining worker uses Redis only for budget state. Provider SDK
+clients and compiled configuration are process-local and immutable; no sticky
+routing to a pod is required.

@@ -1,7 +1,8 @@
 # Temporal Worker
 
-> This chapter describes current v1. The accepted post-v1 design adds
-> **llm.generate.v2**, **llm.compact.v1**, and **llm.query.v1**, while retaining
+> This chapter describes the current pre-release implementation. The accepted
+> initial-release design replaces **llm.generate.v1** in place and adds
+> **llm.compact.v1** and **llm.query.v1**, while retaining
 > the rule that caller Workflows execute tools and own agent loops. See
 > [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md)
 > and [the typed OCaml client](ocaml-conversation-and-query-client.md).

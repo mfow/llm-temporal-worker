@@ -2,41 +2,197 @@
 
 ## Status and database boundary
 
-This document specifies the post-v1 worker schema and transactional behavior.
-It is design-only until the execution plan is implemented.
+This document specifies the initial-release worker schema and transactional
+behavior. It is design-only until the execution plan is implemented. The
+unreleased Generate v1 contract changes in place; no compatibility-only v2 is
+created.
 
-The worker receives its own PostgreSQL database, credentials, migration history,
-backup policy, and connection pool. It must not create tables in, query, or
-modify Temporal's PostgreSQL database. Temporal owns its schema and migrations.
-Local Compose may run both databases in one PostgreSQL server for development,
-but they use different databases and roles.
+The worker receives its own credentials, schema version, backup policy, and
+connection pool. The configured database, schema, and table prefix select its
+physical namespace. A dedicated database and schema are the production
+recommendation, but a shared PostgreSQL server or database is supported when
+the resulting schema-qualified relations are distinct. A table prefix can also
+avoid collisions in an explicitly shared schema, though it is not a security
+boundary. The worker must never create, query, or modify a relation owned by
+Temporal.
 
-At the accepted cutover, PostgreSQL replaces Redis as authority for all existing
-worker persistence as well as the new features:
+PostgreSQL owns durable and queryable facts. Redis remains the required
+low-latency budget/throttle engine; it is not retired by this design. The
+responsibility split is:
 
-| Existing/new responsibility | PostgreSQL representation |
-| --- | --- |
-| Operation idempotency and ambiguous-dispatch ledger | operations and attempts |
-| Sliding-window budget reservations | policies, windows, buckets, reservations |
-| Immutable continuation state | conversation checkpoints and blob references |
-| Completed-result replay | operation result blob |
-| Exact-response cache | entries, uses, and fill leases |
-| Provider continuation/poll IDs | encrypted operation/attempt fields |
-| Provider health and credit observations | event log and current projection |
-| Provider model listing | inventory snapshots and normalized model rows |
-| Price catalogs and future FX conversion | USD price catalog and FX snapshots |
-| Budget/spend/status queries | indexed reads over the same authoritative rows |
+| Responsibility | Live decision/read path | Durable record |
+| --- | --- | --- |
+| Operation idempotency and ambiguous-dispatch ledger | PostgreSQL | PostgreSQL operations and attempts |
+| Active sliding-window monetary budget | Redis atomic Function | PostgreSQL append-only budget journal and current operation facts |
+| Request/token/concurrency throttles | Redis atomic Function | Redis persistence; no financial record implied |
+| Immutable continuation state | PostgreSQL | checkpoints and blob references |
+| Completed-result replay | PostgreSQL | operation result blob |
+| Exact-response cache | PostgreSQL | entries, uses, and fill leases |
+| Provider continuation/poll IDs | PostgreSQL | encrypted operation/attempt fields |
+| Provider health and credit observations | PostgreSQL | event log and current projection |
+| Provider model listing | PostgreSQL | inventory snapshots and normalized model rows |
+| Price catalogs and future FX conversion | in-memory immutable snapshot | PostgreSQL USD catalog and FX snapshots |
+| Current budget-status query | Redis only | response cites Redis generation and stream high-water mark |
+| Historical spend query | PostgreSQL operation/cost rows | no Redis budget read |
 
-There is no Redis/PostgreSQL dual-write mode. Because no production deployment
-exists, implementation performs a clean breaking cutover. A short development
-read validator may compare imported Redis fixtures with PostgreSQL, but it may
-not serve requests from both stores.
+### Redis and PostgreSQL safety boundary
+
+The same operation is represented in both systems, but no row and Redis key
+form a jointly committed fact. Normal admission performs zero PostgreSQL budget
+reads. The state machines make every cross-store failure conservative:
+
+1. Resolve a completed/terminal PostgreSQL operation replay. This is an
+   operation-ledger read, not a budget-state read; a replay creates no new Redis
+   reservation.
+2. For new work, call one Redis Function with the scoped operation identity,
+   matching policy/window set, exact worst-case amounts, request/token bounds,
+   and expected budget generation. It validates complete coverage, compares
+   every limit, creates an idempotent reservation, updates all buckets, and
+   appends one event to the shared budget Stream atomically.
+3. Append/insert the corresponding operation and budget-journal facts in
+   PostgreSQL without reading active budget state. A PostgreSQL write failure
+   means no provider dispatch; release the Redis reservation best-effort and
+   rely on its TTL if cleanup cannot be confirmed.
+4. Dispatch only after the Redis reservation and PostgreSQL journal write both
+   succeed. Persist provider acceptance/poll IDs and exact-or-unknown cost in
+   PostgreSQL as defined below.
+5. Commit the terminal PostgreSQL operation and budget-journal event before
+   idempotently reconciling Redis. A Redis failure leaves the larger reservation
+   charged and fails new admission closed until reconciliation or recovery; it
+   never creates budget capacity.
+
+### Complete Redis budget working set
+
+All data required to decide every active budget window lives in the configured
+Redis namespace and one Redis Cluster hash slot. It includes:
+
+- `<redis-prefix>:{<budget-hash-tag>}:budget:active-generation`, pointing to an
+  immutable random generation ID;
+- `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:manifest`, containing schema/config/price versions,
+  `rebuild_complete`, coverage bounds, policy/window/bucket counts, the budget
+  Stream high-water mark, and a digest of the expected member catalog;
+- `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:window:<window-hmac>`
+  for each policy/window, containing its limit, complete zero-or-value bucket
+  fields for the entire active horizon, retained reservations, and version;
+- `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:operation:<operation-hmac>`
+  as the reservation index for idempotent acquire/reconcile/release;
+- `<redis-prefix>:{<budget-hash-tag>}:budget:events`, the one Redis Stream to
+  which the Function appends every acquire,
+  denial-state change, reconciliation, release, policy refresh, horizon advance,
+  and generation switch; and
+- `<redis-prefix>:{<budget-hash-tag>}:budget:workers`, containing leases,
+  persistent process-session roster entries, and each
+  worker's last consumed Stream ID.
+
+These are the exact key families; implementation may add only a documented
+version suffix inside them. Every key comes from the one validated
+`state.redis.key_prefix` and `budget_hash_tag`, so two deployments sharing Redis
+remain isolated while all keys touched by one Function stay in one Cluster
+slot. The Stream is the particular cross-worker communication key; Pub/Sub is
+not used because its notifications are lossy.
+
+Every expected bucket is materialized, including zero-valued buckets, so a
+missing field is corruption rather than an ambiguous zero. The Function checks
+the active generation, manifest completion, time coverage, policy/window
+versions, expected member presence, and reservation identity before every
+admission. Redis uses `noeviction`; persistence errors, a missing sentinel,
+partial key loss, wrong generation, or incomplete coverage make readiness and
+admission fail closed.
+
+Every worker tails `budget:events` independently with `XREAD` from the cursor in
+its lease; a shared consumer group is not used because the feed is broadcast
+invalidation, not work distribution. The Stream lets workers discard local
+planning/negative-result hints immediately. Those hints can reject early but
+can never authorize a request; the atomic Redis Function remains the decision.
+A worker that falls behind the retained Stream discards its hints and reloads
+the current manifest/policy state from Redis only. Stream trimming uses the
+minimum cursor of non-expired worker leases plus a safety margin.
+
+Each Go process generates one random session ID and retains it in memory across
+Redis reconnects. The roster entry is persisted with the budget generation,
+while the liveness lease expires normally. After a persistent Redis restart,
+still-running processes present their existing rostered session IDs and renew
+without a PostgreSQL read even if the outage outlasted the lease TTL. A newly
+started process has a new session ID. This distinguishes a persistent Redis
+outage from a full Go-fleet restart without treating hostnames or pod names as
+stable identity. Stale roster entries are bounded by generation replacement and
+maintenance only after no active lease/cursor references them.
+
+### Exact decimals in Redis
+
+Redis stores each **NUMERIC(38,18)** amount as a canonical zero-padded 38-digit
+unsigned integer string scaled by `10^18`. The Function compares fixed-width
+strings lexicographically and implements checked digit-wise addition and
+subtraction. It never passes a full amount to Lua `tonumber`, performs floating-
+point arithmetic, or rounds to a coarser throttle unit. Results round-trip
+exactly to PostgreSQL/Go/JSON/OCaml decimals; overflow above 38 digits fails
+closed. Golden/property tests cover all carries/borrows, sub-micro-dollar
+amounts, $1, $10, the maximum value, and overflow.
+
+### The only PostgreSQL budget-read conditions
+
+A worker joining an already-live fleet registers/renews its Redis lease, reads
+the Redis manifest, and tails the Stream. It performs no PostgreSQL budget
+read. Routine admission, completion, budget-status queries, policy refresh,
+stream-gap recovery, health checks, maintenance, and single-worker restarts
+also perform no PostgreSQL budget read.
+
+PostgreSQL budget reads are allowed only in these two conditions:
+
+1. Redis worker leases prove there are zero live Go workers and no reconnecting
+   process presents a rostered session ID, so the fleet is performing a cold
+   full-service bootstrap; or
+2. Redis has a verified new process/dataset incarnation after a restart or
+   failover and the persisted generation is missing/incomplete, proving that
+   the replacement did not retain the required data.
+
+One worker acquires the namespaced bootstrap fence; all others wait and keep
+admission closed. The coordinator reads only the active horizon plus required
+open reservations and ordered journal tail, constructs a new generation under
+new keys, verifies every count/digest/bucket, and atomically switches
+`budget:active-generation` while appending the generation-switch Stream event.
+For the final catch-up it takes a PostgreSQL advisory fence also taken in shared
+mode by budget-journal writers, captures the final journal sequence, applies
+through it, flips Redis, then releases the fence. A writer racing the flip may
+reapply an event, so every event is idempotent by journal ID.
+
+Each running worker keeps the last verified Redis server run ID and dataset
+incarnation in process memory; the manifest records the incarnation that owns
+the generation. A changed server run ID alone does not authorize PostgreSQL:
+an intact, verified generation resumes entirely from Redis. A missing member or
+digest mismatch under the same incarnation is unexplained corruption and fails
+closed without a PostgreSQL read. Recovery then requires operators to restore
+Redis or deliberately restart/replace it under a new observed incarnation. A
+new Go process that has no prior Redis observation can rebuild only through the
+zero-live-worker full-fleet condition.
+
+There is no periodic PostgreSQL-to-Redis reconciliation, no per-worker startup
+query, and no PostgreSQL fallback on a Redis miss. Historical spend queries use
+operation/cost rows, not budget working-set tables. The design assumes normal
+ongoing throughput stays vastly below 100 new logical LLM requests per second
+across the entire deployment. That figure is solely a sizing and test envelope:
+the worker does not enforce it, expose it as configuration, or reject work
+because of it. Occasional large batches remain queued in Temporal and drain
+under the configured worker/provider concurrency. The design intentionally
+retains one atomic hash slot and is not sharded for hypothetical sustained
+traffic. If measured ongoing demand approaches or exceeds the envelope,
+perform a new architecture review, including whether Temporal is still the
+appropriate execution model.
+
+Because no production deployment exists, implementation initializes an empty
+PostgreSQL namespace and changes the pre-release storage composition directly.
+Keeping Redis throttles is not a compatibility dual-write: Redis and PostgreSQL
+own different facts. Do not build Redis-to-PostgreSQL copying, backfill, legacy
+namespace fallback, or an in-place relation rename for this change. If a
+durable namespace or schema must change after the first release, it receives a
+separate migration design then.
 
 ## Production schema rules
 
 - Use PostgreSQL 17 or a later explicitly qualified version.
-- Use a dedicated **llm_worker** schema and least-privileged runtime/migration
-  roles.
+- Default to the **llm_worker** database and schema, an empty table prefix, and
+  least-privileged owner/runtime/maintenance roles. Apply the configured
+  physical namespace rules below when operators select another layout.
 - All timestamps are **timestamptz** and use database time. Sessions set
   **TIME ZONE 'UTC'**; UTC is an interpretation guarantee, not a different
   PostgreSQL storage type.
@@ -45,7 +201,8 @@ not serve requests from both stores.
 - Sensitive lookup values use keyed HMAC columns. Reversible provider IDs and
   object locators use envelope-encrypted bytea plus a key ID. Secrets and raw
   prompt text do not enter indexed columns.
-- Each operation stores its bounded canonical v2 Activity request as JSONB.
+- Each operation stores its bounded canonical Generate Activity request as
+  JSONB.
   Cache entries store a canonical request manifest JSONB. Neither column has a
   GIN index or serves hot lookup; access is restricted because the operation
   request can contain model content.
@@ -61,8 +218,9 @@ not serve requests from both stores.
   requires a specific expression index.
 - External blobs are immutable and content-addressed. Database rows store
   bounded metadata and encrypted locators.
-- Migrations use a transaction except for **CREATE INDEX CONCURRENTLY** during
-  later online upgrades. The initial no-data migration creates indexes normally.
+- Install the entire initial schema transactionally and create its indexes
+  normally because there is no existing data. Post-release online schema
+  changes are out of scope for this change.
 
 PostgreSQL supports substantially more decimal precision than this design uses.
 **NUMERIC(38,18)** gives 20 whole-dollar digits and 18 fractional digits while
@@ -78,11 +236,90 @@ paired with a closed status and, when unknown, a safe reason code. Estimates,
 reservations, and conservative budget charges stay in separate non-null fields;
 none is copied into **actual_cost_usd** merely to avoid a null.
 
+## Configurable physical namespace
+
+The state configuration selects three independent identifiers:
+
+~~~yaml
+postgres:
+  database: llm_worker
+  schema: llm_worker
+  table_prefix: ""
+~~~
+
+**LLMTW_POSTGRES_DATABASE**, **LLMTW_POSTGRES_SCHEMA**, and
+**LLMTW_POSTGRES_TABLE_PREFIX** may override those non-secret YAML fields at
+process start. The effective values are validated before opening a connection,
+included in the configuration digest, and exposed by
+**print-effective-config**. Startup verifies **current_database()** equals the
+configured database and never relies on a mutable **search_path**.
+
+Database and schema names match **[a-z][a-z0-9_]{0,62}**. Table prefix is empty
+or matches **[a-z][a-z0-9_]{0,22}_**. The prefix is prepended to every
+worker-owned schema object: tables, indexes, sequences, schema-version table,
+constraints with explicit names, and any future view or function. Prefixing
+indexes as well as tables is mandatory because index names are schema-global.
+The 24-byte prefix maximum plus the longest name in this design is at most
+PostgreSQL's 63-byte identifier limit; a schema-contract test enumerates every
+rendered identifier and rejects truncation or collision.
+
+DDL and queries represent identifiers as a validated structured value:
+
+~~~go
+type Namespace struct {
+	Database    string
+	Schema      string
+	TablePrefix string
+}
+
+func (n Namespace) Relation(logicalName string) pgx.Identifier {
+	return pgx.Identifier{n.Schema, n.TablePrefix + logicalName}
+}
+~~~
+
+The implementation must use **pgx.Identifier.Sanitize** or an equivalent
+driver identifier builder for schema objects and bind all data as parameters.
+Activity input, request JSON, tenant values, and query filters can never select
+an identifier. Prepared SQL is generated once per validated process-lifetime
+namespace; raw strings are not interpolated into ad hoc statements.
+
+The DDL below uses **llm_worker.logical_name** as readable logical notation. At
+installation and runtime it means:
+
+~~~text
+quote_identifier(configured_schema)
+  .quote_identifier(configured_table_prefix ^ logical_name)
+~~~
+
+The same substitution applies to explicitly named indexes, sequences, and
+constraints. The readable DDL below omits repetitive constraint names. The
+installer must emit every constraint explicitly as
+`<table-prefix>c_<kind>_<digest12>`, where `kind` is `pk`, `uq`, `fk`, or `ck`
+and `digest12` is the first 12 lowercase hexadecimal characters of SHA-256 over
+the stable logical table name, a NUL separator, and a documented invariant
+slug. This keeps names deterministic and below 63 bytes even at the maximum
+prefix; the schema-contract fixture owns the complete `(table, slug, name)`
+catalog and rejects a digest collision. Index and identity-sequence names use
+the prefixed logical names shown in this document and are also enumerated by
+that fixture. PostgreSQL-generated/truncated object names are not accepted.
+
+**CREATE SCHEMA** and schema-level **REVOKE** are executed only
+when the configured schema is dedicated and owned by the worker schema-owner
+role. In shared-schema mode the operator provisions schema privileges, while
+the installer creates only prefixed worker objects. Runtime and maintenance
+roles receive object-level grants; table-prefix isolation alone is never
+described as authorization.
+
+Namespace settings are immutable for a process. A reload that changes one is
+rejected with a restart-required error. Pointing a new pre-release deployment
+at a different database/schema/prefix creates another clean namespace; it does
+not move or discover state from the previous selection.
+
 ## Final schema
 
-The DDL below defines the intended final shape. Migration tooling may split it
-into ordered files, but must not weaken a constraint or silently add a different
-index.
+The DDL below defines the intended initial shape. The schema installer may split
+it into ordered files, but must not weaken a constraint or silently add a
+different index.
 
 ### Scope, configuration, and blobs
 
@@ -233,6 +470,7 @@ CREATE TABLE llm_worker.operations (
         cost_method IN (
             'provider_reported',
             'catalog_usage',
+            'reconstructed_usage',
             'worker_cache_zero',
             'control_query_zero'
         )
@@ -298,6 +536,10 @@ CREATE TABLE llm_worker.operations (
         cost_method NOT IN ('worker_cache_zero', 'control_query_zero') OR
         actual_cost_usd = 0
     ),
+    CHECK (
+        cost_method NOT IN ('catalog_usage', 'reconstructed_usage') OR
+        cost_catalog_version IS NOT NULL
+    ),
     CHECK (completed_at IS NULL OR completed_at >= created_at)
 );
 
@@ -354,9 +596,11 @@ CREATE TABLE llm_worker.operation_attempts (
         cost_method IN (
             'provider_reported',
             'catalog_usage',
+            'reconstructed_usage',
             'definite_uncharged_zero'
         )
     ),
+    cost_catalog_version text,
     cost_unknown_reason_code text CHECK (
         cost_unknown_reason_code IS NULL OR
         cost_unknown_reason_code ~ '^[a-z0-9_]{1,64}$'
@@ -391,6 +635,10 @@ CREATE TABLE llm_worker.operation_attempts (
     CHECK (finished_at IS NULL OR cost_status IN ('exact', 'unknown')),
     CHECK (
         cost_method <> 'definite_uncharged_zero' OR actual_cost_usd = 0
+    ),
+    CHECK (
+        cost_method NOT IN ('catalog_usage', 'reconstructed_usage') OR
+        cost_catalog_version IS NOT NULL
     ),
     CHECK (finished_at IS NULL OR finished_at >= started_at)
 );
@@ -848,14 +1096,16 @@ PostgreSQL's integer type is signed int32, matching the wire variant and
 semantics because temperature is part of materialized encrypted content, not a
 cache table column.
 
-The semantic fingerprint excludes provider/endpoint/account/region, requested
-service class, operation identity, maximum cache age, deadlines, budgets,
-tracing, timestamps, and actor-only tags. It includes conversation content,
-tools/settings, all output-affecting extensions, model-equivalence identity,
-semantic/compiler/cache epochs, and compaction versions. The database key adds
-variant as its own int32 column. A supposedly
-neutral provider extension may be excluded only when its catalog schema marks
-it non-semantic and a fixture proves identical lowering.
+The semantic fingerprint includes an explicit Generate-versus-Compact domain
+separator. It excludes provider/endpoint/account/region, requested
+service class/fallbacks, operation identity, maximum cache age, price/FX
+versions, health, deadlines, budgets, tracing, timestamps, and actor-only tags.
+It includes conversation content, every output-affecting setting/extension,
+model-equivalence identity, semantic/compiler/cache epochs, required opaque
+state identity, and compaction versions/artifact identity. The database key adds
+variant as its own int32 column, and Compact permits only variant zero. A
+supposedly neutral provider extension may be excluded only when its catalog
+schema marks it non-semantic and a fixture proves identical lowering.
 
 Cache lookup uses the B-tree unique key containing
 **semantic_fingerprint_hmac**, which is HMAC-SHA-256 over a versioned canonical
@@ -864,12 +1114,14 @@ worker verifies **canonical_request_digest** and the canonical manifest before
 reuse so a canonicalizer/version defect fails closed rather than serving the
 wrong response.
 
-The operation **request_jsonb** is the complete normalized v2 Activity request:
-scope, parent handle, delta, sparse patch, and cache policy. Its size is already
+The operation **request_jsonb** is the complete normalized request for its
+Generate, Compact, or Query Activity. For Generate it includes scope, parent
+handle, delta, sparse patch, and cache policy. Its size is already
 bounded by the Activity contract and large parts are BlobRefs. The cache
-**canonical_request_jsonb** is a materialized cache-key manifest: semantic
-settings and ordered content references/digests, model-equivalence identity,
-compiler/compaction epochs, and variant. It does not duplicate ancestor blob
+**canonical_request_jsonb** is a materialized Generate-or-Compact cache-key
+manifest: operation-kind domain, semantic settings and ordered content
+references/digests, model-equivalence identity, compiler/compaction epochs, and
+variant. It does not duplicate ancestor blob
 bytes or the full transcript. The JSONB rows support audit, safe debugging, and
 hash verification; all equality and freshness lookups use fixed-size columns.
 Application canonical bytes, not PostgreSQL's JSONB text serialization, are
@@ -943,6 +1195,124 @@ CREATE TABLE llm_worker.budget_windows (
     CHECK (duration_seconds % bucket_seconds = 0)
 );
 
+CREATE TABLE llm_worker.budget_redis_generations (
+    generation_id uuid PRIMARY KEY,
+    generation_slot smallint NOT NULL DEFAULT 1
+        CHECK (generation_slot = 1),
+    reason text NOT NULL CHECK (
+        reason IN ('initial_cold_start', 'full_service_restart', 'redis_data_loss')
+    ),
+    state text NOT NULL CHECK (
+        state IN ('building', 'active', 'superseded', 'failed')
+    ),
+    source_journal_id bigint NOT NULL CHECK (source_journal_id >= 0),
+    coverage_start timestamptz NOT NULL,
+    coverage_end timestamptz NOT NULL,
+    manifest_digest bytea NOT NULL
+        CHECK (octet_length(manifest_digest) = 32),
+    started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    completed_at timestamptz,
+    safe_failure_code text,
+    CHECK (coverage_end > coverage_start),
+    CHECK (
+        (state IN ('building') AND completed_at IS NULL AND
+            safe_failure_code IS NULL) OR
+        (state IN ('active', 'superseded') AND completed_at IS NOT NULL AND
+            safe_failure_code IS NULL) OR
+        (state = 'failed' AND completed_at IS NOT NULL AND
+            safe_failure_code IS NOT NULL)
+    )
+);
+
+CREATE TABLE llm_worker.budget_journal_events (
+    journal_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id uuid NOT NULL UNIQUE,
+    redis_generation_id uuid NOT NULL
+        REFERENCES llm_worker.budget_redis_generations(generation_id)
+        ON DELETE RESTRICT,
+    operation_id uuid NOT NULL
+        REFERENCES llm_worker.operations(operation_id) ON DELETE RESTRICT,
+    window_id uuid NOT NULL
+        REFERENCES llm_worker.budget_windows(window_id) ON DELETE RESTRICT,
+    bucket_start timestamptz NOT NULL,
+    reservation_revision integer NOT NULL
+        CHECK (reservation_revision >= 0),
+    event_kind text NOT NULL CHECK (
+        event_kind IN (
+            'reserve', 'finalize_exact', 'finalize_unknown',
+            'retain_ambiguous', 'resolve_unknown_exact', 'release'
+        )
+    ),
+    reserved_increase_usd numeric(38,18) NOT NULL DEFAULT 0
+        CHECK (reserved_increase_usd >= 0),
+    reserved_decrease_usd numeric(38,18) NOT NULL DEFAULT 0
+        CHECK (reserved_decrease_usd >= 0),
+    accounted_increase_usd numeric(38,18) NOT NULL DEFAULT 0
+        CHECK (accounted_increase_usd >= 0),
+    accounted_decrease_usd numeric(38,18) NOT NULL DEFAULT 0
+        CHECK (accounted_decrease_usd >= 0),
+    actual_cost_usd numeric(38,18)
+        CHECK (actual_cost_usd IS NULL OR actual_cost_usd >= 0),
+    actual_cost_status text NOT NULL CHECK (
+        actual_cost_status IN ('pending', 'exact', 'unknown')
+    ),
+    actual_cost_unknown_reason_code text CHECK (
+        actual_cost_unknown_reason_code IS NULL OR
+        actual_cost_unknown_reason_code ~ '^[a-z0-9_]{1,64}$'
+    ),
+    occurred_at timestamptz NOT NULL,
+    persisted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (operation_id, window_id, reservation_revision),
+    CHECK (
+        reserved_increase_usd > 0 OR reserved_decrease_usd > 0 OR
+        accounted_increase_usd > 0 OR accounted_decrease_usd > 0 OR
+        event_kind = 'retain_ambiguous'
+    ),
+    CHECK (
+        (actual_cost_status = 'pending' AND
+            actual_cost_usd IS NULL AND
+            actual_cost_unknown_reason_code IS NULL) OR
+        (actual_cost_status = 'exact' AND
+            actual_cost_usd IS NOT NULL AND
+            actual_cost_unknown_reason_code IS NULL) OR
+        (actual_cost_status = 'unknown' AND
+            actual_cost_usd IS NULL AND
+            actual_cost_unknown_reason_code IS NOT NULL)
+    ),
+    CHECK (
+        (event_kind = 'reserve' AND
+            reserved_increase_usd > 0 AND reserved_decrease_usd = 0 AND
+            accounted_increase_usd = 0 AND accounted_decrease_usd = 0 AND
+            actual_cost_status = 'pending') OR
+        (event_kind = 'finalize_exact' AND
+            reserved_increase_usd = 0 AND reserved_decrease_usd > 0 AND
+            accounted_increase_usd = actual_cost_usd AND
+            accounted_decrease_usd = 0 AND
+            actual_cost_status = 'exact') OR
+        (event_kind = 'finalize_unknown' AND
+            reserved_increase_usd = 0 AND reserved_decrease_usd > 0 AND
+            accounted_increase_usd = reserved_decrease_usd AND
+            accounted_decrease_usd = 0 AND
+            actual_cost_status = 'unknown') OR
+        (event_kind = 'retain_ambiguous' AND
+            reserved_increase_usd = 0 AND reserved_decrease_usd = 0 AND
+            accounted_increase_usd = 0 AND accounted_decrease_usd = 0 AND
+            actual_cost_status = 'unknown') OR
+        (event_kind = 'resolve_unknown_exact' AND
+            reserved_increase_usd = 0 AND
+            ((reserved_decrease_usd > 0 AND
+                accounted_decrease_usd = 0) OR
+             (reserved_decrease_usd = 0 AND
+                accounted_decrease_usd > 0)) AND
+            accounted_increase_usd = actual_cost_usd AND
+            actual_cost_status = 'exact') OR
+        (event_kind = 'release' AND
+            reserved_increase_usd = 0 AND reserved_decrease_usd > 0 AND
+            accounted_increase_usd = 0 AND accounted_decrease_usd = 0 AND
+            actual_cost_status = 'exact' AND actual_cost_usd = 0)
+    )
+);
+
 CREATE TABLE llm_worker.budget_buckets (
     window_id uuid NOT NULL
         REFERENCES llm_worker.budget_windows(window_id) ON DELETE RESTRICT,
@@ -951,6 +1321,9 @@ CREATE TABLE llm_worker.budget_buckets (
         CHECK (reserved_cost_usd >= 0),
     accounted_cost_usd numeric(38,18) NOT NULL DEFAULT 0
         CHECK (accounted_cost_usd >= 0),
+    last_journal_id bigint NOT NULL
+        REFERENCES llm_worker.budget_journal_events(journal_id)
+        ON DELETE RESTRICT,
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (window_id, bucket_start)
 );
@@ -971,7 +1344,10 @@ CREATE TABLE llm_worker.operation_budget_reservations (
     actual_cost_status text NOT NULL DEFAULT 'pending' CHECK (
         actual_cost_status IN ('pending', 'exact', 'unknown')
     ),
-    actual_cost_unknown_reason_code text,
+    actual_cost_unknown_reason_code text CHECK (
+        actual_cost_unknown_reason_code IS NULL OR
+        actual_cost_unknown_reason_code ~ '^[a-z0-9_]{1,64}$'
+    ),
     budget_charge_usd numeric(38,18) NOT NULL DEFAULT 0
         CHECK (budget_charge_usd >= 0),
     budget_charge_basis text NOT NULL DEFAULT 'reserved' CHECK (
@@ -979,6 +1355,11 @@ CREATE TABLE llm_worker.operation_budget_reservations (
             'reserved', 'exact_actual', 'retained_bound', 'released'
         )
     ),
+    reservation_revision integer NOT NULL
+        CHECK (reservation_revision >= 0),
+    last_journal_id bigint NOT NULL
+        REFERENCES llm_worker.budget_journal_events(journal_id)
+        ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     finalized_at timestamptz,
     PRIMARY KEY (operation_id, window_id),
@@ -1030,6 +1411,43 @@ CREATE INDEX budget_windows_policy_idx
 CREATE INDEX budget_buckets_retention_idx
     ON llm_worker.budget_buckets (bucket_start, window_id);
 
+CREATE INDEX budget_journal_window_rebuild_idx
+    ON llm_worker.budget_journal_events
+        (window_id, bucket_start, journal_id)
+    INCLUDE (
+        operation_id,
+        event_kind,
+        reserved_increase_usd,
+        reserved_decrease_usd,
+        accounted_increase_usd,
+        accounted_decrease_usd,
+        actual_cost_usd,
+        actual_cost_status
+    );
+
+CREATE INDEX budget_journal_operation_idx
+    ON llm_worker.budget_journal_events (operation_id, journal_id);
+
+CREATE INDEX budget_journal_generation_idx
+    ON llm_worker.budget_journal_events
+        (redis_generation_id, journal_id);
+
+CREATE UNIQUE INDEX budget_redis_generation_active_idx
+    ON llm_worker.budget_redis_generations (generation_slot)
+    WHERE state = 'active';
+
+CREATE INDEX budget_redis_generation_history_idx
+    ON llm_worker.budget_redis_generations (started_at DESC, generation_id)
+    INCLUDE (state, reason, source_journal_id, completed_at);
+
+CREATE INDEX budget_journal_time_brin_idx
+    ON llm_worker.budget_journal_events USING brin (persisted_at)
+    WITH (pages_per_range = 64);
+
+CREATE INDEX budget_buckets_last_journal_idx
+    ON llm_worker.budget_buckets
+        (last_journal_id, window_id, bucket_start);
+
 CREATE INDEX operation_budget_window_idx
     ON llm_worker.operation_budget_reservations
         (window_id, bucket_start, state, operation_id)
@@ -1040,24 +1458,45 @@ CREATE INDEX operation_budget_window_idx
         actual_cost_usd,
         actual_cost_status
     );
+
+CREATE INDEX operation_budget_open_idx
+    ON llm_worker.operation_budget_reservations
+        (window_id, bucket_start, operation_id)
+    INCLUDE (reserved_cost_usd, reservation_revision, last_journal_id)
+    WHERE state IN ('reserved', 'retained_ambiguous');
+
+CREATE INDEX operation_budget_last_journal_idx
+    ON llm_worker.operation_budget_reservations
+        (last_journal_id, operation_id, window_id);
 ~~~
 
-Admission resolves matching policies from the immutable configuration snapshot,
-sorts window UUIDs, creates current buckets if absent, and locks every affected
-bucket in that order. It computes each active window from the database
-transaction timestamp, checks accounted charges plus active reserved amounts,
-then writes all reservations atomically. No provider call occurs inside the
-transaction.
+Redis, not SQL, resolves and locks the live active-window state. After Redis
+accepts, PostgreSQL uses a write-only budget transaction: insert the idempotent
+journal event; only when that insert returns a new row, upsert the bucket
+projection by the event deltas and insert/update the operation reservation to
+the same `journal_id`. `INSERT ... ON CONFLICT DO NOTHING RETURNING` in a CTE
+guards every projection update, so a Temporal retry cannot apply a delta twice.
+The Go hot path issues no SELECT over policies, windows, buckets, reservations,
+or journal rows.
 
-Finalization locks the operation and the same window rows in the same order.
-When actual cost is exact, it moves that amount into
-**budget_charge_usd** with basis **exact_actual**. When a successful operation's
-real price is unknown, it records NULL actual cost and retains the full
-reservation as **budget_charge_usd** with basis **retained_bound**. That bound
-protects the budget but is never reported as actual spend. Definite pre-write
-failures release reservations. Ambiguous dispatch also retains the conservative
-bound until an operator/provider reconciliation changes both operation and
-reservation in one transaction.
+Finalization follows the same write-only protocol. When actual cost is exact,
+the journal moves the reserved amount to **budget_charge_usd** with basis
+**exact_actual**. When the real price is unknown, it records NULL actual cost
+and retains the full reservation with basis **retained_bound**. That bound
+protects the Redis budget but is never reported as actual spend. Definite
+pre-write failures release reservations. Ambiguous dispatch retains the bound.
+Only the fenced full-service/Redis-loss bootstrap described above reads these
+tables to reconstruct the active horizon.
+
+If trustworthy billing data later resolves an unknown cost, append a new
+**resolve_unknown_exact** journal revision; never rewrite the earlier unknown
+event. A previously finalized retained bound moves from accounted bound to the
+exact amount, while a still-ambiguous reservation moves from reserved bound to
+the exact accounted amount. The projection update uses the event's separate
+decrease/increase columns, rejects subtraction underflow, updates the operation
+cost and reservation state in the same PostgreSQL transaction, and only then
+idempotently reconciles Redis. Until that succeeds, the larger retained bound
+continues to protect admission.
 
 ### USD prices and worker-owned FX
 
@@ -1296,13 +1735,14 @@ CREATE INDEX operations_fx_snapshot_idx
     WHERE fx_rate_snapshot_id IS NOT NULL;
 ~~~
 
-The public v2 schema names amounts **reserved_cost_usd** and
+The public schema names amounts **reserved_cost_usd** and
 **actual_cost_usd**. A known amount is a validated arbitrary-precision
 **Usd_decimal.t** in OCaml. Nullable catalog/actual prices decode to a closed
 unknown-cost constructor, never to zero and never to **float** or a
 currency-tagged record. The current v1 **currency** response field and
 configuration **pricing.currency** are removed during the breaking contract
-cutover; one-shot OCaml helpers are rebuilt on the v2 root-request path.
+initial-release change; one-shot OCaml helpers are rebuilt on the v1
+root-request path.
 
 ### Provider status, credit state, and inventory
 
@@ -1637,7 +2077,7 @@ Supported tag/result pairs are:
 | **provider_status** | provider, endpoint, availability, include healthy, freshness | page of typed route-status rows |
 | **model_inventory** | provider, endpoint, model prefix, lifecycle, freshness | page of typed model rows plus inventory support/completeness |
 | **credit_status** | provider, endpoint, include ok, freshness | page of typed credit/billing rows and confirmed-at evidence |
-| **budget_status** | policy key, active-at, include windows | matching policies/windows with exact limit, reserved, accounted charge, available USD, and charge basis |
+| **budget_status** | policy key, current instant within Redis coverage, include windows | Redis-only matching policies/windows with exact limit, reserved, accounted charge, available USD, generation ID, and Stream high-water mark |
 | **spend_summary** | half-open UTC interval, group-by dimensions, operation kinds | typed buckets with known actual-cost USD, exact/unknown operation counts, and completeness |
 
 The common response has **observed_at**, **source**, **freshness**, **complete**,
@@ -1646,11 +2086,20 @@ and cursor contents bind query tag, scope, filters, sort key, snapshot horizon,
 expiry, and MAC. Unknown tags, mismatched result tags, unknown fields, or
 expired/tampered cursors are typed non-retryable errors.
 
-**refresh_if_older_than_seconds** is optional. Omission reads durable state
-only. When present, the worker may call a documented provider management/list
+**refresh_if_older_than_seconds** is optional for provider/model/credit queries.
+Omission reads durable state only. When present, the worker may call a documented provider management/list
 API and then store the observation before answering. It never invokes an
 inference endpoint, bypasses provider rate limits, or returns raw provider JSON.
 One refresh owner collapses concurrent requests per endpoint.
+
+`budget_status` is the deliberate exception to the persisted-query default: it
+reads the complete current Redis working set and never reads PostgreSQL budget
+tables. Its requested instant must lie inside the manifest's active coverage;
+an older/historical instant returns a typed `budget_history_not_available`
+error instead of falling back to PostgreSQL. The response binds the generation,
+manifest digest, and Stream high-water mark so callers can compare pages from
+one snapshot. `spend_summary` reads completed operation/cost rows in PostgreSQL;
+it does not read budget policy/window/bucket/reservation/journal rows.
 
 Spend aggregation filters **operations.state = 'completed'** and sums only rows
 with **cost_status=exact**. It returns **known_actual_cost_usd** plus exact and
@@ -1672,6 +2121,24 @@ Half-open intervals and database UTC time prevent boundary double counting.
    ambiguous state for every unsafe case.
 5. Resolve parent and materialize outside a long transaction, then revalidate
    its immutable digests when the short admission transaction begins.
+
+### Redis budget acquisition and PostgreSQL journal write
+
+1. After operation replay/cache checks and route pricing, invoke the versioned
+   Redis Function once for all matching monetary windows and operational
+   throttles. The Function is the only active-window read and reservation
+   authority.
+2. On acceptance, insert the operation/reservation journal events and update
+   PostgreSQL bucket/reservation projections through the insert-guarded CTE.
+   Do not select budget state before or after the write.
+3. If the PostgreSQL write fails, do not dispatch; invoke idempotent Redis
+   release. If release cannot be confirmed, keep readiness false or let the
+   conservative TTL expire according to the failure classification.
+4. On retry, operation replay determines whether this is new, terminal, or
+   pending before Redis is touched. Redis operation reservation identity and
+   journal event identity make both sides idempotent.
+5. Terminal completion commits operation/cost/journal/projection changes in
+   PostgreSQL, then applies the corresponding Redis reconciliation event.
 
 ### Exact cache lookup and fill
 
@@ -1718,9 +2185,11 @@ for provider IDs, poll count, status, and cost.
 
 ### Completion and cache-use accounting
 
-Operation, attempt, budget reconciliation, result blob reference, checkpoint,
-cache use/fill, provider status event/projection, and exact-or-unknown USD cost
-status finalize in one serializable or explicitly locked transaction. External
+Operation, attempt, budget journal/projection, result blob reference,
+checkpoint, cache use/fill, provider status event/projection, and
+exact-or-unknown USD cost status finalize in one serializable or explicitly
+locked PostgreSQL transaction. Redis budget reconciliation follows that commit
+idempotently. External
 blob bytes are written first under an uncommitted locator; the transaction
 publishes their rows. Failed publication schedules idempotent orphan cleanup.
 
@@ -1729,9 +2198,13 @@ before possible provider write. They never retry a provider submission. Lock
 order is documented and tested:
 
 ~~~text
-scope -> operation -> cache fill/entry -> budget windows sorted by UUID
+scope -> operation -> cache fill/entry -> budget journal/projection rows
       -> checkpoint parent -> status projection
 ~~~
+
+Redis mutations are never performed while a PostgreSQL transaction is open.
+The cross-store order and conservative compensation protocol above replace any
+claim of a shared lock order.
 
 ## Index rationale and query plans
 
@@ -1739,7 +2212,7 @@ scope -> operation -> cache fill/entry -> budget windows sorted by UUID
 | --- | --- | --- |
 | Scoped operation unique | Activity Begin/replay | equality on scope, kind, HMAC |
 | Operation lease/poll partial | crash recovery and due polling | excludes terminal rows and orders by due time |
-| Scope spend covering | budget/spend query | scope and time range; included cost/dimensions reduce heap reads |
+| Scope spend covering | spend query | scope and time range; included cost/dimensions reduce heap reads |
 | Unknown-cost partial | reconciliation queue | scoped completed unknown rows only |
 | Operation BRIN | global retention/audit scans | append-correlated time at low index cost |
 | Parent operation/checkpoint/cache | FK enforcement, lineage, deletion | PostgreSQL does not index FK children |
@@ -1749,8 +2222,14 @@ scope -> operation -> cache fill/entry -> budget windows sorted by UUID
 | Cache unique | direct exact lookup | all equality key components |
 | Cache last-use partial | future unused-entry cleanup | ready entries in oldest-use order |
 | Cache fill lease partial | abandoned-fill recovery | only active fills ordered by expiry |
-| Budget bucket primary | active-window sum and row locking | window equality plus bucket time range |
-| Reservation window | budget status/reconciliation | window/bucket/state range with covered amounts |
+| Budget journal window rebuild | exceptional cold/lost-Redis active-horizon replay | window and bucket range, then monotonic journal ID with covered deltas |
+| Budget journal operation | idempotency/audit linkage | operation equality then journal order |
+| Budget journal generation | generation audit and FK enforcement | generation equality then monotonic journal order |
+| Budget journal BRIN | retention and exceptional time-range recovery | append-correlated persisted time at low index cost |
+| Budget bucket primary | exceptional cold/lost-Redis snapshot load | window equality plus bucket time range |
+| Open reservation partial | exceptional rebuild of in-flight/ambiguous bounds | active states only, ordered by window and bucket |
+| Budget last-journal FK indexes | event retention and referential checks | journal equality locates bucket/reservation children without scans |
+| Redis generation active/history | one active generation and rebuild audit | partial singleton uniqueness plus recent runs |
 | Price resolution covering | route/model/tier at time | equality identity then newest effective price |
 | Unresolved-price partial | catalog review/refresh | only partial or unknown entries by status/time |
 | Status route/time | latest/history query | configuration/route equality then newest event |
@@ -1759,9 +2238,11 @@ scope -> operation -> cache fill/entry -> budget windows sorted by UUID
 | Outbox partial | maintenance claim/recovery | only runnable or leased rows |
 
 Implementation captures **EXPLAIN (ANALYZE, BUFFERS)** for cache lookup, Begin,
-active budget admission, spend summary, latest status, model inventory, and
-180-day cache cleanup at representative cardinalities. The reconciliation suite
-also proves the unknown-cost and unresolved-price partial indexes. Tests reject
+the exceptional budget rebuild snapshot/tail, spend summary, latest status,
+model inventory, and 180-day cache cleanup at representative cardinalities.
+There is deliberately no PostgreSQL active-budget-admission query to plan. The
+reconciliation suite also proves the unknown-cost and unresolved-price partial
+indexes. Tests reject
 sequential scans on large seeded tables for those bounded queries. Index count
 is also measured: an index that does not serve a named query is removed.
 
@@ -1776,8 +2257,10 @@ is also measured: an index that does not serve a named query is removed.
   tombstoned, and schedules blob deletion.
 - Status events and inventory snapshots have independent bounded retention;
   current projections remain.
-- Budget buckets are deleted only after every matching window and operation
-  reconciliation horizon has expired.
+- PostgreSQL budget journal/bucket projections are deleted only after every
+  matching window, operation reconciliation, and permitted cold-rebuild horizon
+  has expired. Maintenance uses bounded indexed DELETE statements and never
+  loads active budget state into a running worker.
 - The maintenance role runs frequent small deletes. It never performs an
   unbounded delete or vacuum from an Activity.
 - Monitor dead tuples, HOT update ratio, autovacuum lag, transaction age, index
@@ -1794,8 +2277,9 @@ emergency maintenance step.
 
 ## PostgreSQL operating requirements
 
-- Require TLS certificate verification, separate migration/runtime/maintenance
-  roles, password or workload-identity rotation, and schema-qualified SQL.
+- Require TLS certificate verification, separate schema-owner/runtime/
+  maintenance roles, password or workload-identity rotation, and
+  schema-qualified SQL.
 - Set connection, statement, lock, idle-in-transaction, and transaction
   timeouts. Size each replica's pool against the database connection budget.
 - Use prepared statements or typed generated queries; never concatenate
@@ -1804,42 +2288,57 @@ emergency maintenance step.
   transitions. A deployment may not weaken durability for these tables.
 - Enable encrypted storage, encrypted verified backups, WAL archiving, point-in-
   time recovery, cross-failure-domain copies, and scheduled restore drills.
-- Readiness checks a transaction, migration version, required indexes, server
-  time, and read/write role capability. It does not apply migrations.
+- Readiness checks a transaction, initial schema version, configured physical
+  namespace, required indexes, server time, and role capability. It does not
+  create or alter schema objects.
 - Startup rejects missing/invalid constraints, an unexpected schema version,
-  non-UTC session behavior, or a database confused with Temporal's database.
+  non-UTC session behavior, or any computed relation that overlaps a
+  Temporal-owned relation. A safely isolated schema in the same database is
+  valid.
 - Metrics/traces contain safe IDs and durations, never SQL parameters with
   tenant/content/provider IDs.
 
-## Schema cutover sequence
+## Pre-release schema initialization sequence
 
-This sequence also modernizes existing Redis-backed functionality; it is not
-limited to the new cache:
+This sequence moves durable journaling/conversation/cache/control state to
+PostgreSQL while retaining Redis for its low-latency active-budget/throttling
+role:
 
-1. Freeze the accepted DDL in migration and schema-contract fixtures.
-2. Provision a separate worker database/roles and apply the schema in an
-   ephemeral environment.
+1. Freeze the accepted DDL in schema-installer and schema-contract fixtures.
+2. Provision the configured worker database/schema/prefix and roles, then apply
+   the clean initial schema in an ephemeral environment.
 3. Implement exact decimal USD and remove public/config currency plus integer
    microUSD assumptions from the authoritative store.
 4. Add PostgreSQL repositories for configuration, blobs, operations/attempts,
-   budgets, continuations, prices, and results; run the existing memory/Redis
-   conformance cases against PostgreSQL with stricter decimal assertions.
+   the write-only budget journal/projections, continuations, prices, and
+   results. Add exact Redis active-budget/generation/Stream conformance rather
+   than treating the backends as interchangeable stores.
 5. Add checkpoints, cache, model equivalence, provider status/inventory, FX,
    and outbox repositories.
-6. Run a one-time fixture importer only to compare existing Redis semantic
-   records with PostgreSQL. Do not ship an online dual writer.
-7. Switch the engine composition and readiness checks to PostgreSQL in one
-   commit; disable Redis production configuration and reject it at startup.
-8. Run crash-boundary, concurrent budget/cache/fork, query-plan, retention, and
-   restore tests with at least two worker replicas.
-9. Remove Redis operation/continuation/budget code, Functions, deployment,
-   configuration, docs, and dependencies after PostgreSQL gates pass.
-10. Record clean-database cutover evidence and keep rollback as application
-    version plus database restore, never a partial return to dual authority.
+6. Run repository conformance tests from newly constructed fixtures; do not
+   import or copy Redis data.
+7. Switch the pre-release engine so PostgreSQL owns durable replay/journal/
+   accounting/conversation/cache/control state and Redis owns active budgets
+   and throttles. Readiness requires both dependencies for new paid dispatches.
+8. Remove only the superseded Redis durable-operation, continuation, and result
+   representations. Replace the old microUSD budget Function with the exact
+   generation/Stream Function. Keep Redis client, budget/throttle Functions,
+   configured prefix, deployment, health checks, and focused persistence tests.
+9. Run cross-store crash-boundary tests at every Redis-reserve, PostgreSQL-
+   journal-write, dispatch, finalize, and Redis-reconcile boundary, plus concurrent
+   budget/cache/fork, query-plan, retention, and restore tests with at least two
+   worker replicas.
+10. Record clean-namespace initialization evidence. Before the first release,
+    rollback means rebuilding the disposable test environment from the earlier
+    application revision, not preserving or translating stored data.
 
-Because there is no production dataset, no live backfill or dual-read period is
-required. The sequence still isolates schema, repository, cutover, and deletion
+Because there is no released dataset, this change has no data migration,
+backfill, compatibility, or dual-read period. The sequence still isolates
+schema installation, repository composition, and Redis responsibility-split
 commits so a cheaper implementation agent can test and review each boundary.
+Redis remains in production after the split. Any
+post-release schema or namespace move gets a new design based on the deployed
+version and real data at that time.
 
 ## Database acceptance gates
 
@@ -1862,7 +2361,23 @@ commits so a cheaper implementation agent can test and review each boundary.
 - A Temporal retry increments cache **use_count** at most once.
 - An old entry used yesterday survives a 180-day unused-entry sweep.
 - A worker restart polls a persisted provider operation ID without submission.
-- Budget admission never exceeds any window under concurrent transactions.
+- Redis budget admission never exceeds any window under concurrent Functions;
+  fixed-width decimal strings remain exact through all mutations.
+- The steady-state budget hot path performs zero PostgreSQL budget SELECTs;
+  statement instrumentation proves only insert/update journal/projection writes.
+- Joining/restarting one worker and recovering a Redis Stream gap read budget
+  state only from Redis. PostgreSQL budget reads occur only for a proven
+  zero-live-worker cold bootstrap or verified new Redis incarnation whose
+  required generation did not persist.
+- An allowed cold/new-incarnation bootstrap reconstructs one verified generation from the PostgreSQL
+  active horizon/journal tail and fences concurrent journal writers at the
+  final high-water mark; unexplained same-incarnation partial Redis loss neither
+  admits work nor reads PostgreSQL.
+- One bounded sizing test drives up to 100 new logical LLM requests per second
+  through the atomic budget path, and a separate large Temporal batch drains
+  safely under configured concurrency. This is deliberately above expected
+  normal throughput; neither test adds or asserts a runtime 100-RPS limit or
+  requires headroom beyond that envelope.
 - Credit exhaustion is not inferred from an unclassified 429.
 - Certified cross-provider model routes share a cache entry; unknown
   quantization does not.

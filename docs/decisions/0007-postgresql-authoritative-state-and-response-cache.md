@@ -1,16 +1,19 @@
-# ADR 0007: PostgreSQL Authoritative State and Exact-Response Cache
+# ADR 0007: PostgreSQL Durable State and Exact-Response Cache
 
 - Status: Accepted design; implementation pending
 - Date: 2026-07-18
-- Supersedes: ADR 0004 after the v2 storage cutover
+- Complements: ADR 0004; Redis remains the low-latency throttle and admission accelerator
 
 ## Context
 
 Forkable checkpoints, exact-response caching, resumable provider job IDs,
 queryable provider status, model inventories, budget/spend reporting, and
 precise per-operation cost need transactional relationships and indexed
-queries. Splitting those invariants between Redis and PostgreSQL would require
-an unrecoverable dual-write protocol.
+queries. Those durable relationships belong in one PostgreSQL transaction.
+Redis still serves a different, latency-sensitive purpose: distributed
+request/token/concurrency throttles and the complete active-window monetary
+budget working set. The design must not pretend that Redis and PostgreSQL can
+atomically commit one shared fact.
 
 This repository currently uses Redis for the worker's v1 operation,
 continuation, result, and budget state. The PostgreSQL service in local Compose
@@ -18,15 +21,66 @@ belongs to Temporal and is not a worker application database.
 
 ## Decision
 
-Introduce a separate worker-owned PostgreSQL database and schema. At cutover,
-it becomes authoritative for all worker operation, budget, checkpoint, cache,
-provider-status, and inventory state, including concepts that already exist in
-Redis. Temporal's own database remains vendor-managed and untouched. Redis may
-later be used as a disposable read-through accelerator, never as an
-authoritative or dual-written store.
+Introduce a worker-owned PostgreSQL physical namespace. Its database, schema,
+and table prefix are independently configurable. A separate database/schema is
+recommended, while a shared server or database is supported when the resulting
+relations and grants cannot overlap Temporal-owned objects. The namespace
+becomes authoritative for durable operations and budget journal, checkpoints,
+response cache, provider status, and inventory state. Redis remains a required
+production dependency and is authoritative for atomic admission against the
+fully materialized active budget windows, plus request/token/concurrency
+throttles. Its independently configurable key prefix applies to every
+worker-owned Redis key.
+
+Normal budget admission performs no PostgreSQL budget reads. One Redis Function
+validates the namespace generation and complete active-window coverage, checks
+every matching window, and atomically creates an idempotent reservation. The
+worker then appends/inserts the corresponding durable PostgreSQL operation and
+budget-journal facts before provider dispatch. A PostgreSQL write failure means
+no dispatch and causes a best-effort Redis release; an unconfirmed release
+temporarily over-throttles until TTL. Completion durably updates PostgreSQL
+before idempotently reconciling Redis. No provider call is allowed unless both
+the Redis reservation and PostgreSQL journal write succeeded.
+
+Every Redis mutation also appends to one namespace-scoped Redis Stream in the
+same Function. Workers use that key as the monotonic budget change feed. A
+generation manifest, complete-coverage sentinels, per-window bucket sentinels,
+and stream high-water mark make missing or partially lost data detectable.
+Missing state, failed persistence health, or an unexpected generation fails
+admission closed. A worker that joins an already-live fleet validates and reads
+only Redis; a stream gap invalidates its local hints and refreshes them from
+Redis, not PostgreSQL. A process session ID is kept in memory and in a
+persistent Redis generation roster so workers reconnecting after a persistent
+Redis outage do not look like a fleet restart even when leases expired.
+PostgreSQL budget reads are permitted only when the live worker lease set plus
+session roster prove that the entire Go worker fleet has restarted, or when a
+verified new Redis process/dataset incarnation has a missing/incomplete
+generation because persistence was not retained. Same-incarnation missing or
+corrupt state fails closed without a PostgreSQL read. One fenced bootstrap
+coordinator then reads only the active budget
+horizon and journal tail from PostgreSQL, builds and verifies a new Redis
+generation, and atomically switches generations. Other workers wait for the
+switch. There are no routine PostgreSQL budget reads, periodic reconciliation
+reads, per-worker startup reads, or budget-query reads.
+
+Exact **NUMERIC(38,18)** values are encoded in Redis as fixed-width 38-digit
+unsigned scaled-integer strings. The Redis Function uses string comparison and
+checked digit-wise addition/subtraction; it never converts a full amount to a
+Lua number. This keeps Redis and PostgreSQL exact without exposing an alternate
+money representation downstream.
+
+The design capacity envelope assumes normal ongoing throughput remains vastly
+below 100 new logical LLM requests per second across all workers. This is not a
+runtime limit, budget, configuration field, or rejection rule. Occasional large
+batches are expected to create Temporal backlog and drain under the configured
+worker/provider concurrency rather than arrive as sustained admission traffic.
+The budget design therefore favors one atomic Redis hash slot and one change
+stream over speculative sharding. If measured sustained demand approaches or
+exceeds this envelope, perform a new architecture review, including whether
+Temporal remains the appropriate execution model.
 
 Store USD amounts as **NUMERIC(38,18)**. Do not use PostgreSQL floating-point
-types or Go floating-point values for money. The post-v1 public contract names
+types or Go floating-point values for money. The initial public contract names
 USD properties directly and has no currency discriminator. The Go worker owns
 any future FX retrieval and persists/reports only normalized USD prices and
 costs. This replaces integer micro-USD and supports 18 fractional digits plus
@@ -65,27 +119,35 @@ hidden provider transforms require isolated cache identities.
 
 ## Consequences
 
-- One transaction can coordinate idempotency, cache use, budget reservations,
-  cost finalization, and child-checkpoint publication.
+- One PostgreSQL transaction can coordinate idempotency, cache use, the durable
+  budget-journal event, cost finalization, and child-checkpoint publication.
+  The preceding Redis reservation remains a separate atomic operation governed
+  by the conservative cross-store protocol.
+- Redis retains the fast atomic budget path without becoming the durable audit
+  or rebuild ledger. A PostgreSQL journal write remains mandatory before any
+  paid dispatch.
 - PostgreSQL constraints and explicit indexes become part of the application
   contract and require production capacity planning.
-- The cutover can be deliberately breaking because the service has no
-  production data, but its execution plan still includes validation and
-  rollback gates.
+- The pre-release switch is deliberately clean because there is no released
+  data. It includes no copying, backfill, dual-read/write, or legacy namespace
+  fallback. A future post-release move requires a separate migration design.
 - Exact decimal storage preserves sub-micro-dollar amounts and deterministic
   aggregation at the cost of more CPU/storage than fixed-width integers.
 - Nullable prices preserve honest uncertainty, but spend summaries must report
   known totals and unknown counts instead of one falsely complete total.
-- PostgreSQL is on the provider-call critical path; cache-enabled and
-  budget-governed operations fail closed when authoritative state is
-  unavailable.
+- PostgreSQL writes and Redis are both on the provider-call critical path for
+  new paid dispatches, but PostgreSQL budget reads are not. Either dependency
+  being unavailable fails closed. Replays of an already completed PostgreSQL
+  operation do not consume a new Redis reservation.
 
 ## Rejected alternatives
 
-- Keeping budgets in Redis and costs/cache in PostgreSQL creates cross-store
-  atomicity gaps.
-- Reusing Temporal's internal PostgreSQL schema couples application migrations
-  to Temporal upgrades and support boundaries.
+- Keeping exact monetary budgets only in Redis without a durable journal makes
+  Redis loss unrecoverable. The accepted design writes a PostgreSQL journal
+  before dispatch and detects/fences Redis loss, while preserving Redis as the
+  only steady-state active-window read/atomic-admission path.
+- Resolving any configured worker relation to a Temporal-owned relation couples
+  application state to Temporal upgrades and support boundaries.
 - Float/double money loses decimal precision and makes budget boundary behavior
   platform-dependent.
 - A cache key based on raw request JSON makes semantically identical requests

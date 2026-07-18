@@ -38,6 +38,13 @@ with that tag. Query results are bounded and pageable. They normally read
 persisted worker state; an explicit freshness policy may invoke a supported
 provider management API but never an inference API.
 
+Current budget status is the deliberate exception: it reads the verified Redis
+budget generation only and returns its generation, manifest digest, and Stream
+high-water mark. It never falls back to PostgreSQL. Spend summary reads
+completed PostgreSQL operation/cost rows, not budget journal/working-set rows.
+Every Query is itself an idempotent operation and records an exact-or-unknown
+**actual_cost_usd**; confirmed local stored-state queries record exact zero.
+
 The OCaml package exposes exact wire variants at its protocol layer and a GADT
 at its ergonomic layer, associating each request constructor with its result
 type. A mismatched response tag is a decoding error, not an open JSON value.
@@ -49,8 +56,9 @@ type. A mismatched response tag is a decoding error, not an open JSON value.
 - The unavoidable acceptance/persistence gap is visible and conservative.
 - One Activity name avoids an unbounded set of tiny Activities while closed
   tags retain type safety.
-- Provider health, inventory, credit state, budgets, and spend must be durable
-  scoped data rather than per-process observations.
+- Provider health, inventory, credit state, budgets, and spend must be shared,
+  scoped state rather than per-process observations. Redis owns live budget
+  status; PostgreSQL owns the durable journal and historical operation cost.
 - Adding a query kind requires coordinated Go, JSON fixture, OCaml codec, GADT,
   authorization, and compatibility work.
 

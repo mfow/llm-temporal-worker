@@ -11,8 +11,9 @@ in alongside the architecture and active v1 completion plans. The plans
 identify remaining hardening and release evidence; the current code and its
 tests are the source of truth for behavior that has already been implemented.
 
-The accepted post-v1 design is documentation-only and not yet implemented. It
-adds delta-only forkable conversations, compaction, exact-response caching,
+The accepted initial-release design is documentation-only and not yet
+implemented. It replaces the unreleased v1 contract in place and adds
+delta-only forkable conversations, compaction, exact-response caching,
 provider affinity, resumable polling, worker-owned PostgreSQL, typed queries,
 exact USD accounting, and a unified OCaml client:
 
@@ -32,10 +33,10 @@ exact USD accounting, and a unified OCaml client:
 | Ambiguous dispatch | Never resend automatically when a provider may have accepted a billable request |
 | Continuation | Immutable opaque handles backed by a state store and pinned to an endpoint when provider state requires it |
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
-| Shared state | Redis is the v1 production backend; memory is for tests and single-process development only |
-| Activity scope | Inference only; tool execution and agent-loop orchestration stay in caller workflows |
-| Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported |
-| Deployment | One stateless worker image, horizontally scalable when Redis is enabled |
+| Shared state | Redis is required for exact active budgets/throttles; worker PostgreSQL is required for durable operation, journal, conversation, cache, and control state; memory is a test reference only |
+| Activity scope | Generate, Compact, and typed Query only; tool execution and agent-loop orchestration stay in caller workflows |
+| Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported. Compact and Query are separate final-response Activities |
+| Deployment | One stateless worker image, horizontally scalable only when replicas share both configured Redis and worker-PostgreSQL namespaces |
 | Go baseline | Go 1.26, using the latest security patch in that release line |
 
 ## Read in this order
@@ -53,10 +54,10 @@ exact USD accounting, and a unified OCaml client:
 11. [Testing strategy](testing/strategy.md)
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
 13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
-14. [Post-v1 conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
-15. [Post-v1 PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
-16. [Post-v1 OCaml client design](architecture/ocaml-conversation-and-query-client.md)
-17. [Post-v1 implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+14. [Initial-release conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
+15. [Initial-release Redis-budget/PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
+16. [Initial-release OCaml client design](architecture/ocaml-conversation-and-query-client.md)
+17. [Initial-release implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 
 ## Reference material
 
@@ -84,12 +85,15 @@ The first release is complete only when all of these statements are true:
   changes service class without an explicit request fallback.
 - The operation ledger returns a cached completed result on an Activity retry
   and refuses to replay an ambiguous provider dispatch.
-- Memory and Redis budget backends pass the same conformance suite, including
-  concurrent overlapping-window admission tests.
+- The in-memory exact-budget reference model and production Redis Function pass
+  the same atomic-window transition suite, including concurrent
+  overlapping-window admission tests; PostgreSQL journal writes/rebuilds pass
+  their separate contract.
 - The worker passes Temporal Activity tests for retry, heartbeat, cancellation,
   graceful shutdown, and non-retryable error typing.
 - The container runs as a non-root user, Kubernetes probes exercise real
-  readiness dependencies, and two-replica Redis-backed smoke tests pass.
+  Redis and worker-PostgreSQL readiness dependencies, and two-replica smoke
+  tests pass.
 - Pull-request and master GitHub Actions are green; master also builds daily at
   05:00 in `Australia/Sydney`.
 

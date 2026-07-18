@@ -18,7 +18,9 @@ a complete materialized conversation lineage.
 
 ## Decision
 
-Add **llm.generate.v2** around an immutable, tenant-bound checkpoint graph.
+Replace the unreleased **llm.generate.v1** contract in place with an immutable,
+tenant-bound checkpoint graph. Do not add a v2 name or legacy v1 adapter solely
+for pre-release compatibility.
 Each request names zero or one parent checkpoint, appends new semantic items,
 and supplies a sparse settings patch. Omitted settings inherit from the parent;
 explicit set and clear operations are distinct. A successful request creates
@@ -47,8 +49,8 @@ machine when a projected provider context crosses a configured threshold.
 - Provider-native continuation can reduce cost and latency, but cannot replace
   a portable canonical lineage unless the request explicitly accepts a hard
   provider pin.
-- Existing **llm.generate.v1** callers require a compatibility period; v2 does
-  not reinterpret v1 payloads.
+- Go schemas/fixtures and the existing OCaml wrapper change together before the
+  first release. There is no dual-contract compatibility period.
 
 ## Rejected alternatives
 

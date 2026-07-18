@@ -1,11 +1,15 @@
 # Deployment and Operations
 
-> This chapter describes current v1 deployment. The accepted post-v1 cutover
-> replaces Redis authority with a separate worker-owned PostgreSQL database,
-> roles, migrations, backup/restore, and readiness checks. Temporal's database
-> remains separate. See
+> This chapter describes the current pre-release deployment. The accepted
+> initial-release change keeps Redis as the required low-latency exact budget/
+> throttle engine and
+> adds worker-owned PostgreSQL for durable state, exact accounting, response
+> cache, and control-plane queries. PostgreSQL roles, initial schema
+> installation, backup/restore, and readiness checks are explicit. Both the
+> Redis prefix and PostgreSQL database/schema/relation prefix are configurable;
+> Temporal-owned relations remain out of scope. See
 > [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md)
-> and its ordered schema cutover.
+> and its ordered storage composition.
 
 ## Process modes
 
@@ -63,8 +67,9 @@ offline and checks these invariants before a manifest is reviewed.
 - NetworkPolicy examples;
 - Kustomization.
 
-Example overlays demonstrate Redis/TLS, AWS workload identity, Azure workload
-identity, and static secret references without committing values.
+Example overlays demonstrate Redis/TLS, PostgreSQL/TLS, AWS workload identity,
+Azure workload identity, and static secret references without committing
+values.
 
 The base ConfigMap contains an intentionally incomplete production template:
 operators must replace the example image/config/catalog/identity values in a
@@ -86,11 +91,15 @@ while another is valid. A configuration with zero eligible routes is not ready.
 
 The runtime's required state checks are bounded by the configured readiness
 timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
-configured AOF/RDB policy, and expose the exact configured admission Function
-library/version/digest. The default Function path is provisioned by deployment
+configured AOF/RDB policy, and expose the exact configured budget Function
+library/version/digest plus a complete active budget generation/manifest and
+healthy change Stream. The default Function path is provisioned by deployment
 automation before the worker starts; the runtime only verifies and calls it.
 The explicit Lua compatibility mode similarly requires a preloaded script and
-never falls back to loading or replacing code. S3 readiness uses `HeadBucket`
+never falls back to loading or replacing code. PostgreSQL must complete a
+bounded read-only transaction, match the configured database/schema/prefix and
+schema-contract marker, expose all required indexes, use UTC, and grant exactly
+the runtime capabilities. S3 readiness uses `HeadBucket`
 against the configured bucket only, never a tenant key. A failed state check
 keeps liveness `200`, sets readiness `503`, and pauses Temporal polling;
 periodic checks resume polling only after every dependency has recovered. The
@@ -111,6 +120,30 @@ The process accepts a YAML file path through `--config`. Provider credentials
 use environment/file/workload-identity references and are resolved after
 parsing.
 
+Worker state namespaces are process-lifetime deployment settings. The current
+Redis composition reads **state.redis.key_prefix**, optionally overridden by
+**LLMTW_REDIS_KEY_PREFIX**, and uses it for every worker-owned Redis key. The
+initial PostgreSQL composition independently reads **database**, **schema**, and
+**table_prefix**, optionally overridden by **LLMTW_POSTGRES_DATABASE**,
+**LLMTW_POSTGRES_SCHEMA**, and **LLMTW_POSTGRES_TABLE_PREFIX**. See the
+[configuration contract](../reference/configuration.md#state-namespace-selection)
+for validation and defaults.
+
+Readiness verifies the resolved Redis prefix and PostgreSQL physical namespace;
+it never discovers another namespace by scanning. Reload rejects a namespace
+change and tells the operator a restart is required. Kubernetes and Compose
+examples set explicit values so two deployments can share a server without
+colliding. Redis ACL examples restrict the configured key prefix. PostgreSQL
+grants bind the configured schema-qualified prefixed relations; a table prefix
+alone is not presented as a security boundary.
+
+This is an unreleased clean initialization. Deployment work for this change
+must not add data copying, backfill, compatibility reads/writes, legacy
+namespace fallbacks, or namespace rename jobs. Redis and PostgreSQL remain
+simultaneously deployed because they own different facts, not as a transition
+between two authorities. If a deployed release later needs to move durable
+state, that release receives a separate migration and rollback design.
+
 Every deployed provider endpoint must declare its explicit `outbound_hosts`
 policy alongside its base URL. The worker resolves those names at connection
 time and refuses private, loopback, link-local, multicast, unspecified,
@@ -130,9 +163,11 @@ The internal application package supports an atomic reload API:
 1. read a complete new file;
 2. parse with unknown fields rejected;
 3. resolve all references and compile catalogs;
-4. validate routes, cycles, capability mappings, prices, budgets, retention, and
-   Redis numeric bounds;
-5. build clients and perform bounded Redis and bucket-only dependency checks;
+4. validate routes, cycles, capability mappings, prices, budgets, retention,
+   Redis fixed-width budget amount/member/coverage bounds, and PostgreSQL
+   physical namespace;
+5. build clients and perform bounded Redis, PostgreSQL, and bucket-only
+   dependency checks;
 6. atomically publish the snapshot;
 7. drain old clients after their captured Activities finish.
 
@@ -177,13 +212,18 @@ attempting to parse logs for configuration content.
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
 
-The accepted PostgreSQL/v2 cutover removes the two **micro_usd** metrics as
+The accepted initial PostgreSQL change removes the two **micro_usd** metrics as
 authoritative money. Prometheus floating-point samples cannot faithfully carry
 **NUMERIC(38,18)**. Exact totals come from the typed PostgreSQL query Activity;
 telemetry exposes bounded counts such as
 **llmtw_cost_status_total{status,method}** and unknown-cost/price conditions.
 Dashboards must not reconstruct actual spend by treating an unknown observation
 as zero.
+
+Redis budget telemetry remains deliberately separate from money accounting:
+it exposes bounded counts, denials, reservation age, generation/Stream lag, and
+failure status. Exact USD remains available through typed query results rather
+than Prometheus floating-point samples.
 
 `llmtw_activity_duration_seconds{phase="total"}` measures the complete
 Temporal Activity boundary; its terminal counter uses only `completed`,
@@ -213,10 +253,10 @@ Temporal Activity attempts: a worker-origin failed retry followed by a
 completed retry contributes two observations. This query defines the metric
 semantics only; it is not live SLO or release evidence.
 
-`llmtw_budget_reserved_micro_usd` is intentionally not written by the engine:
-an engine-local value would incorrectly overwrite the aggregate reservation of
-other workers sharing an admission store. It remains reserved for a future
-shared-store aggregate read with Redis conformance coverage.
+`llmtw_budget_reserved_micro_usd` is removed rather than repurposed. An
+engine-local value would incorrectly overwrite the aggregate reservation of
+other workers, and Prometheus cannot preserve the Redis/PostgreSQL 18-decimal
+amount exactly.
 
 ## Logs and traces
 
@@ -251,9 +291,10 @@ Release dashboards and runbooks cover:
 
 ## Local stack
 
-`compose.yaml` starts pinned Postgres-backed Temporal development services,
-Redis with persistence, a development-only durable file-blob volume, and a
-deterministic provider mock. The `worker` profile is opt-in because it requires
+`compose.yaml` starts pinned Postgres-backed Temporal development services, a
+worker-owned PostgreSQL namespace, Redis with persistence, a development-only
+durable file-blob volume, and a deterministic provider mock. The `worker`
+profile is opt-in because it requires
 a local continuation HMAC key. Profiles add the worker without introducing a
 live provider credential. Local smoke checks remain
 parser/configuration/readiness checks because the provider mock resolves to a
@@ -263,17 +304,19 @@ Docker-private address and the worker deliberately denies it:
    without creating containers;
 2. use `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` in an authorized
    local Docker environment to boot the worker, verify the exact live/ready
-   endpoints, and stop/restore its shared Redis dependency;
+   endpoints, and independently stop/restore its shared Redis and worker
+   PostgreSQL dependencies;
 3. exercise a real Temporal Activity through a content-free injected adapter
    in the Go test process rather than a Compose-network provider request.
 
 `make compose-live-integration` is explicitly opt-in and fails closed unless
 `LLMTW_COMPOSE_LIVE=1`. It creates a unique Compose project and temporary
-continuation key, starts the worker only after Redis Function and blob-volume
-provisioning complete, and removes those project resources, temporary key, Go
+continuation key, starts the worker only after Redis Function, PostgreSQL
+schema, and blob-volume provisioning complete, and removes those project
+resources, temporary key, Go
 cache, and generated image tags on exit. The live Temporal test uses two
-worker replicas and the shared Redis admission store: after the mock accepts,
-the first worker stops and the replacement must observe a completed replay or
+worker replicas with shared Redis budgets/throttles and worker PostgreSQL: after the
+mock accepts, the first worker stops and the replacement must observe a completed replay or
 the conservative `llm_ambiguous_dispatch` result without another dispatch or
 budget reservation. It never calls `provider-mock` and must not create a
 Docker-private-address bypass to satisfy this proof.
@@ -298,11 +341,12 @@ make compose-smoke
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
-The readiness integration target starts one digest-pinned local Redis instance,
-explicitly provisions the test Function, then stops and restores Redis while a
-worker is running. It proves liveness remains `200`, readiness transitions
-`200` to `503` to `200`, polling resumes only after recovery, and no provider
-call is made. The Compose smoke check only validates the model and local
+The readiness integration target starts digest-pinned Redis and PostgreSQL
+instances and provisions the Redis Function and initial worker schema. It stops
+and restores each dependency independently while a worker is running. It
+proves liveness remains `200`, readiness transitions `200` to `503` to `200`,
+polling resumes only after recovery, and no provider call is made. The Compose
+smoke check only validates the model and local
 fixture invariants; `compose-live-integration` is the separately authorized
 Docker gate. The Kubernetes check renders every overlay with `kubectl
 kustomize` and never contacts a cluster. Both checks use only checked-in

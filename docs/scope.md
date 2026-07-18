@@ -157,7 +157,7 @@ latency:
 The implementation must benchmark these targets rather than treating them as
 guaranteed properties of the design.
 
-## Accepted post-v1 scope
+## Accepted initial-release scope
 
 The current v1 in-scope/out-of-scope lists remain implementation truth. The
 accepted next phase is specified, but not shipped, in the
@@ -167,5 +167,6 @@ and [OCaml client design](architecture/ocaml-conversation-and-query-client.md).
 That phase adds delta-only immutable conversation branches, explicit/automatic
 compaction, exact-response caching, provider cache affinity, resumable provider
 polling, typed control queries, exact decimal USD accounting, worker-owned FX
-normalization, and PostgreSQL authority. It deliberately keeps tool execution
+normalization, Redis authority for the active budget working set, and
+PostgreSQL durable journaling/state. It deliberately keeps tool execution
 and agent-loop decisions in caller Workflows.

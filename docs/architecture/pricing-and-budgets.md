@@ -1,10 +1,12 @@
 # Pricing and Budgets
 
-> This chapter describes current v1. The accepted PostgreSQL cutover replaces
-> authoritative integer microUSD accounting with exact
+> This chapter first describes the current pre-release Redis implementation.
+> The accepted initial-release storage split keeps the complete active budget
+> working set and atomic admission in Redis while PostgreSQL stores the durable
+> budget journal and exact
 > **NUMERIC(38,18)** USD, removes downstream/config currency fields, and makes
 > the Go worker responsible for future FX retrieval and USD normalization.
-> V2 catalog prices and actual costs are nullable when genuinely unknown; zero
+> Initial-release catalog prices and actual costs are nullable when genuinely unknown; zero
 > is reserved for a known zero charge. See
 > [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
 
@@ -46,8 +48,9 @@ Redis Lua numbers are exact only within their integer-safe range. Configuration
 compilation rejects any single limit, bucket total, reservation, or possible
 sum at or above `2^53` microUSD. Go code also checks `int64` overflow.
 
-This is a documented v1 limitation, not the target representation. The
-PostgreSQL cutover replaces microUSD with **NUMERIC(38,18)**, providing 18
+This is a documented current-implementation limitation, not the target
+representation. The PostgreSQL durable ledger replaces microUSD with
+**NUMERIC(38,18)**, providing 18
 fractional digits and 20 whole-dollar digits. Its contract tests cover
 sub-micro-dollar amounts, whole dollars, ten-dollar charges, large aggregates,
 and overflow rejection without any binary floating-point conversion.
@@ -84,7 +87,7 @@ Currency, method, and catalog version are empty, no monetary reservation is
 created, and a provider-reported amount is not promoted to an auditable cost
 without a current catalog quote. Metrics make the condition visible.
 
-V2 removes that zero sentinel. Unknown catalog components and actual costs are
+The initial-release v1 replacement removes that zero sentinel. Unknown catalog components and actual costs are
 NULL with an explicit status/reason, while exact zero means known free. Known
 spend totals exclude NULLs and separately report unknown operation counts.
 
@@ -159,13 +162,13 @@ budgets:
         service_class: priority
       windows:
         - duration: 1h
-          limit_micro_usd: 25000000
+          limit_usd: "25.000000000000000000"
           bucket: 1m
         - duration: 24h
-          limit_micro_usd: 250000000
+          limit_usd: "250.000000000000000000"
           bucket: 5m
         - duration: 30d
-          limit_micro_usd: 3000000000
+          limit_usd: "3000.000000000000000000"
           bucket: 1h
 ```
 
@@ -244,6 +247,34 @@ union windows, and either creates the next `reserved` attempt or terminally
 records denial. Complete performs the same matching reconciliation for the
 successful final attempt and releases reservations held only for unused routes.
 
+## Initial-release throttle and monetary-budget split
+
+The initial release does not retire Redis. It splits the current combined
+`AdmissionStore` responsibility into two explicitly sequenced ports:
+
+- `BudgetStore` in Redis holds every bucket/reservation needed for the complete
+  active horizon and atomically enforces exact monetary windows alongside
+  request, token, and concurrency throttles.
+- `BudgetJournal` in PostgreSQL records each accepted reservation,
+  reconciliation, release, and exact/unknown actual cost before the associated
+  provider side effect. It is the rebuild/audit source, not a steady-state
+  budget-read path.
+
+Redis encodes each `NUMERIC(38,18)` amount as one fixed-width 38-digit unsigned
+integer string scaled by `10^18`. Its Function uses string comparison and
+checked digit-wise addition/subtraction; it never converts a full amount to a
+Lua number and never rounds. PostgreSQL, Go, JSON, and OCaml use the same exact
+value semantics.
+
+For new work the engine reserves Redis first, appends the PostgreSQL journal,
+then dispatches. PostgreSQL write failure triggers a best-effort Redis release; an
+unconfirmed release remains charged until its TTL, which is conservative.
+Completion commits exact/unknown cost in PostgreSQL before idempotently
+reconciling the Redis budget. Retry first resolves the durable PostgreSQL
+operation so a completed replay is never charged again. Both stores fail closed
+for new paid dispatches. This is not a shared cross-store transaction and no
+correctness claim depends on both writes committing atomically.
+
 ## Denial and retry
 
 A denial reports:
@@ -264,17 +295,19 @@ provider.
 | Mode | Use | Guarantee |
 | --- | --- | --- |
 | Memory | unit tests and explicitly single-process development | process-local only; restart loses state |
-| Redis | production and multi-replica development | shared atomic admission and durable operation records subject to Redis persistence |
+| Redis plus PostgreSQL | production and multi-replica development | Redis owns live atomic budgets/throttles; PostgreSQL owns durable replay, budget journal, and cost facts |
 
-Production Redis uses authentication/TLS, `noeviction`, AOF plus RDB, monitored
+Production Redis remains required and uses authentication/TLS, `noeviction`, AOF plus RDB, monitored
 persistence errors, and backups. `appendfsync always` provides the strongest
 reservation durability at higher latency; `everysec` may lose about a second of
-writes during a crash and must be an explicit risk acceptance. Redis failure
-causes admission to fail closed.
+writes during a crash and must be an explicit risk acceptance. Redis or
+PostgreSQL failure causes new paid admission to fail closed.
 
 ## Conformance properties
 
-Both stores must pass identical black-box tests proving:
+The current memory/Redis stores retain their existing conformance. The
+initial-release split adds exact Redis budget-state and PostgreSQL journal
+contracts plus end-to-end tests proving:
 
 - no accepted schedule exceeds a limit under concurrent Begin calls;
 - overlapping policies and windows are all charged atomically;
