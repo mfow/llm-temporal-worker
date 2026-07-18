@@ -145,6 +145,45 @@ let () =
                          format = Json_schema_format {
                            name = "result"; description = None; schema = `Bool true;
                            strict = true; } } });
+  expect_error
+    (Temporal.Codec.encode request_codec
+       { request_value with
+         continuation = Some {
+           handle = continuation_handle "";
+           endpoint_id = None; model = None; expires_at = None; pinned = true;
+           provider_state = None;
+         } });
+  expect_error
+    (Temporal.Codec.encode request_codec
+       { request_value with
+         continuation = Some {
+           handle = continuation_handle "continuation-42";
+           endpoint_id = None; model = None; expires_at = Some "tomorrow"; pinned = true;
+           provider_state = None;
+         } });
+  expect_error
+    (Temporal.Codec.encode request_codec
+       { request_value with
+         continuation = Some {
+           handle = continuation_handle "continuation-42";
+           endpoint_id = None; model = None; expires_at = None; pinned = true;
+           provider_state = Some [{
+             provider = provider_id "";
+             endpoint_family = endpoint_family "responses";
+             media_type = "application/json";
+             opaque = "state";
+           }];
+         } });
+  let valid_expiry_request = {
+    request_value with
+    continuation = Some {
+      handle = continuation_handle "continuation-42";
+      endpoint_id = None; model = None;
+      expires_at = Some "2026-07-18T13:45:00.123+10:00";
+      pinned = true; provider_state = None;
+    };
+  } in
+  ignore (expect_ok (Temporal.Codec.encode request_codec valid_expiry_request));
   let request_payload = expect_ok (Temporal.Codec.encode request_codec request_value) in
   assert_equal "json/plain" (List.assoc "encoding" request_payload.metadata);
   let request_envelope = Yojson.Safe.from_string (Bytes.to_string request_payload.data) in
@@ -294,6 +333,27 @@ let () =
   (match decoded_request.continuation with
    | Some { endpoint_id = None; model = None; provider_state = Some [ _ ]; _ } -> ()
    | _ -> failwith "request continuation did not preserve typed optional fields");
+  let encoded_continuation =
+    match List.assoc "continuation" encoded_request with
+    | `Assoc fields -> fields
+    | _ -> failwith "request continuation"
+  in
+  let invalid_continuation_payload continuation =
+    request_payload_with
+      (replace_field "continuation" (`Assoc continuation) encoded_request)
+  in
+  expect_error
+    (Temporal.Codec.decode request_codec
+       (invalid_continuation_payload
+          (replace_field "handle" (`String "") encoded_continuation)));
+  expect_error
+    (Temporal.Codec.decode request_codec
+       (invalid_continuation_payload
+          (("expires_at", `String "tomorrow") :: encoded_continuation)));
+  expect_error
+    (Temporal.Codec.decode request_codec
+       (invalid_continuation_payload
+          (("expires_at", `String "2026-02-31T13:45:00Z") :: encoded_continuation)));
   let response_payload = expect_ok (Temporal.Codec.encode response_codec response_value) in
   let response_envelope = Yojson.Safe.from_string (Bytes.to_string response_payload.data) in
   let response_fields = match response_envelope with `Assoc fields -> fields | _ -> failwith "response envelope is not an object" in

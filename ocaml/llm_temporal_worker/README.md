@@ -81,3 +81,10 @@ Errors are returned unchanged as `Temporal.Error.t`; the wrapper does not
 retry, continue, or stream after an activity result. Callers that inject a
 `dispatch` through `invoke_once` can use the same one-shot/error-propagation
 contract in deterministic unit tests.
+
+Continuation handles and provider-state identifiers/media types are required
+to be non-empty. `continuation.expires_at`, when present, must be an RFC3339
+timestamp (the same format emitted by the Go worker). These cross-language
+invariants are checked during encode and decode so malformed values fail as a
+codec error before an Activity is scheduled or invalid data enters Temporal
+history.
