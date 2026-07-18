@@ -26,7 +26,7 @@ type dispatcher =
 let invoke_once ?task_queue ~(dispatch : dispatcher) input =
   dispatch ?task_queue generate_activity input
 
-let one_shot_retry_policy =
+let activity_retry_policy =
   match Temporal.Activity.Retry_policy.make ~initial_interval:(Temporal.Duration.of_ms 1L)
           ~backoff_coefficient:1.0 ~maximum_interval:(Temporal.Duration.of_ms 1L)
           ~maximum_attempts:1 () with
@@ -36,7 +36,7 @@ let one_shot_retry_policy =
 let activity_dispatch ?task_queue activity input =
   Temporal.Activity.execute
     ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:one_shot_retry_policy activity input
+    ~retry_policy:activity_retry_policy activity input
 
 let execute ?task_queue input = invoke_once ?task_queue ~dispatch:activity_dispatch input
 let workflow ?task_queue () =
