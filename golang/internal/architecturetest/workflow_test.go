@@ -1,0 +1,968 @@
+package architecturetest
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	yaml "go.yaml.in/yaml/v4"
+)
+
+const (
+	checkoutActionPin = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
+	setupGoActionPin  = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
+)
+
+var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+type workflowDocument struct {
+	name   string
+	raw    string
+	fields map[string]any
+}
+
+type releaseMakeInvocation struct {
+	workflow string
+	job      string
+	target   string
+	line     string
+}
+
+func TestWorkflowYAMLParses(t *testing.T) {
+	for _, name := range []string{"master.yml", "pull-request.yml", "release.yml"} {
+		_ = readWorkflow(t, name)
+	}
+}
+
+func TestWorkflowContract(t *testing.T) {
+	pullRequest := readWorkflow(t, "pull-request.yml")
+	master := readWorkflow(t, "master.yml")
+
+	assertPullRequestTrigger(t, pullRequest)
+	assertReadOnlyPermissions(t, pullRequest)
+	assertMasterTriggers(t, master)
+	assertReadOnlyPermissions(t, master)
+	for _, workflow := range []workflowDocument{pullRequest, master} {
+		assertWorkflowControls(t, workflow)
+		assertVerificationStep(t, workflow)
+		assertRequiredOfflineGates(t, workflow)
+	}
+}
+
+func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		lower := strings.ToLower(workflow.raw)
+		for _, forbidden := range []string{
+			"secrets.",
+			"openai_api_key",
+			"anthropic_api_key",
+			"azure_openai",
+			"aws_access_key_id",
+			"aws_secret_access_key",
+			"llmtw_live_",
+			"kubectl apply",
+			"helm upgrade",
+			"docker push",
+			"cosign sign",
+			"gh release",
+			"id-token: write",
+			"packages: write",
+		} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("%s contains forbidden credential or deployment reference %q", workflow.name, forbidden)
+			}
+		}
+	}
+}
+
+func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	pullRequest := readWorkflow(t, "pull-request.yml")
+	release := readWorkflow(t, "release.yml")
+
+	job := workflowJob(t, master, "release-evidence")
+	assertJobReadOnlyPermissions(t, master.name, "release-evidence", job)
+	if scalarString(t, master.name, job, "if") != "github.event_name == 'push' && github.ref == 'refs/heads/master'" {
+		t.Fatalf("release-evidence job must run only on a master push, got %#v", job["if"])
+	}
+	if scalarString(t, master.name, job, "needs") != "verify" {
+		t.Fatalf("release-evidence job must follow verify, got %#v", job["needs"])
+	}
+	if _, ok := workflowMapping(t, pullRequest, "jobs")["release-evidence"]; ok {
+		t.Fatal("pull-request workflow must not run release evidence collection")
+	}
+
+	for _, action := range []string{
+		checkoutActionPin,
+		setupGoActionPin,
+		"docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+		"azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede",
+		"anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610",
+		"aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1",
+		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+	} {
+		assertJobUsesAction(t, master, "release-evidence", action)
+	}
+	assertJobActionInput(t, master, "release-evidence", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "version", "v0.16.2")
+	assertJobActionInput(t, master, "release-evidence", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "driver-opts", "image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27")
+	assertJobActionInput(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "version", "v1.32.6")
+	assertJobActionPrecedesRunCommand(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "--image-oci-layout \"$RUNNER_TEMP/image.oci\"")
+	for _, command := range []string{"make release-verify"} {
+		if !jobHasRunCommand(job, command) {
+			t.Fatalf("release-evidence job does not run %q", command)
+		}
+	}
+	for _, want := range []string{
+		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
+		"input: ${{ runner.temp }}/image.oci",
+		"syft-version: v1.44.0",
+		"version: v0.72.0",
+		"version: v1.32.6",
+		"RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6",
+		"trivy-config: scripts/release/trivy.yaml",
+		"retention-days: 14",
+	} {
+		if !strings.Contains(master.raw, want) {
+			t.Fatalf("master release-evidence job does not retain exact OCI evidence boundary %q", want)
+		}
+	}
+
+	if err := validateReleaseMakeInvocationPolicy(master, pullRequest, release); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReleaseEvidencePathOverridePolicy(master); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkflowReleaseEvidenceTemporaryOCIDirectoryPolicyRejectsRetentionAndMissingCleanup(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	for _, test := range []struct {
+		name        string
+		replacement string
+	}{
+		{
+			name:        "retained OCI directory path",
+			replacement: "release-artifacts/image.oci",
+		},
+		{
+			name:        "missing cleanup",
+			replacement: "true",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := master
+			switch test.name {
+			case "retained OCI directory path":
+				mutated.raw = strings.ReplaceAll(mutated.raw, "$RUNNER_TEMP/image.oci", test.replacement)
+				mutated.raw = strings.ReplaceAll(mutated.raw, "${{ runner.temp }}/image.oci", test.replacement)
+			case "missing cleanup":
+				mutated.raw = strings.Replace(mutated.raw, `rm -rf -- "$RUNNER_TEMP/image.oci"`, test.replacement, 1)
+			}
+			if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(mutated); err == nil {
+				t.Fatalf("temporary OCI directory policy accepted %s", test.name)
+			}
+		})
+	}
+}
+
+func TestWorkflowReleaseMakeInvocationPolicyRejectsNonExactLines(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	pullRequest := readWorkflow(t, "pull-request.yml")
+	release := readWorkflow(t, "release.yml")
+	for _, mutation := range []struct {
+		name        string
+		replacement string
+	}{
+		{name: "extra argument", replacement: "          make release-verify arbitrary-nonrelease-arg"},
+		{name: "make option", replacement: "          make -C . release-verify"},
+		{name: "environment assignment", replacement: "          EVIDENCE=1 make release-verify"},
+		{name: "shell chaining", replacement: "          make release-verify && true"},
+		{name: "continued command", replacement: "          make release-verify \\\n            arbitrary-nonrelease-arg"},
+		{name: "dynamic target", replacement: "          make \"$RELEASE_EVIDENCE_TARGET\""},
+		{name: "dynamic target suffix", replacement: "          make release-$RELEASE_EVIDENCE_TARGET"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			raw := strings.Replace(master.raw, "          make release-verify", mutation.replacement, 1)
+			mutated := parseWorkflow(t, master.name, raw)
+			if err := validateReleaseMakeInvocationPolicy(mutated, pullRequest, release); err == nil {
+				t.Fatalf("release Make policy accepted mutated line %q", mutation.replacement)
+			}
+		})
+	}
+
+	t.Run("second release target", func(t *testing.T) {
+		raw := strings.Replace(master.raw, "          make release-verify", "          make release-verify\n          make release-other", 1)
+		mutated := parseWorkflow(t, master.name, raw)
+		if err := validateReleaseMakeInvocationPolicy(mutated, pullRequest, release); err == nil {
+			t.Fatal("release Make policy accepted a second release target")
+		}
+	})
+}
+
+func TestWorkflowReleaseEvidenceRejectsEvidencePathOverrides(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	for _, mutation := range []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{
+			name: "job environment directory override",
+			old:  "    steps:\n      - name: Check out repository",
+			new:  "    env:\n      RELEASE_EVIDENCE_DIR: alternate-artifacts\n\n    steps:\n      - name: Check out repository",
+		},
+		{
+			name: "step environment file override",
+			old:  "          RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6",
+			new:  "          RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6\n          RELEASE_EVIDENCE_FILE: alternate-evidence.json",
+		},
+		{
+			name: "GitHub environment file override",
+			old:  "        run: |\n          bash scripts/release/collect.sh \\\n            --artifact-dir release-artifacts \\\n            --image-oci-layout \"$RUNNER_TEMP/image.oci\"",
+			new:  "        run: |\n          echo 'RELEASE_EVIDENCE_DIR=alternate-artifacts' >> \"$GITHUB_ENV\"\n          bash scripts/release/collect.sh \\\n            --artifact-dir release-artifacts \\\n            --image-oci-layout \"$RUNNER_TEMP/image.oci\"",
+		},
+		{
+			name: "shell declaration and export override",
+			old:  "          make release-verify",
+			new:  "          RELEASE_EVIDENCE_DIR=alternate-artifacts; export RELEASE_EVIDENCE_DIR\n          make release-verify",
+		},
+		{
+			name: "shell unset file override",
+			old:  "          make release-verify",
+			new:  "          unset RELEASE_EVIDENCE_FILE\n          make release-verify",
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			raw := replaceReleaseEvidenceJobSection(t, master.raw, mutation.old, mutation.new)
+			mutated := parseWorkflow(t, master.name, raw)
+			if err := validateReleaseEvidencePathOverridePolicy(mutated); err == nil {
+				t.Fatalf("release evidence path policy accepted %s", mutation.name)
+			}
+		})
+	}
+}
+
+func replaceReleaseEvidenceJobSection(t *testing.T, raw, old, new string) string {
+	t.Helper()
+	start := strings.Index(raw, "\n  release-evidence:\n")
+	if start < 0 {
+		t.Fatal("test fixture is missing release-evidence job")
+	}
+	section := raw[start:]
+	updated := strings.Replace(section, old, new, 1)
+	if updated == section {
+		t.Fatalf("test fixture is missing release-evidence mutation anchor %q", old)
+	}
+	return raw[:start] + updated
+}
+
+func TestWorkflowCompileOnlyLiveHarnessIsUncredentialed(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		if !hasRunCommand(workflow, "go test -tags=live ./integration/live -run '^$'") {
+			t.Fatalf("%s does not compile the guarded live-provider harness", workflow.name)
+		}
+		lower := strings.ToLower(workflow.raw)
+		for _, forbidden := range []string{"llmtw_live_", "secrets."} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("%s combines the compile-only live harness with %q", workflow.name, forbidden)
+			}
+		}
+	}
+}
+
+func TestWorkflowActionsUseImmutablePinsWithVersionComments(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+		readWorkflow(t, "release.yml"),
+	} {
+		for _, reference := range actionReferences(t, workflow) {
+			if strings.HasPrefix(reference, "./") {
+				continue
+			}
+			parts := strings.SplitN(reference, "@", 2)
+			if len(parts) != 2 || !immutableActionReference.MatchString(parts[1]) {
+				t.Fatalf("%s action %q is not pinned to an immutable commit", workflow.name, reference)
+			}
+		}
+		for _, want := range []string{setupGoActionPin} {
+			if !strings.Contains(workflow.raw, "uses: "+want+" # v6") {
+				t.Fatalf("%s does not record readable v6 comment beside immutable action pin %q", workflow.name, want)
+			}
+		}
+		if workflow.name == "release.yml" {
+			continue
+		}
+		if !strings.Contains(workflow.raw, "uses: "+checkoutActionPin+" # v6") {
+			t.Fatalf("%s does not record readable v6 comment beside immutable action pin %q", workflow.name, checkoutActionPin)
+		}
+	}
+}
+
+func TestWorkflowVerificationEntrypoint(t *testing.T) {
+	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
+	if !strings.Contains(makefile, "workflow-verify:") || !strings.Contains(makefile, "scripts/check-workflow-policy.sh") {
+		t.Fatal("Makefile does not expose workflow-verify through scripts/check-workflow-policy.sh")
+	}
+
+	script := readRepositoryFile(t, moduleRoot(t), "scripts", "check-workflow-policy.sh")
+	if !strings.Contains(script, "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12") {
+		t.Fatal("workflow policy helper does not pin actionlint v1.7.12")
+	}
+	const workflowPolicyTests = "go test ./internal/architecturetest -run '^(TestWorkflow.*|TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile)$'"
+	if !strings.Contains(script, workflowPolicyTests) {
+		t.Fatal("workflow policy helper does not execute the live-provider workflow contract test")
+	}
+}
+
+func TestWorkflowsRunHardenedImageVerification(t *testing.T) {
+	for _, name := range []string{"master.yml", "pull-request.yml"} {
+		workflow := readWorkflow(t, name)
+		if !hasRunCommand(workflow, "make image-verify") {
+			t.Fatalf("%s does not run make image-verify", workflow.name)
+		}
+	}
+}
+
+func assertPullRequestTrigger(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	triggers := workflowMapping(t, workflow, "on")
+	pullRequest := nestedMapping(t, workflow.name, triggers, "pull_request")
+	branches := stringSequence(t, workflow.name, pullRequest, "branches")
+	if len(branches) != 1 || branches[0] != "master" {
+		t.Fatalf("%s pull request branches = %v, want [master]", workflow.name, branches)
+	}
+}
+
+func assertReadOnlyPermissions(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	permissions := workflowMapping(t, workflow, "permissions")
+	if len(permissions) != 1 || scalarString(t, workflow.name, permissions, "contents") != "read" {
+		t.Fatalf("%s permissions = %#v, want only contents: read", workflow.name, permissions)
+	}
+}
+
+func assertMasterTriggers(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	triggers := workflowMapping(t, workflow, "on")
+	push := nestedMapping(t, workflow.name, triggers, "push")
+	branches := stringSequence(t, workflow.name, push, "branches")
+	if len(branches) != 1 || branches[0] != "master" {
+		t.Fatalf("%s push branches = %v, want [master]", workflow.name, branches)
+	}
+	if _, ok := triggers["workflow_dispatch"]; !ok {
+		t.Fatalf("%s does not support workflow_dispatch", workflow.name)
+	}
+
+	schedules, ok := triggers["schedule"].([]any)
+	if !ok || len(schedules) != 1 {
+		t.Fatalf("%s schedule = %#v, want one daily schedule", workflow.name, triggers["schedule"])
+	}
+	schedule, ok := schedules[0].(map[string]any)
+	if !ok {
+		t.Fatalf("%s schedule entry = %#v, want mapping", workflow.name, schedules[0])
+	}
+	if scalarString(t, workflow.name, schedule, "cron") != "0 5 * * *" {
+		t.Fatalf("%s cron = %q, want exact 05:00 daily schedule", workflow.name, scalarString(t, workflow.name, schedule, "cron"))
+	}
+	if scalarString(t, workflow.name, schedule, "timezone") != "Australia/Sydney" {
+		t.Fatalf("%s timezone = %q, want Australia/Sydney", workflow.name, scalarString(t, workflow.name, schedule, "timezone"))
+	}
+}
+
+func assertWorkflowControls(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	if _, ok := workflow.fields["concurrency"].(map[string]any); !ok {
+		t.Fatalf("%s does not declare workflow concurrency", workflow.name)
+	}
+	verify := nestedMapping(t, workflow.name, workflowMapping(t, workflow, "jobs"), "verify")
+	if _, ok := verify["timeout-minutes"]; !ok {
+		t.Fatalf("%s verify job does not declare a timeout", workflow.name)
+	}
+}
+
+func assertVerificationStep(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	if !hasRunCommand(workflow, "make workflow-verify") {
+		t.Fatalf("%s does not run make workflow-verify", workflow.name)
+	}
+}
+
+func assertRequiredOfflineGates(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	for _, command := range []string{
+		"scripts/check-go-format.sh",
+		"make schema-verify",
+		"make docs-verify",
+		"go vet ./...",
+		"go test -race ./...",
+		"go build ./...",
+	} {
+		if !strings.Contains(workflow.raw, command) {
+			t.Fatalf("%s does not retain required offline gate %q", workflow.name, command)
+		}
+	}
+}
+
+func readWorkflow(t *testing.T, name string) workflowDocument {
+	t.Helper()
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parseWorkflow(t, name, string(data))
+}
+
+func parseWorkflow(t *testing.T, name, raw string) workflowDocument {
+	t.Helper()
+	fields := map[string]any{}
+	if err := yaml.Load([]byte(raw), &fields, yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+		t.Fatalf("workflow %s is not valid YAML: %v", name, err)
+	}
+	return workflowDocument{name: name, raw: raw, fields: fields}
+}
+
+func readRepositoryFile(t *testing.T, root string, path ...string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(append([]string{root}, path...)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func workflowMapping(t *testing.T, workflow workflowDocument, key string) map[string]any {
+	t.Helper()
+	return nestedMapping(t, workflow.name, workflow.fields, key)
+}
+
+func nestedMapping(t *testing.T, name string, fields map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := fields[key]
+	if !ok {
+		t.Fatalf("%s is missing %q", name, key)
+	}
+	mapping, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s %q = %#v, want mapping", name, key, value)
+	}
+	return mapping
+}
+
+func stringSequence(t *testing.T, name string, fields map[string]any, key string) []string {
+	t.Helper()
+	value, ok := fields[key]
+	if !ok {
+		t.Fatalf("%s is missing %q", name, key)
+	}
+	sequence, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s %q = %#v, want sequence", name, key, value)
+	}
+	result := make([]string, len(sequence))
+	for index, item := range sequence {
+		stringValue, ok := item.(string)
+		if !ok {
+			t.Fatalf("%s %q item %d = %#v, want string", name, key, index, item)
+		}
+		result[index] = stringValue
+	}
+	return result
+}
+
+func scalarString(t *testing.T, name string, fields map[string]any, key string) string {
+	t.Helper()
+	value, ok := fields[key]
+	if !ok {
+		t.Fatalf("%s is missing %q", name, key)
+	}
+	stringValue, ok := value.(string)
+	if !ok {
+		t.Fatalf("%s %q = %#v, want string", name, key, value)
+	}
+	return stringValue
+}
+
+func actionReferences(t *testing.T, workflow workflowDocument) []string {
+	t.Helper()
+	jobs := workflowMapping(t, workflow, "jobs")
+	var references []string
+	for name, rawJob := range jobs {
+		job, ok := rawJob.(map[string]any)
+		if !ok {
+			t.Fatalf("%s job %q = %#v, want mapping", workflow.name, name, rawJob)
+		}
+		steps, ok := job["steps"].([]any)
+		if !ok {
+			t.Fatalf("%s job %q steps = %#v, want sequence", workflow.name, name, job["steps"])
+		}
+		for index, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok {
+				t.Fatalf("%s job %q step %d = %#v, want mapping", workflow.name, name, index, rawStep)
+			}
+			if reference, ok := step["uses"].(string); ok {
+				references = append(references, reference)
+			}
+		}
+	}
+	return references
+}
+
+func workflowJob(t *testing.T, workflow workflowDocument, name string) map[string]any {
+	t.Helper()
+	jobs := workflowMapping(t, workflow, "jobs")
+	rawJob, ok := jobs[name]
+	if !ok {
+		t.Fatalf("%s is missing job %q", workflow.name, name)
+	}
+	job, ok := rawJob.(map[string]any)
+	if !ok {
+		t.Fatalf("%s job %q = %#v, want mapping", workflow.name, name, rawJob)
+	}
+	return job
+}
+
+func assertJobUsesAction(t *testing.T, workflow workflowDocument, jobName, want string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		if step["uses"] == want {
+			return
+		}
+	}
+	t.Fatalf("%s job %q does not use %q", workflow.name, jobName, want)
+}
+
+func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, action, input, want string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok || step["uses"] != action {
+			continue
+		}
+		with, ok := step["with"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s job %q action %q has no inputs", workflow.name, jobName, action)
+		}
+		if got, ok := with[input].(string); !ok || got != want {
+			t.Fatalf("%s job %q action %q input %q = %#v, want %q", workflow.name, jobName, action, input, with[input], want)
+		}
+		return
+	}
+	t.Fatalf("%s job %q does not use %q", workflow.name, jobName, action)
+}
+
+func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, jobName, action, command string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	seenAction := false
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		if step["uses"] == action {
+			seenAction = true
+		}
+		run, _ := step["run"].(string)
+		for _, line := range strings.Split(run, "\n") {
+			if strings.TrimSpace(line) != command {
+				continue
+			}
+			if !seenAction {
+				t.Fatalf("%s job %q runs %q before %q", workflow.name, jobName, command, action)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s job %q does not run %q", workflow.name, jobName, command)
+}
+
+func assertJobReadOnlyPermissions(t *testing.T, workflowName, jobName string, job map[string]any) {
+	t.Helper()
+	permissions := nestedMapping(t, workflowName, job, "permissions")
+	if len(permissions) != 1 || scalarString(t, workflowName, permissions, "contents") != "read" {
+		t.Fatalf("%s job %q permissions = %#v, want only contents: read", workflowName, jobName, permissions)
+	}
+}
+
+func jobHasRunCommand(job map[string]any, command string) bool {
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		return false
+	}
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		run, ok := step["run"].(string)
+		if !ok {
+			continue
+		}
+		for _, line := range strings.Split(run, "\n") {
+			if strings.TrimSpace(line) == command {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func releaseMakeInvocations(workflow workflowDocument) []releaseMakeInvocation {
+	jobs, ok := workflow.fields["jobs"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	var invocations []releaseMakeInvocation
+	for jobName, rawJob := range jobs {
+		job, ok := rawJob.(map[string]any)
+		if !ok {
+			continue
+		}
+		steps, ok := job["steps"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok {
+				continue
+			}
+			run, ok := step["run"].(string)
+			if !ok {
+				continue
+			}
+			for _, line := range shellLogicalLines(run) {
+				fields := strings.Fields(strings.TrimSpace(line))
+				for index, field := range fields {
+					if normalizeShellWord(field) != "make" {
+						continue
+					}
+					for _, candidate := range fields[index+1:] {
+						target := normalizeMakeTarget(candidate)
+						if strings.HasPrefix(target, "release") {
+							invocations = append(invocations, releaseMakeInvocation{
+								workflow: workflow.name,
+								job:      jobName,
+								target:   target,
+								line:     strings.TrimSpace(line),
+							})
+							break
+						}
+						if shellCommandDelimiter(candidate) {
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	return invocations
+}
+
+func validateReleaseEvidencePathOverridePolicy(workflow workflowDocument) error {
+	jobs, ok := workflow.fields["jobs"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s has no jobs mapping", workflow.name)
+	}
+	rawJob, ok := jobs["release-evidence"]
+	if !ok {
+		return fmt.Errorf("%s is missing release-evidence job", workflow.name)
+	}
+	job, ok := rawJob.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s release-evidence job is not a mapping", workflow.name)
+	}
+	if err := validateNoEvidencePathEnvironment(workflow.name+" workflow", workflow.fields["env"]); err != nil {
+		return err
+	}
+	if err := validateNoEvidencePathEnvironment(workflow.name+" release-evidence job", job["env"]); err != nil {
+		return err
+	}
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		return fmt.Errorf("%s release-evidence job has no steps", workflow.name)
+	}
+	for index, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s release-evidence step %d is not a mapping", workflow.name, index)
+		}
+		if err := validateNoEvidencePathEnvironment(fmt.Sprintf("%s release-evidence step %d", workflow.name, index), step["env"]); err != nil {
+			return err
+		}
+		if rawRun, found := step["run"]; found {
+			run, ok := rawRun.(string)
+			if !ok {
+				return fmt.Errorf("%s release-evidence step %d run command is not a string", workflow.name, index)
+			}
+			if err := validateNoEvidencePathEnvironmentWrite(fmt.Sprintf("%s release-evidence step %d", workflow.name, index), run); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateReleaseEvidenceTemporaryOCIDirectoryPolicy(workflow workflowDocument) error {
+	const temporaryOCIDirectory = "$RUNNER_TEMP/image.oci"
+	const actionTemporaryOCIDirectory = "${{ runner.temp }}/image.oci"
+	for _, required := range []string{
+		"bash scripts/release/collect.sh \\",
+		"--artifact-dir release-artifacts \\",
+		"--image-oci-layout \"$RUNNER_TEMP/image.oci\"",
+		"layout-digest -layout \"$RUNNER_TEMP/image.oci\"",
+		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
+		"input: ${{ runner.temp }}/image.oci",
+		`rm -rf -- "$RUNNER_TEMP/image.oci"`,
+	} {
+		if !strings.Contains(workflow.raw, required) {
+			return fmt.Errorf("%s does not use the required temporary OCI directory boundary %q", workflow.name, required)
+		}
+	}
+	for _, forbidden := range []string{
+		"image.oci.tar",
+		"oci-archive:",
+		"docker load --input",
+		"release-artifacts/image.oci",
+		"-artifact image_layout=",
+	} {
+		if strings.Contains(workflow.raw, forbidden) {
+			return fmt.Errorf("%s retains or consumes a forbidden raw OCI image form %q", workflow.name, forbidden)
+		}
+	}
+	upload := strings.Index(workflow.raw, "path: release-artifacts/")
+	cleanup := strings.Index(workflow.raw, `rm -rf -- "$RUNNER_TEMP/image.oci"`)
+	if upload < 0 || cleanup <= upload {
+		return fmt.Errorf("%s does not remove the temporary OCI directory after artifact upload", workflow.name)
+	}
+	if !strings.Contains(workflow.raw, temporaryOCIDirectory) || !strings.Contains(workflow.raw, actionTemporaryOCIDirectory) {
+		return fmt.Errorf("%s does not bind all OCI tooling to the runner temporary directory", workflow.name)
+	}
+	return nil
+}
+
+func validateNoEvidencePathEnvironment(scope string, raw any) error {
+	if raw == nil {
+		return nil
+	}
+	environment, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s environment is not a mapping", scope)
+	}
+	for _, name := range []string{"RELEASE_EVIDENCE_DIR", "RELEASE_EVIDENCE_FILE"} {
+		if _, found := environment[name]; found {
+			return fmt.Errorf("%s must not override %s", scope, name)
+		}
+	}
+	return nil
+}
+
+func validateNoEvidencePathEnvironmentWrite(scope, run string) error {
+	lower := strings.ToLower(run)
+	for _, name := range []string{"RELEASE_EVIDENCE_DIR", "RELEASE_EVIDENCE_FILE"} {
+		if strings.Contains(lower, strings.ToLower(name)) {
+			// The canonical directory and evidence filename are intentionally
+			// fixed inside trusted CI. Reject every shell reference here rather
+			// than trying to parse shell syntax: that closes assignment, export,
+			// unset, and $GITHUB_ENV variants, including split declaration forms.
+			return fmt.Errorf("%s must not reference reserved evidence path variable %s in a run command", scope, name)
+		}
+	}
+	return nil
+}
+
+func validateReleaseMakeInvocationPolicy(workflows ...workflowDocument) error {
+	var invocations []releaseMakeInvocation
+	for _, workflow := range workflows {
+		if err := validateNoDynamicMakeArguments(workflow); err != nil {
+			return err
+		}
+		invocations = append(invocations, releaseMakeInvocations(workflow)...)
+	}
+	want := map[string]releaseMakeInvocation{
+		"master.yml/release-evidence": {
+			workflow: "master.yml",
+			job:      "release-evidence",
+			target:   "release-verify",
+			line:     "make release-verify",
+		},
+		"release.yml/preflight": {
+			workflow: "release.yml",
+			job:      "preflight",
+			target:   "release-verify",
+			line:     "make release-verify",
+		},
+	}
+	if len(invocations) != len(want) {
+		return fmt.Errorf("release evidence policy found %d make release* invocations, want %#v: %#v", len(invocations), want, invocations)
+	}
+	for _, invocation := range invocations {
+		key := invocation.workflow + "/" + invocation.job
+		expected, ok := want[key]
+		if !ok || invocation != expected {
+			return fmt.Errorf("release evidence policy found unexpected Make invocation %#v", invocation)
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		return fmt.Errorf("release evidence policy is missing Make invocations %#v", want)
+	}
+	return nil
+}
+
+func validateNoDynamicMakeArguments(workflow workflowDocument) error {
+	jobs, ok := workflow.fields["jobs"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s has no jobs mapping", workflow.name)
+	}
+	for jobName, rawJob := range jobs {
+		job, ok := rawJob.(map[string]any)
+		if !ok {
+			continue
+		}
+		steps, ok := job["steps"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok {
+				continue
+			}
+			run, ok := step["run"].(string)
+			if !ok {
+				continue
+			}
+			for _, line := range shellLogicalLines(run) {
+				fields := strings.Fields(strings.TrimSpace(line))
+				for index, field := range fields {
+					if normalizeShellWord(field) != "make" {
+						continue
+					}
+					for _, candidate := range fields[index+1:] {
+						if shellCommandDelimiter(candidate) {
+							break
+						}
+						if hasShellExpansion(candidate) {
+							return fmt.Errorf("%s job %q uses a dynamic Make argument", workflow.name, jobName)
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func hasShellExpansion(word string) bool {
+	return strings.ContainsAny(word, "$*?[") || strings.ContainsRune(word, '`') || strings.Contains(word, "{")
+}
+
+func shellLogicalLines(run string) []string {
+	var lines []string
+	var pending string
+	for _, rawLine := range strings.Split(run, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if pending == "" {
+			pending = line
+		} else {
+			pending += " " + line
+		}
+		if strings.HasSuffix(pending, "\\") {
+			pending = strings.TrimSpace(strings.TrimSuffix(pending, "\\"))
+			continue
+		}
+		if pending != "" {
+			lines = append(lines, pending)
+		}
+		pending = ""
+	}
+	if pending != "" {
+		lines = append(lines, pending)
+	}
+	return lines
+}
+
+func normalizeShellWord(word string) string {
+	return strings.Trim(word, "'\"$;&|()")
+}
+
+func normalizeMakeTarget(word string) string {
+	return strings.Trim(word, "'\"$;&|()\\")
+}
+
+func shellCommandDelimiter(word string) bool {
+	switch word {
+	case ";", "&&", "||", "|", "&":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasRunCommand(workflow workflowDocument, command string) bool {
+	jobs, ok := workflow.fields["jobs"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, rawJob := range jobs {
+		job, ok := rawJob.(map[string]any)
+		if !ok {
+			continue
+		}
+		steps, ok := job["steps"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok {
+				continue
+			}
+			run, ok := step["run"].(string)
+			if !ok {
+				continue
+			}
+			for _, line := range strings.Split(run, "\n") {
+				if strings.TrimSpace(line) == command {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

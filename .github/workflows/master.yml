@@ -87,8 +87,10 @@ jobs:
         with:
           go-version: 1.26.x
           cache: true
+          cache-dependency-path: golang/go.sum
 
       - name: Run bounded semantic fuzz shard
+        working-directory: golang
         run: FUZZ_TIME=250000x bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"
 
   verify:
@@ -144,7 +146,7 @@ jobs:
         id: go
         shell: bash
         run: |
-          if [[ -f go.mod ]]; then
+          if [[ -f golang/go.mod ]]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -156,41 +158,50 @@ jobs:
         with:
           go-version: 1.26.x
           cache: true
+          cache-dependency-path: golang/go.sum
 
       - name: Verify workflow policy
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: make workflow-verify
 
       - name: Check Go formatting
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         shell: bash
         run: bash scripts/check-go-format.sh
 
       - name: Verify schemas and documentation
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: |
           make schema-verify
           make docs-verify
 
       - name: Vet
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: go vet ./...
 
       - name: Test with race detector
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: go test -race ./...
 
       - name: Compile guarded live-provider harness
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: go test -tags=live ./integration/live -run '^$'
 
       - name: Compile guarded Redis benchmark
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: make redis-benchmark-compile
 
       - name: Verify source safety and supply chain
         id: security_verify
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: |
           mkdir -p security-artifacts
           SECURITY_REPORT=security-artifacts/security-verify.json make security-verify
@@ -200,31 +211,35 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: security-verify-report
-          path: security-artifacts/security-verify.json
+          path: golang/security-artifacts/security-verify.json
           if-no-files-found: error
           retention-days: 14
 
       - name: Run trusted Redis shared-state conformance
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: make redis-integration
 
       - name: Run trusted Redis readiness recovery
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: make readiness-integration
 
       - name: Run authorized Compose lifecycle
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: LLMTW_COMPOSE_LIVE=1 make compose-live-integration
 
       - name: Build worker
         if: steps.go.outputs.present == 'true'
+        working-directory: golang
         run: go build ./...
 
       - name: Detect container
         id: container
         shell: bash
         run: |
-          if [[ -f Dockerfile ]]; then
+          if [[ -f golang/Dockerfile ]]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -232,10 +247,12 @@ jobs:
 
       - name: Verify hardened container
         if: steps.container.outputs.present == 'true'
+        working-directory: golang
         run: make image-verify
 
       - name: Scheduled test repetition
         if: github.event_name == 'schedule' && steps.go.outputs.present == 'true'
+        working-directory: golang
         run: go test -race -count=5 ./...
 
   # This produces a retained, redacted evidence bundle only after the normal
@@ -259,6 +276,7 @@ jobs:
         with:
           go-version: 1.26.x
           cache: true
+          cache-dependency-path: golang/go.sum
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -281,6 +299,7 @@ jobs:
 
       - name: Inspect immutable OCI manifest descriptor
         id: image
+        working-directory: golang
         shell: bash
         run: |
           set -euo pipefail

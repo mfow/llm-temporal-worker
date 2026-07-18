@@ -36,15 +36,15 @@ The image has OCI source/revision/license labels, an SBOM, provenance attestatio
 and vulnerability scan in release CI. No configuration, credentials, test
 fixtures, or provider payloads are baked into it.
 
-The checked-in `Dockerfile` uses digest-pinned Go and Distroless bases, builds
+The checked-in `golang/Dockerfile` uses digest-pinned Go and Distroless bases, builds
 with `CGO_ENABLED=0`, and runs as uid `65532` with no shell. Kubernetes mounts
 `/tmp` as a bounded memory volume because the image is intended for a
-read-only root filesystem. `deploy/verify.sh` renders every Kustomize example
+read-only root filesystem. `golang/deploy/verify.sh` renders every Kustomize example
 offline and checks these invariants before a manifest is reviewed.
 
 ## Kubernetes base
 
-`deploy/kubernetes/base` contains:
+`golang/deploy/kubernetes/base` contains:
 
 - Deployment with one container, security context, resource requests/limits,
   probes, and graceful termination;

@@ -6,9 +6,10 @@ Tests prove semantic preservation, durable retry safety, and budget invariants.
 They do not merely prove that SDK constructors compile. All deterministic tests
 run without credentials or internet access.
 
-The standard implementation gate is:
+The standard implementation gate is run from the nested Go module:
 
 ```sh
+cd golang
 make fmt-check
 go vet ./...
 go test -race ./...
@@ -16,7 +17,7 @@ go build ./...
 docker build --tag llm-temporal-worker:local .
 ```
 
-`make fmt-check` delegates to `scripts/check-go-format.sh`. The helper passes
+`make fmt-check` delegates to `golang/scripts/check-go-format.sh`. The helper passes
 NUL-delimited Go source paths to `gofmt -l`, excludes `vendor` and
 `.worktrees`, and returns formatter failures instead of treating them as a
 clean result. It never modifies the checkout.

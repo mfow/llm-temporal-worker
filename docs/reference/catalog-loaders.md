@@ -1,6 +1,6 @@
 # Catalog loader contract
 
-`internal/catalog` is the only package that turns operator-supplied capability
+`golang/internal/catalog` is the only package that turns operator-supplied capability
 and price YAML into runtime snapshots. It is deliberately separate from the
 main configuration decoder so a reload can authenticate and compile every
 referenced file before publishing one new snapshot.
