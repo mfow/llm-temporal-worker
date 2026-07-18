@@ -13,7 +13,7 @@ files=(
 )
 
 pins="$(
-  rg --no-filename --only-matching 'ocaml-temporal\.git#[0-9a-f]{40}' "${files[@]}" \
+  grep -hEo 'ocaml-temporal\.git#[0-9a-f]{40}' "${files[@]}" \
     | sed 's/.*#//' \
     | sort -u
 )"
