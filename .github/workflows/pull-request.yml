@@ -62,6 +62,9 @@ jobs:
             --subpath=ocaml/llm_temporal_worker
           opam install --yes --with-test llm-temporal-ocaml
 
+      - name: Build downstream Dune consumer
+        run: opam exec -- dune build --root ocaml/consumer_smoke
+
   verify:
     name: Verify
     runs-on: ubuntu-latest

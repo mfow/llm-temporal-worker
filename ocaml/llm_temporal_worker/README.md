@@ -30,6 +30,12 @@ after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 
+The repository also contains a separate [downstream Dune consumer smoke
+project](../consumer_smoke). CI installs this package from the Git subpath,
+then builds that project against the installed public library. This catches
+packaging and public-name regressions that a build from the source directory
+cannot detect.
+
 ## Use
 
 ```ocaml
