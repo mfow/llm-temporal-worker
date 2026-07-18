@@ -350,6 +350,10 @@ let () =
     (Temporal.Codec.decode request_codec
        (invalid_continuation_payload
           (("expires_at", `String "tomorrow") :: encoded_continuation)));
+  expect_error
+    (Temporal.Codec.decode request_codec
+       (invalid_continuation_payload
+          (("expires_at", `String "2026-02-31T13:45:00Z") :: encoded_continuation)));
   let response_payload = expect_ok (Temporal.Codec.encode response_codec response_value) in
   let response_envelope = Yojson.Safe.from_string (Bytes.to_string response_payload.data) in
   let response_fields = match response_envelope with `Assoc fields -> fields | _ -> failwith "response envelope is not an object" in

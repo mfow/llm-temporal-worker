@@ -74,10 +74,13 @@ fallbacks, negative token/cost limits, invalid media, duplicate open-JSON
 members, and other protocol violations before a Temporal activity is called.
 
 `workflow` calls `Temporal.Activity.execute` once against the exact Go
-activity name `llm.generate.v1` with `maximum_attempts = 1`. The Go worker
-must serve the provided task queue (or the default queue when omitted).
-Errors return as `Temporal.Error.t`; this package never retries, continues, or
-streams after an activity result.
+activity name `llm.generate.v1` with the exported
+`Llm_temporal.activity_retry_policy` (`maximum_attempts = 1`). The Go worker
+must serve the provided task queue (or the SDK's worker queue when omitted).
+Errors are returned unchanged as `Temporal.Error.t`; the wrapper does not
+retry, continue, or stream after an activity result. Callers that inject a
+`dispatch` through `invoke_once` can use the same one-shot/error-propagation
+contract in deterministic unit tests.
 
 Continuation handles and provider-state identifiers/media types are required
 to be non-empty. `continuation.expires_at`, when present, must be an RFC3339

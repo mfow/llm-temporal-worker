@@ -233,6 +233,12 @@ let two_digits value offset =
              + Char.code value.[offset + 1] - Char.code '0')
   else None
 
+let four_digits value offset =
+  if offset + 3 < String.length value
+     && String.for_all is_ascii_digit (String.sub value offset 4)
+  then Some (int_of_string (String.sub value offset 4))
+  else None
+
 (* Go's [time.Parse(time.RFC3339Nano, ...)] is the canonical wire check.  Keep
    this dependency-free lexical equivalent on the OCaml side so malformed
    expiry values fail before an Activity is scheduled. *)
@@ -252,10 +258,17 @@ let valid_rfc3339 context value =
      || not (has_digits 17 19)
   then invalid ()
   else
-    match two_digits value 5, two_digits value 8, two_digits value 11,
-          two_digits value 14, two_digits value 17 with
-    | Some month, Some day, Some hour, Some minute, Some second ->
-        if month < 1 || month > 12 || day < 1 || day > 31
+    match four_digits value 0, two_digits value 5, two_digits value 8,
+          two_digits value 11, two_digits value 14, two_digits value 17 with
+    | Some year, Some month, Some day, Some hour, Some minute, Some second ->
+        let leap = year mod 4 = 0 && (year mod 100 <> 0 || year mod 400 = 0) in
+        let max_day =
+          match month with
+          | 2 -> if leap then 29 else 28
+          | 4 | 6 | 9 | 11 -> 30
+          | _ -> 31
+        in
+        if month < 1 || month > 12 || day < 1 || day > max_day
            || hour > 23 || minute > 59 || second > 59 then invalid ()
         else
           let zone_start =
