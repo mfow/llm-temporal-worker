@@ -7,11 +7,14 @@ module_root="$root/golang"
 
 arguments=("$@")
 for ((index = 0; index < ${#arguments[@]} - 1; index++)); do
-  if [[ "${arguments[index]}" == "--evidence" && "${arguments[index + 1]}" != /* ]]; then
-    arguments[index + 1]="$root/${arguments[index + 1]}"
-  fi
+  case "${arguments[index]}" in
+    --artifact-dir|--evidence)
+      if [[ "${arguments[index + 1]}" != /* ]]; then
+        arguments[index + 1]="$root/${arguments[index + 1]}"
+      fi
+      ;;
+  esac
 done
-cd "$module_root"
-exec go run ./tools/releaseverify verify \
+exec go -C "$module_root" run ./tools/releaseverify verify \
   -schema "$root/docs/release/evidence.schema.json" \
   "${arguments[@]}"
