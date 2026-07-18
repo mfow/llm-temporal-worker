@@ -75,7 +75,8 @@ flowchart LR
 9. **Lift and reconcile.** The adapter converts a one-shot response back to
    semantic types, captures request IDs and actual service tier, and normalizes
    usage. Pricing uses provider-reported cost when authoritative, otherwise the
-   pinned catalog.
+   pinned exact catalog. If neither establishes the real charge, actual cost is
+   NULL with an explicit unknown reason; reservations/bounds remain separate.
    If a definitely charged failure permits safe fallback, one atomic
    continuation transition finalizes that attempt and reserves the remaining
    plan before another dispatch.

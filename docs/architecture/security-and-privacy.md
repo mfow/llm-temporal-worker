@@ -1,5 +1,11 @@
 # Security and Privacy
 
+> The accepted post-v1 cache stores a bounded canonical v2 request JSONB per
+> operation and a digest/reference-only canonical cache manifest JSONB. Access
+> is restricted and neither is broadly indexed; lookup uses tenant-scoped
+> HMAC-SHA-256. See
+> [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md).
+
 ## Trust boundaries
 
 Untrusted inputs include Activity payloads, continuation handles, configuration
@@ -95,7 +101,7 @@ Prompts, outputs, tool arguments/results, images, documents, reasoning, and
 provider state are sensitive by default. The worker:
 
 - avoids content in logs, metrics, trace attributes, heartbeat details, and
-  ledger records;
+  current v1 ledger records;
 - uses BlobRefs to limit Temporal history content/size;
 - supports an external Temporal Payload Codec for encryption;
 - encrypts production blob/Redis traffic in transit and relies on configured
@@ -103,6 +109,12 @@ provider state are sensitive by default. The worker:
 - applies explicit retention/expiry and garbage collection;
 - records provider storage/retention choices in endpoint profiles;
 - provides content-free audit events for access and deletion.
+
+Post-v1 deliberately stores the bounded delta Activity request as JSONB for
+audit and cache-key verification. This is encrypted at rest/in transit, limited
+to runtime security principals, retention-governed, and excluded from
+observability and indexes. Large/ancestor content remains in immutable encrypted
+blobs referenced by digest rather than duplicated into every cache row.
 
 Provider-hosted continuation is enabled only when the operator accepts that
 provider's retention behavior. A local canonical transcript can be disabled for

@@ -369,7 +369,9 @@ matching budget policy before quote selection. Consequently, setting both
 fields to `true` requires every dispatched candidate to match a budget and to
 have a current price. An intentionally allowed unpriced result has
 `cost_status: unknown`; its zero cost fields are unknown accounting facts, not
-a free-use assertion.
+a free-use assertion. This describes v1 compatibility only. The accepted v2
+PostgreSQL contract replaces the zero sentinel with nullable price/actual-cost
+fields plus an explicit unknown reason; exact zero then means confirmed free.
 
 ## Provider egress policy
 

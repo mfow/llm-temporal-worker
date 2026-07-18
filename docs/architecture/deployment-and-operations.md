@@ -1,5 +1,12 @@
 # Deployment and Operations
 
+> This chapter describes current v1 deployment. The accepted post-v1 cutover
+> replaces Redis authority with a separate worker-owned PostgreSQL database,
+> roles, migrations, backup/restore, and readiness checks. Temporal's database
+> remains separate. See
+> [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md)
+> and its ordered schema cutover.
+
 ## Process modes
 
 The production binary supports these commands:
@@ -169,6 +176,14 @@ attempting to parse logs for configuration content.
 
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
+
+The accepted PostgreSQL/v2 cutover removes the two **micro_usd** metrics as
+authoritative money. Prometheus floating-point samples cannot faithfully carry
+**NUMERIC(38,18)**. Exact totals come from the typed PostgreSQL query Activity;
+telemetry exposes bounded counts such as
+**llmtw_cost_status_total{status,method}** and unknown-cost/price conditions.
+Dashboards must not reconstruct actual spend by treating an unknown observation
+as zero.
 
 `llmtw_activity_duration_seconds{phase="total"}` measures the complete
 Temporal Activity boundary; its terminal counter uses only `completed`,

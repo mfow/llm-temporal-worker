@@ -1,5 +1,13 @@
 # Pricing and Budgets
 
+> This chapter describes current v1. The accepted PostgreSQL cutover replaces
+> authoritative integer microUSD accounting with exact
+> **NUMERIC(38,18)** USD, removes downstream/config currency fields, and makes
+> the Go worker responsible for future FX retrieval and USD normalization.
+> V2 catalog prices and actual costs are nullable when genuinely unknown; zero
+> is reserved for a known zero charge. See
+> [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
+
 ## Goals
 
 Budget enforcement is shared, conservative, and independent of any provider
@@ -38,6 +46,12 @@ Redis Lua numbers are exact only within their integer-safe range. Configuration
 compilation rejects any single limit, bucket total, reservation, or possible
 sum at or above `2^53` microUSD. Go code also checks `int64` overflow.
 
+This is a documented v1 limitation, not the target representation. The
+PostgreSQL cutover replaces microUSD with **NUMERIC(38,18)**, providing 18
+fractional digits and 20 whole-dollar digits. Its contract tests cover
+sub-micro-dollar amounts, whole dollars, ten-dollar charges, large aggregates,
+and overflow rejection without any binary floating-point conversion.
+
 ## Price catalog
 
 A price entry is immutable and keyed by:
@@ -69,6 +83,10 @@ actual microUSD in that result mean “not priced”, not a zero-dollar claim.
 Currency, method, and catalog version are empty, no monetary reservation is
 created, and a provider-reported amount is not promoted to an auditable cost
 without a current catalog quote. Metrics make the condition visible.
+
+V2 removes that zero sentinel. Unknown catalog components and actual costs are
+NULL with an explicit status/reason, while exact zero means known free. Known
+spend totals exclude NULLs and separately report unknown operation counts.
 
 ## Estimation
 

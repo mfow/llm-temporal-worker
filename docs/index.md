@@ -11,6 +11,16 @@ in alongside the architecture and active v1 completion plans. The plans
 identify remaining hardening and release evidence; the current code and its
 tests are the source of truth for behavior that has already been implemented.
 
+The accepted post-v1 design is documentation-only and not yet implemented. It
+adds delta-only forkable conversations, compaction, exact-response caching,
+provider affinity, resumable polling, worker-owned PostgreSQL, typed queries,
+exact USD accounting, and a unified OCaml client:
+
+- [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
+- [PostgreSQL state, cache, accounting, and control plane](architecture/postgresql-state-cache-and-control-plane.md)
+- [OCaml conversation and typed query client](architecture/ocaml-conversation-and-query-client.md)
+- [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+
 ## Non-negotiable v1 decisions
 
 | Area | Decision |
@@ -43,6 +53,10 @@ tests are the source of truth for behavior that has already been implemented.
 11. [Testing strategy](testing/strategy.md)
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
 13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
+14. [Post-v1 conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
+15. [Post-v1 PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
+16. [Post-v1 OCaml client design](architecture/ocaml-conversation-and-query-client.md)
+17. [Post-v1 implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 
 ## Reference material
 

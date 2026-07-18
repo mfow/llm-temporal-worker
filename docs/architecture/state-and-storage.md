@@ -1,5 +1,13 @@
 # State and Storage
 
+> This chapter describes the current Redis-backed v1 implementation. After the
+> accepted breaking cutover, ADR 0007 makes a separate worker-owned PostgreSQL
+> database authoritative for both these existing responsibilities and the new
+> checkpoint/cache/control plane. The exact replacement schema, constraints,
+> indexes, transaction protocols, and removal sequence are in
+> [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
+> Temporal's own PostgreSQL schema is never modified.
+
 ## Storage responsibilities
 
 V1 persists three kinds of state behind separate domain ports:

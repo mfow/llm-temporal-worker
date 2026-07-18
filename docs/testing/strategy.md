@@ -80,6 +80,14 @@ Both CI workflows run `make redis-benchmark-compile`, which compiles the
 build-tagged code with tests and benchmarks disabled; it has no Redis address,
 operator gate, provider call, or Docker dependency.
 
+The accepted post-v1 PostgreSQL/cache/conversation work has its own unimplemented
+[production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md).
+That plan adds migration/index contracts, exact **NUMERIC(38,18)** round trips
+from sub-micro-dollar values through whole/$10/large values, nullable unknown
+price/cost invariants, concurrent fork/cache/budget tests, provider-poll crash
+recovery, all typed query shapes, query-plan gates, retention, and
+backup/restore proof before Redis removal.
+
 ## Local release gates
 
 The repository also exposes bounded release-gate targets. They are safe to run

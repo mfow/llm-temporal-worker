@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-07-13
 
+> This remains the current v1 decision. ADR 0007 supersedes it only when the
+> post-v1 PostgreSQL cutover is implemented and its acceptance gates pass.
+
 ## Context
 
 Horizontal workers must share operation deduplication, overlapping-window
