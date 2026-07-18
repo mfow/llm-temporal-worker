@@ -58,6 +58,15 @@ enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
 `to_string` make construction and logging explicit.  The encoded payload
 continues to use the unchanged v1 JSON strings.
 
+`Image` and `Document` sources carrying `Bytes raw` treat `raw` as the byte
+string itself. The codec emits standard padded base64 in the JSON `bytes`
+field and decodes it back to the original bytes. URLs are checked for an
+absolute, non-`data:`/non-`javascript:` URI; tool names are restricted to the
+v1 ASCII `[A-Za-z0-9_-]{1,64}` form. Request encoding and response decoding
+fail with `Temporal.Error.t` for invalid identifiers, duplicate service
+fallbacks, negative token/cost limits, invalid media, duplicate open-JSON
+members, and other protocol violations before a Temporal activity is called.
+
 `workflow` calls `Temporal.Activity.execute` once against the exact Go
 activity name `llm.generate.v1` with the exported
 `Llm_temporal.activity_retry_policy` (`maximum_attempts = 1`). The Go worker
