@@ -2,4 +2,4 @@
  (name llm_temporal)
  (public_name llm-temporal-ocaml)
  (private_modules llm_temporal_identifier llm_temporal_models llm_temporal_codec llm_temporal_invocation)
- (libraries temporal-sdk yojson))
+ (libraries temporal-sdk yojson base64))

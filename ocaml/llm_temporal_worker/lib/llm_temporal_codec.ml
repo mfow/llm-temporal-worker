@@ -97,6 +97,43 @@ let list context = function
 let nonempty context value =
   if String.trim value = "" then Error (codec_error "%s must not be empty" context) else Ok value
 
+let nonnegative context value =
+  if value < 0L then Error (codec_error "%s must not be negative" context) else Ok value
+
+let valid_tool_name context value =
+  let length = String.length value in
+  if length = 0 || length > 64 then
+    Error (codec_error "%s must contain between 1 and 64 ASCII characters" context)
+  else
+    let valid_char c =
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') || c = '_' || c = '-'
+    in
+    if String.for_all valid_char value then Ok value
+    else Error (codec_error "%s must contain only ASCII letters, digits, _ or -" context)
+
+let valid_uri context value =
+  let is_alpha c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') in
+  let is_scheme_char c = is_alpha c || (c >= '0' && c <= '9') || c = '+' || c = '-' || c = '.' in
+  match String.index_opt value ':' with
+  | None -> Error (codec_error "%s must be an absolute URI" context)
+  | Some colon when colon = 0 || not (is_alpha value.[0]) ->
+      Error (codec_error "%s must have a valid URI scheme" context)
+  | Some colon when not (String.for_all is_scheme_char (String.sub value 1 (colon - 1))) ->
+      Error (codec_error "%s must have a valid URI scheme" context)
+  | Some colon ->
+      let scheme = String.lowercase_ascii (String.sub value 0 colon) in
+      if scheme = "javascript" || scheme = "data" then
+        Error (codec_error "%s uses a forbidden URI scheme" context)
+      else Ok value
+
+let base64_encode value = Base64.encode_string value
+
+let base64_decode context value =
+  match Base64.decode value with
+  | Ok decoded -> Ok decoded
+  | Error (`Msg message) -> Error (codec_error "%s is not valid base64: %s" context message)
+
 let map_result f values =
   let rec loop reversed = function
     | [] -> Ok (List.rev reversed)
@@ -158,7 +195,7 @@ let provider_state_payload_to_json (state : provider_state) =
 
 let media_source_to_json = function
   | Url value -> [ ("url", `String value) ]
-  | Bytes value -> [ ("bytes", `String value) ]
+  | Bytes value -> [ ("bytes", `String (base64_encode value)) ]
   | Blob { locator; digest; byte_length; media_type } ->
       [ ("blob", `Assoc [ ("locator", `String locator); ("digest", `String (Blob_digest.to_string digest)); ("byte_length", `Intlit (Int64.to_string byte_length)); ("media_type", `String media_type) ]) ]
 
@@ -203,7 +240,9 @@ let continuation_provider_state_of_json value =
 let media_source_of_fields fields =
   match optional "url" fields, optional "bytes" fields, optional "blob" fields with
   | Some value, None, None -> Result.map (fun value -> Url value) (string "media url" value)
-  | None, Some value, None -> Result.map (fun value -> Bytes value) (string "media bytes" value)
+  | None, Some value, None ->
+      let* value = string "media bytes" value in
+      Result.map (fun value -> Bytes value) (base64_decode "media bytes" value)
   | None, None, Some value ->
       (match closed_fields "media blob" [ "locator"; "digest"; "byte_length"; "media_type" ] value with
        | Error _ as error -> error
@@ -889,21 +928,117 @@ let response_of_json value =
     metadata = { operation_id = None };
   }
 
+let validate_media_source context expected_media_type = function
+  | Url uri ->
+      let* _ = valid_uri (context ^ " url") uri in
+      Ok ()
+  | Bytes _ -> Ok ()
+  | Blob { locator; digest; byte_length; media_type } ->
+      let* _ = nonempty (context ^ " locator") locator in
+      let* _ = nonempty (context ^ " digest") (Blob_digest.to_string digest) in
+      let* _ = nonnegative (context ^ " byte_length") byte_length in
+      let* _ = nonempty (context ^ " media_type") media_type in
+      if media_type <> expected_media_type then
+        Error (codec_error "%s blob media_type %S does not match enclosing media_type %S" context media_type expected_media_type)
+      else Ok ()
+
+let validate_content context = function
+  | Text _ -> Ok ()
+  | Image { media_type; source; _ } | Document { media_type; source; _ } ->
+      let* _ = nonempty (context ^ " media_type") media_type in
+      validate_media_source context media_type source
+  | Json value -> validate_unique_json (context ^ " json") value
+  | Refusal { message; provider_code } ->
+      let* _ = nonempty (context ^ " refusal") message in
+      (match provider_code with None -> Ok () | Some code -> let* _ = nonempty (context ^ " provider_code") code in Ok ())
+  | Content_provider_state state ->
+      let* _ = nonempty (context ^ " media_type") state.media_type in
+      Ok ()
+
+let validate_item context = function
+  | Message message ->
+      map_result (validate_content (context ^ " message")) message.content |> Result.map (fun _ -> ())
+  | Tool_call { id; name; arguments } ->
+      let* _ = nonempty (context ^ " tool_call id") (Tool_call_id.to_string id) in
+      let* _ = valid_tool_name (context ^ " tool_call name") (Tool_name.to_string name) in
+      validate_unique_json (context ^ " tool_call arguments") arguments
+  | Tool_result { call_id; name; content; _ } ->
+      let* _ = nonempty (context ^ " tool_result call_id") (Tool_call_id.to_string call_id) in
+      let* _ = match name with None -> Ok () | Some name -> let* _ = valid_tool_name (context ^ " tool_result name") (Tool_name.to_string name) in Ok () in
+      map_result (validate_content (context ^ " tool_result content")) content |> Result.map (fun _ -> ())
+  | Provider_state state ->
+      let* _ = nonempty (context ^ " provider_state media_type") state.media_type in
+      Ok ()
+  | Reference { uri; metadata } ->
+      let* _ = valid_uri (context ^ " reference uri") uri in
+      validate_unique_json (context ^ " reference metadata") (`Assoc metadata)
+
+let validate_request_semantics (request : request) =
+  let* _ = nonempty "request operation_key" (Operation_key.to_string request.operation_key) in
+  let* _ = nonempty "request model" (Model_selector.to_string request.model) in
+  let requested = request.service_class in
+  let rec validate_fallbacks seen = function
+    | [] -> Ok ()
+    | fallback :: rest ->
+        if fallback = requested then Error (codec_error "request service_class_fallbacks repeats service_class")
+        else if List.mem fallback seen then Error (codec_error "request service_class_fallbacks contains duplicates")
+        else validate_fallbacks (fallback :: seen) rest
+  in
+  let* () = validate_fallbacks [] request.service_class_fallbacks in
+  let* () = map_result (fun instruction -> match instruction with Text_instruction _ -> Ok () | Parts_instruction { content; _ } -> map_result (validate_content "request instruction") content |> Result.map (fun _ -> ())) request.instructions |> Result.map (fun _ -> ()) in
+  let* () = map_result (validate_item "request input") request.input |> Result.map (fun _ -> ()) in
+  let* () = map_result (fun tool ->
+    let* _ = valid_tool_name "request tool name" (Tool_name.to_string tool.name) in
+    let* _ = json_object "tool input_schema" tool.input_schema in
+    let* () = validate_unique_json "tool input_schema" tool.input_schema in
+    match tool.output_schema with None -> Ok () | Some schema -> let* _ = json_object "tool output_schema" schema in validate_unique_json "tool output_schema" schema)
+    request.tools |> Result.map (fun _ -> ()) in
+  let* () = match request.tool_policy.choice with Named name -> let* _ = valid_tool_name "request named tool policy" (Tool_name.to_string name) in Ok () | _ -> Ok () in
+  let* () = match request.output with
+    | None -> Ok ()
+    | Some { max_tokens; format } ->
+        let* () = match max_tokens with None -> Ok () | Some value when value >= 0 -> Ok () | Some _ -> Error (codec_error "request output max_tokens must not be negative") in
+        (match format with Json_schema_format { name; schema; _ } -> let* _ = nonempty "request output schema name" name in validate_unique_json "request output schema" schema | _ -> Ok ())
+  in
+  let* () = match request.reasoning with None -> Ok () | Some { token_budget; _ } -> match token_budget with None -> Ok () | Some value when value >= 0 -> Ok () | Some _ -> Error (codec_error "request reasoning token_budget must not be negative") in
+  let* () = match request.sampling with
+    | None -> Ok ()
+    | Some sampling ->
+        let values = [ sampling.temperature; sampling.top_p; sampling.presence_penalty; sampling.frequency_penalty ] in
+        if List.exists (function Some value -> not (Float.is_finite value) | None -> false) values then Error (codec_error "request sampling values must be finite") else Ok ()
+  in
+  Ok ()
+
+let validate_response_semantics (response : response) =
+  let* _ = nonempty "response operation_key" (Operation_key.to_string response.operation_key) in
+  let* () = map_result (validate_item "response output") response.output |> Result.map (fun _ -> ()) in
+  let* () = if response.service.fallback_index < 0 then Error (codec_error "response service fallback_index must not be negative") else Ok () in
+  let usage_values = [ response.usage.input_tokens; response.usage.output_tokens; response.usage.reasoning_tokens; response.usage.cache_read_tokens; response.usage.cache_write_tokens ] in
+  let* () = match List.find_opt (fun value -> value < 0L) usage_values with None -> Ok () | Some _ -> Error (codec_error "response usage token counts must not be negative") in
+  let* () = if response.cost.reserved_microusd < 0L || response.cost.actual_microusd < 0L then Error (codec_error "response cost values must not be negative") else Ok () in
+  map_result (fun diagnostic ->
+    let* _ = nonempty "response diagnostic code" (Diagnostic_code.to_string diagnostic.code) in
+    nonempty "response diagnostic message" diagnostic.message |> Result.map (fun _ -> ())) response.diagnostics |> Result.map (fun _ -> ())
+
+let to_bytes context value =
+  try Ok (Bytes.of_string (Yojson.Safe.to_string value)) with
+  | Yojson.Json_error message -> Error (codec_error "%s: %s" context message)
+  | Invalid_argument message -> Error (codec_error "%s: %s" context message)
+  | Failure message -> Error (codec_error "%s: %s" context message)
+
 let encode_request request =
   let* () = validate_request_schema_objects request in
-  Ok
-    (Bytes.of_string
-       (Yojson.Safe.to_string
-          (`Assoc [ ("api_version", `String api_version);
-                    ("request", request_to_json request) ])))
+  let* () = validate_request_semantics request in
+  let value = `Assoc [ ("api_version", `String api_version); ("request", request_to_json request) ] in
+  let* () = validate_unique_json "request payload" value in
+  to_bytes "failed to encode request"
+    value
 let encode_response response =
   let* metadata = response_metadata response in
-  Ok
-    (Bytes.of_string
-       (Yojson.Safe.to_string
-          (`Assoc [ ("api_version", `String api_version);
-                    ("response", response_to_json response);
-                    ("metadata", metadata_to_json metadata) ])))
+  let* () = validate_response_semantics response in
+  let value = `Assoc [ ("api_version", `String api_version); ("response", response_to_json response); ("metadata", metadata_to_json metadata) ] in
+  let* () = validate_unique_json "response payload" value in
+  to_bytes "failed to encode response" value
 
 let decode_request bytes =
   parse_json
@@ -913,7 +1048,9 @@ let decode_request bytes =
       in
       let* () = require_version fields in
       let* request = required "llm.generate.v1 request" "request" fields in
-      request_of_json request)
+      let* request = request_of_json request in
+      let* () = validate_request_semantics request in
+      Ok request)
     bytes
 
 let decode_response bytes =
@@ -927,6 +1064,7 @@ let decode_response bytes =
       let* response = required "llm.generate.v1 response" "response" fields in
       let* metadata = required "llm.generate.v1 response" "metadata" fields in
       let* response = response_of_json response in
+      let* () = validate_response_semantics response in
       let* metadata = metadata_of_json metadata in
       let* metadata = response_metadata { response with metadata } in
       Ok { response with metadata })

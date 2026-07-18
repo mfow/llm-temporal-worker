@@ -160,6 +160,29 @@ let () =
   assert_equal "https://example.invalid/image.png" (match List.assoc "url" encoded_content with `String value -> value | _ -> failwith "flat image url");
   assert_equal "high" (match List.assoc "detail" encoded_content with `String value -> value | _ -> failwith "image detail");
   if List.mem_assoc "source" encoded_content then failwith "media source must be flat";
+  let binary_request = {
+    request_value with
+    input = [ Message { actor = Human; content = [ Image { media_type = "application/octet-stream"; source = Bytes "\000\001\255"; detail = None } ] } ];
+  } in
+  let binary_payload = expect_ok (Temporal.Codec.encode request_codec binary_request) in
+  let binary_envelope = Yojson.Safe.from_string (Bytes.to_string binary_payload.data) in
+  let binary_request_json = match binary_envelope with
+    | `Assoc fields -> (match List.assoc "request" fields with `Assoc request -> request | _ -> failwith "binary request")
+    | _ -> failwith "binary envelope"
+  in
+  let binary_content = match List.assoc "input" binary_request_json with
+    | `List [ `Assoc message ] -> (match List.assoc "content" message with `List [ `Assoc content ] -> content | _ -> failwith "binary content")
+    | _ -> failwith "binary input"
+  in
+  assert_equal "AAH/" (match List.assoc "bytes" binary_content with `String value -> value | _ -> failwith "binary base64");
+  (match (expect_ok (Temporal.Codec.decode request_codec binary_payload)).input with
+   | [ Message { actor = _; content = [ Image { source = Bytes value; _ } ] } ] when value = "\000\001\255" -> ()
+   | _ -> failwith "binary media did not round trip");
+  let invalid_tool = { valid_tool with name = tool_name "bad name" } in
+  expect_error (Temporal.Codec.encode request_codec { request_value with tools = [ invalid_tool ] });
+  expect_error (Temporal.Codec.encode request_codec { request_value with service_class_fallbacks = [ Standard; Standard ] });
+  expect_error (Temporal.Codec.encode request_codec { request_value with output = Some { max_tokens = Some (-1); format = Text_format } });
+  expect_error (Temporal.Codec.encode request_codec { request_value with input = [ Message { actor = Human; content = [ Image { media_type = "text/plain"; source = Url "javascript:alert(1)"; detail = None } ] } ] });
   let request_payload_with request =
     { request_payload with
       data = Bytes.of_string (Yojson.Safe.to_string (`Assoc [
@@ -281,6 +304,25 @@ let () =
   let output_item = match List.assoc "output" encoded_response with `List [ `Assoc item ] -> item | _ -> failwith "response item" in
   let refusal = match List.assoc "content" output_item with `List [ `Assoc item ] -> item | _ -> failwith "refusal content" in
   assert_equal "No." (match List.assoc "text" refusal with `String value -> value | _ -> failwith "refusal text");
+  let response_payload_with response =
+    { response_payload with
+      data = Bytes.of_string (Yojson.Safe.to_string (`Assoc [
+        ("api_version", `String api_version);
+        ("response", `Assoc response);
+        ("metadata", `Assoc [ ("operation_id", `String "operation-42") ]);
+      ])) }
+  in
+  let negative_usage = `Assoc [
+    ("input_tokens", `Intlit "-1"); ("output_tokens", `Intlit "0");
+    ("reasoning_tokens", `Intlit "0"); ("cache_read_tokens", `Intlit "0");
+    ("cache_write_tokens", `Intlit "0")
+  ] in
+  expect_error (Temporal.Codec.decode response_codec (response_payload_with (replace_field "usage" negative_usage encoded_response)));
+  expect_error (Temporal.Codec.encode response_codec { response_value with usage = { usage_value with input_tokens = -1L } });
+  let empty_diagnostic = `List [ `Assoc [
+    ("code", `String ""); ("message", `String ""); ("severity", `String "error")
+  ] ] in
+  expect_error (Temporal.Codec.decode response_codec (response_payload_with (replace_field "diagnostics" empty_diagnostic encoded_response)));
   let decoded_response = expect_ok (Temporal.Codec.decode response_codec response_payload) in
   assert_equal "operation-42" (Operation_id.to_string (Option.get decoded_response.operation_id));
   assert_equal "operation-42" (Operation_id.to_string (Option.get decoded_response.metadata.operation_id));
