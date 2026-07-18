@@ -32,6 +32,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler
 
+      - name: Verify OCaml Temporal dependency pin parity
+        run: bash scripts/check-ocaml-temporal-pin.sh
+
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3
         with:
@@ -43,7 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           opam pin add --yes --kind=git temporal-sdk \
-            'git+https://github.com/mfow/ocaml-temporal.git#52ddf8625fca25839250881bf37725368af8dc00'
+            'git+https://github.com/mfow/ocaml-temporal.git#a5e565dd0defcde03c429b4fe60c23fecaaa5685'
           opam install --yes . --deps-only
 
       - name: Build and test nested package
