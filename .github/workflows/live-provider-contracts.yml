@@ -99,11 +99,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -203,7 +204,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
@@ -216,6 +217,7 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -314,11 +316,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -417,11 +420,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -520,11 +524,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -623,11 +628,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -727,7 +733,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
@@ -739,6 +745,7 @@ jobs:
           role-session-name: llmtw-live-contract
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"
@@ -838,7 +845,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
@@ -850,6 +857,7 @@ jobs:
           role-session-name: llmtw-live-contract
 
       - name: Run bounded live provider contract
+        working-directory: golang
         shell: bash
         env:
           LLMTW_LIVE_TESTS: "1"

@@ -1,6 +1,6 @@
 # Guarded Live Provider Contracts
 
-`integration/live` is a small, credentialed contract suite for facts that
+`golang/integration/live` is a small, credentialed contract suite for facts that
 offline fixtures cannot establish: authentication, provider wire acceptance,
 the reported actual service class, provider request and response IDs, usage,
 reported cost, and continuation behavior. It is excluded from ordinary tests
@@ -28,7 +28,7 @@ This command compiles the complete live harness without making a provider
 request:
 
 ```sh
-go test -tags=live ./integration/live -run '^$'
+cd golang && go test -tags=live ./integration/live -run '^$'
 ```
 
 Both checked-in CI workflows run that command without live environment values

@@ -92,7 +92,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: golang/go.mod
           token: ""
           cache: "false"
 
@@ -144,6 +144,7 @@ jobs:
 
       - name: Run Task 19 through Task 22 safety gates
         shell: bash
+        working-directory: golang
         run: |
           set -euo pipefail
           make security-verify

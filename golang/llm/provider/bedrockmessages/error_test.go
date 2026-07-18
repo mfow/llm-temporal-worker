@@ -1,0 +1,41 @@
+package bedrockmessages
+
+import (
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
+
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+)
+
+func TestMapErrorClassifiesEgressDenialBeforeDispatch(t *testing.T) {
+	mapped := mapError(provider.ErrProviderEgressDenied, "bedrock_anthropic")
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped = %#v", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderEgressDenied) {
+		t.Fatal("mapped error did not preserve the egress marker")
+	}
+}
+
+func TestMapErrorClassifiesCertifiedPreDispatchAvailability(t *testing.T) {
+	mapped := mapError(provider.ErrProviderPreDispatch, "bedrock_anthropic")
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped = %#v", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) {
+		t.Fatal("mapped error did not preserve the pre-dispatch marker")
+	}
+}
+
+func TestMapAPIErrorTreatsRedirectResponseAsAmbiguous(t *testing.T) {
+	mapped := mapAPIError(&anthropic.Error{
+		StatusCode: http.StatusTemporaryRedirect,
+		Response:   &http.Response{Header: http.Header{"Location": []string{"https://redirect.example/secret"}}},
+	}, "bedrock-profile")
+	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+}

@@ -12,7 +12,7 @@
       "implementation_paths": [
         ".github/workflows/master.yml",
         ".github/workflows/pull-request.yml",
-        "internal/architecturetest/workflow_test.go"
+        "golang/internal/architecturetest/workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -42,11 +42,11 @@
         "quote": "Every adapter has request, response, error, and usage golden tests; strict-mode lossy conversions fail before dispatch."
       },
       "implementation_paths": [
-        "llm/provider/anthropicmessages/contract_fixture_test.go",
-        "llm/provider/bedrockmessages/contract_fixture_test.go",
-        "llm/provider/contracttest",
-        "llm/provider/openaichat/contract_fixture_test.go",
-        "llm/provider/openairesponses/contract_fixture_test.go"
+        "golang/llm/provider/anthropicmessages/contract_fixture_test.go",
+        "golang/llm/provider/bedrockmessages/contract_fixture_test.go",
+        "golang/llm/provider/contracttest",
+        "golang/llm/provider/openaichat/contract_fixture_test.go",
+        "golang/llm/provider/openairesponses/contract_fixture_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -72,13 +72,13 @@
         "quote": "Azure OpenAI for Responses and Chat Completions where the deployment supports the selected operation."
       },
       "implementation_paths": [
-        "api/schema/v1/config.schema.json",
-        "config/validate.go",
-        "internal/catalog/catalog.go",
-        "internal/runtime/catalog_snapshot.go",
-        "internal/runtime/factory.go",
-        "internal/runtime/factory_test.go",
-        "llm/provider/openaichat/azure_test.go"
+        "golang/api/schema/v1/config.schema.json",
+        "golang/config/validate.go",
+        "golang/internal/catalog/catalog.go",
+        "golang/internal/runtime/catalog_snapshot.go",
+        "golang/internal/runtime/factory.go",
+        "golang/internal/runtime/factory_test.go",
+        "golang/llm/provider/openaichat/azure_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -104,11 +104,11 @@
         "quote": "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, and Amazon Bedrock Anthropic profiles supported by the capability matrix."
       },
       "implementation_paths": [
-        "llm/provider/anthropicmessages",
-        "llm/provider/bedrockmessages",
-        "llm/provider/contracttest",
-        "llm/provider/openaichat",
-        "llm/provider/openairesponses"
+        "golang/llm/provider/anthropicmessages",
+        "golang/llm/provider/bedrockmessages",
+        "golang/llm/provider/contracttest",
+        "golang/llm/provider/openaichat",
+        "golang/llm/provider/openairesponses"
       ],
       "verification": {
         "make_targets": [
@@ -135,9 +135,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -173,9 +173,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -211,9 +211,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -249,9 +249,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -287,9 +287,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -325,9 +325,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -363,9 +363,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -401,9 +401,9 @@
       },
       "implementation_paths": [
         ".github/workflows/live-provider-contracts.yml",
-        "integration/live/harness.go",
-        "integration/live/runner.go",
-        "internal/architecturetest/live_provider_workflow_test.go"
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -438,9 +438,9 @@
         "quote": "There is no public provider-default value."
       },
       "implementation_paths": [
-        "llm/provider/openairesponses/lower_test.go",
-        "llm/request_json_test.go",
-        "llm/service_class.go"
+        "golang/llm/provider/openairesponses/lower_test.go",
+        "golang/llm/request_json_test.go",
+        "golang/llm/service_class.go"
       ],
       "verification": {
         "make_targets": [
@@ -466,9 +466,9 @@
         "quote": "Omission normalizes to standard before request hashing."
       },
       "implementation_paths": [
-        "llm/request.go",
-        "llm/request_json_test.go",
-        "llm/service_class.go"
+        "golang/llm/request.go",
+        "golang/llm/request_json_test.go",
+        "golang/llm/service_class.go"
       ],
       "verification": {
         "make_targets": [
@@ -494,8 +494,8 @@
         "quote": "economy | standard | priority"
       },
       "implementation_paths": [
-        "llm/request_json_test.go",
-        "llm/service_class.go"
+        "golang/llm/request_json_test.go",
+        "golang/llm/service_class.go"
       ],
       "verification": {
         "make_targets": [
@@ -521,10 +521,10 @@
         "quote": "The container runs as a non-root user, Kubernetes probes exercise real readiness dependencies, and two-replica Redis-backed smoke tests pass."
       },
       "implementation_paths": [
-        "deploy/kubernetes/base/deployment.yaml",
-        "integration/compose/live_lifecycle_test.go",
-        "integration/kubernetes/manifests_test.go",
-        "integration/readiness_integration_test.go"
+        "golang/deploy/kubernetes/base/deployment.yaml",
+        "golang/integration/compose/live_lifecycle_test.go",
+        "golang/integration/kubernetes/manifests_test.go",
+        "golang/integration/readiness_integration_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -553,10 +553,10 @@
         "quote": "The operation ledger returns a cached completed result on an Activity retry and refuses to replay an ambiguous provider dispatch."
       },
       "implementation_paths": [
-        "engine/engine_test.go",
-        "storage/conformance/conformance.go",
-        "storage/memory/conformance_test.go",
-        "storage/redis/conformance_test.go"
+        "golang/engine/engine_test.go",
+        "golang/storage/conformance/conformance.go",
+        "golang/storage/memory/conformance_test.go",
+        "golang/storage/redis/conformance_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -584,7 +584,7 @@
       },
       "implementation_paths": [
         ".github/workflows/release.yml",
-        "internal/architecturetest/release_publication_test.go",
+        "golang/internal/architecturetest/release_publication_test.go",
         "scripts/release/guard.sh"
       ],
       "verification": {
@@ -613,7 +613,7 @@
       },
       "implementation_paths": [
         ".github/workflows/release.yml",
-        "internal/architecturetest/release_publication_test.go",
+        "golang/internal/architecturetest/release_publication_test.go",
         "scripts/release/guard.sh"
       ],
       "verification": {
@@ -641,10 +641,10 @@
         "quote": "The router is deterministic for a fixed configuration snapshot and never changes service class without an explicit request fallback."
       },
       "implementation_paths": [
-        "engine/engine_test.go",
-        "routing/planner.go",
-        "routing/planner_property_test.go",
-        "routing/planner_test.go"
+        "golang/engine/engine_test.go",
+        "golang/routing/planner.go",
+        "golang/routing/planner_property_test.go",
+        "golang/routing/planner_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -672,8 +672,8 @@
       "implementation_paths": [
         "Makefile",
         "docs/testing/strategy.md",
-        "engine/benchmark_redis_test.go",
-        "engine/benchmark_test.go"
+        "golang/engine/benchmark_redis_test.go",
+        "golang/engine/benchmark_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -705,9 +705,9 @@
         "quote": "Budget overspend from known usage | Zero under the documented clock and durability assumptions"
       },
       "implementation_paths": [
-        "storage/conformance/conformance.go",
-        "storage/memory/conformance_test.go",
-        "storage/redis/shared_state_conformance_integration_test.go"
+        "golang/storage/conformance/conformance.go",
+        "golang/storage/memory/conformance_test.go",
+        "golang/storage/redis/shared_state_conformance_integration_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -733,10 +733,10 @@
         "quote": "Worker-caused successful-call error rate | Below 0.1%"
       },
       "implementation_paths": [
-        "activity/activities.go",
-        "activity/metrics_test.go",
         "docs/architecture/deployment-and-operations.md",
-        "internal/observability/metrics.go"
+        "golang/activity/activities.go",
+        "golang/activity/metrics_test.go",
+        "golang/internal/observability/metrics.go"
       ],
       "verification": {
         "make_targets": [
@@ -766,10 +766,10 @@
         "quote": "Memory and Redis budget backends pass the same conformance suite, including concurrent overlapping-window admission tests."
       },
       "implementation_paths": [
-        "storage/conformance/conformance.go",
-        "storage/memory/conformance_test.go",
-        "storage/redis/conformance_test.go",
-        "storage/redis/shared_state_conformance_integration_test.go"
+        "golang/storage/conformance/conformance.go",
+        "golang/storage/memory/conformance_test.go",
+        "golang/storage/redis/conformance_test.go",
+        "golang/storage/redis/shared_state_conformance_integration_test.go"
       ],
       "verification": {
         "make_targets": [
@@ -795,10 +795,10 @@
         "quote": "The worker passes Temporal Activity tests for retry, heartbeat, cancellation, graceful shutdown, and non-retryable error typing."
       },
       "implementation_paths": [
-        "activity/activities_test.go",
-        "activity/errors_test.go",
-        "integration/temporal/live_recovery_test.go",
-        "integration/temporal_lifecycle_test.go"
+        "golang/activity/activities_test.go",
+        "golang/activity/errors_test.go",
+        "golang/integration/temporal/live_recovery_test.go",
+        "golang/integration/temporal_lifecycle_test.go"
       ],
       "verification": {
         "make_targets": [

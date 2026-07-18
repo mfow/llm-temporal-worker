@@ -18,7 +18,7 @@ solve, then obtains the immutable image subject from the layout's single OCI
 manifest descriptor:
 
 ```sh
-digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
+digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
 reference="llm-temporal-worker@$digest"
 ```
 
@@ -99,7 +99,7 @@ must supply a temporary layout path outside its evidence directory and the two
 final JSON files before it can record the exact same bundle:
 
 ```sh
-digest="$(go run ./tools/releaseverify layout-digest -layout "$oci_layout")"
+digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$oci_layout")"
 reference="llm-temporal-worker@$digest"
 
 bash scripts/release/record.sh \

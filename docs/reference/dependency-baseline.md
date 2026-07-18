@@ -53,7 +53,7 @@ fixtures, and retry/error/stream/usage assertions.
 
 ## Verified supply-chain gate
 
-[`tools/supplychainverify/baseline.json`](../../tools/supplychainverify/baseline.json)
+[`golang/tools/supplychainverify/baseline.json`](../../golang/tools/supplychainverify/baseline.json)
 is the machine-readable counterpart to this direct-module table. It records the
 approved SPDX identifiers, source references, and exact versions for every
 direct requirement. `make security-verify` rejects an added, removed, or
