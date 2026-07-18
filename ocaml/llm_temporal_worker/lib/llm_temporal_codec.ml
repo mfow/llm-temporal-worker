@@ -224,6 +224,82 @@ let provider_state_of_fields fields =
        | (Error _ as error), _, _, _ | _, (Error _ as error), _, _ | _, _, (Error _ as error), _ | _, _, _, (Error _ as error) -> error)
   | (Error _ as error), _, _, _ | _, (Error _ as error), _, _ | _, _, (Error _ as error), _ | _, _, _, (Error _ as error) -> error
 
+let is_ascii_digit value = value >= '0' && value <= '9'
+
+let two_digits value offset =
+  if offset + 1 < String.length value && is_ascii_digit value.[offset]
+     && is_ascii_digit value.[offset + 1]
+  then Some (((Char.code value.[offset] - Char.code '0') * 10)
+             + Char.code value.[offset + 1] - Char.code '0')
+  else None
+
+(* Go's [time.Parse(time.RFC3339Nano, ...)] is the canonical wire check.  Keep
+   this dependency-free lexical equivalent on the OCaml side so malformed
+   expiry values fail before an Activity is scheduled. *)
+let valid_rfc3339 context value =
+  let invalid () = Error (codec_error "%s must be an RFC3339 timestamp" context) in
+  let length = String.length value in
+  let separator offset expected = offset < length && value.[offset] = expected in
+  let has_digits start stop =
+    start < stop && stop <= length
+    && String.for_all is_ascii_digit (String.sub value start (stop - start))
+  in
+  if length < 20 || not (separator 4 '-') || not (separator 7 '-')
+     || not (separator 10 'T') || not (separator 13 ':')
+     || not (separator 16 ':') || not (has_digits 0 4)
+     || not (has_digits 5 7) || not (has_digits 8 10)
+     || not (has_digits 11 13) || not (has_digits 14 16)
+     || not (has_digits 17 19)
+  then invalid ()
+  else
+    match two_digits value 5, two_digits value 8, two_digits value 11,
+          two_digits value 14, two_digits value 17 with
+    | Some month, Some day, Some hour, Some minute, Some second ->
+        if month < 1 || month > 12 || day < 1 || day > 31
+           || hour > 23 || minute > 59 || second > 59 then invalid ()
+        else
+          let zone_start =
+            if length > 19 && value.[19] = '.' then
+              let rec scan index =
+                if index < length && is_ascii_digit value.[index] then scan (index + 1)
+                else index
+              in
+              let index = scan 20 in
+              if index = 20 then -1 else index
+            else 19
+          in
+          if zone_start < 0 || zone_start >= length then invalid ()
+          else (
+            match value.[zone_start] with
+            | 'Z' when zone_start + 1 = length -> Ok value
+            | ('+' | '-') when zone_start + 6 = length
+                              && value.[zone_start + 3] = ':' ->
+                (match two_digits value (zone_start + 1),
+                       two_digits value (zone_start + 4) with
+                 | Some hours, Some minutes when hours <= 23 && minutes <= 59 -> Ok value
+                 | _ -> invalid ())
+            | _ -> invalid ())
+    | _ -> invalid ()
+
+let validate_provider_state context (state : provider_state) =
+  let* _ = nonempty (context ^ " provider") (Provider_id.to_string state.provider) in
+  let* _ = nonempty (context ^ " endpoint_family") (Endpoint_family.to_string state.endpoint_family) in
+  let* _ = nonempty (context ^ " media_type") state.media_type in
+  Ok ()
+
+let validate_continuation context (continuation : continuation) =
+  let* _ = nonempty (context ^ " handle") (Continuation_handle.to_string continuation.handle) in
+  let* () =
+    match continuation.expires_at with
+    | None -> Ok ()
+    | Some value -> valid_rfc3339 (context ^ " expires_at") value |> Result.map (fun _ -> ())
+  in
+  match continuation.provider_state with
+  | None -> Ok ()
+  | Some states ->
+      map_result (validate_provider_state (context ^ " provider_state")) states
+      |> Result.map (fun _ -> ())
+
 let continuation_provider_state_of_json value =
   let* fields =
     closed_fields "continuation provider_state"
@@ -951,9 +1027,7 @@ let validate_content context = function
   | Refusal { message; provider_code } ->
       let* _ = nonempty (context ^ " refusal") message in
       (match provider_code with None -> Ok () | Some code -> let* _ = nonempty (context ^ " provider_code") code in Ok ())
-  | Content_provider_state state ->
-      let* _ = nonempty (context ^ " media_type") state.media_type in
-      Ok ()
+  | Content_provider_state state -> validate_provider_state context state
 
 let validate_item context = function
   | Message message ->
@@ -967,8 +1041,7 @@ let validate_item context = function
       let* _ = match name with None -> Ok () | Some name -> let* _ = valid_tool_name (context ^ " tool_result name") (Tool_name.to_string name) in Ok () in
       map_result (validate_content (context ^ " tool_result content")) content |> Result.map (fun _ -> ())
   | Provider_state state ->
-      let* _ = nonempty (context ^ " provider_state media_type") state.media_type in
-      Ok ()
+      validate_provider_state (context ^ " provider_state") state
   | Reference { uri; metadata } ->
       let* _ = valid_uri (context ^ " reference uri") uri in
       validate_unique_json (context ^ " reference metadata") (`Assoc metadata)
@@ -1007,6 +1080,11 @@ let validate_request_semantics (request : request) =
         let values = [ sampling.temperature; sampling.top_p; sampling.presence_penalty; sampling.frequency_penalty ] in
         if List.exists (function Some value -> not (Float.is_finite value) | None -> false) values then Error (codec_error "request sampling values must be finite") else Ok ()
   in
+  let* () =
+    match request.continuation with
+    | None -> Ok ()
+    | Some continuation -> validate_continuation "request continuation" continuation
+  in
   Ok ()
 
 let validate_response_semantics (response : response) =
@@ -1016,6 +1094,11 @@ let validate_response_semantics (response : response) =
   let usage_values = [ response.usage.input_tokens; response.usage.output_tokens; response.usage.reasoning_tokens; response.usage.cache_read_tokens; response.usage.cache_write_tokens ] in
   let* () = match List.find_opt (fun value -> value < 0L) usage_values with None -> Ok () | Some _ -> Error (codec_error "response usage token counts must not be negative") in
   let* () = if response.cost.reserved_microusd < 0L || response.cost.actual_microusd < 0L then Error (codec_error "response cost values must not be negative") else Ok () in
+  let* () =
+    match response.continuation with
+    | None -> Ok ()
+    | Some continuation -> validate_continuation "response continuation" continuation
+  in
   map_result (fun diagnostic ->
     let* _ = nonempty "response diagnostic code" (Diagnostic_code.to_string diagnostic.code) in
     nonempty "response diagnostic message" diagnostic.message |> Result.map (fun _ -> ())) response.diagnostics |> Result.map (fun _ -> ())
