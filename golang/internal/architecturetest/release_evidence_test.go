@@ -1871,6 +1871,14 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceCollectorRunsFuzzGateFromModuleRoot(t *testing.T) {
+	root := repositoryRoot(t)
+	collector := readRepositoryFile(t, root, "scripts", "release", "collect.sh")
+	if !strings.Contains(collector, `run_gate fuzz_summary bash -c "cd \"$module_root\" && bash \"$module_root/scripts/run-fuzz.sh\" smoke"`) {
+		t.Fatal("release evidence collector does not run the fuzz gate from the Go module root")
+	}
+}
+
 func TestReleaseEvidenceMakeTargetIgnoresEvidencePathEnvironment(t *testing.T) {
 	root := repositoryRoot(t)
 	command := exec.Command("make", "--no-print-directory", "-n", "release-verify")

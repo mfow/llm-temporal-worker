@@ -85,7 +85,7 @@ run_gate() {
 
 run_gate test_summary bash -c "cd \"$module_root\" && go test ./..."
 run_gate race_summary bash -c "cd \"$module_root\" && go test -race ./..."
-run_gate fuzz_summary bash "$module_root/scripts/run-fuzz.sh" smoke
+run_gate fuzz_summary bash -c "cd \"$module_root\" && bash \"$module_root/scripts/run-fuzz.sh\" smoke"
 
 python3 "$collector" fixture-manifest \
   --root "$module_root" \
