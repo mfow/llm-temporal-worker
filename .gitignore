@@ -40,3 +40,6 @@ release-artifacts/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# OCaml/Dune build artifacts
+_build/
