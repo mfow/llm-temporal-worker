@@ -36,7 +36,7 @@ func (config Config) Validate() error {
 	if err := config.Temporal.validate(); err != nil {
 		return err
 	}
-	if err := config.State.validate(); err != nil {
+	if err := config.State.validate(config.Environment); err != nil {
 		return err
 	}
 	if err := config.BlobStore.validate(config.Environment); err != nil {
@@ -135,7 +135,7 @@ func (temporal TemporalConfig) validate() error {
 	return validatePositiveDuration(temporal.Worker.HeartbeatKeepaliveInterval, "temporal.worker.heartbeat_keepalive_interval")
 }
 
-func (state StateConfig) validate() error {
+func (state StateConfig) validate(environment string) error {
 	if state.Kind != "redis" {
 		return fmt.Errorf("state.kind %q is unsupported", state.Kind)
 	}
@@ -155,13 +155,16 @@ func (state StateConfig) validate() error {
 	if state.AmbiguousRetention < state.OperationTerminalRetention {
 		return fmt.Errorf("state.ambiguous_retention must cover operation_terminal_retention")
 	}
-	if err := state.Redis.validate(); err != nil {
+	if err := state.Redis.validate(environment); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (redis RedisConfig) validate() error {
+func (redis RedisConfig) validate(environment string) error {
+	if environment == "production" && !redis.TLS.Enabled {
+		return fmt.Errorf("state.redis.tls.enabled must be true in production")
+	}
 	if len(redis.Addresses) == 0 {
 		return fmt.Errorf("state.redis.addresses must not be empty")
 	}
