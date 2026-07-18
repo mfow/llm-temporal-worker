@@ -8,21 +8,18 @@ module_root="$root/golang"
 arguments=("$@")
 for ((index = 0; index < ${#arguments[@]} - 1; index++)); do
   case "${arguments[index]}" in
-    -artifact-dir|-output)
+    -artifact-dir)
       if [[ "${arguments[index + 1]}" != /* ]]; then
         arguments[index + 1]="$root/${arguments[index + 1]}"
       fi
       ;;
-    -artifact)
-      artifact_name="${arguments[index + 1]%%=*}"
-      artifact_path="${arguments[index + 1]#*=}"
-      if [[ "$artifact_path" != /* ]]; then
-        arguments[index + 1]="$artifact_name=$root/$artifact_path"
+    -output)
+      if [[ "${arguments[index + 1]}" != /* ]]; then
+        arguments[index + 1]="$root/${arguments[index + 1]}"
       fi
       ;;
   esac
 done
-cd "$module_root"
-exec go run ./tools/releaseverify record \
+exec go -C "$module_root" run ./tools/releaseverify record \
   -schema "$root/docs/release/evidence.schema.json" \
   "${arguments[@]}"
