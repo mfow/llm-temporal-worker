@@ -122,6 +122,12 @@ let () =
   assert_equal "llm.generate.v1" (Temporal.Activity.name generate_activity);
   assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name (workflow ()));
   if Temporal.Activity.implementation generate_activity <> None then failwith "remote Go activity has an OCaml implementation";
+  if Temporal.Activity.Retry_policy.maximum_attempts activity_retry_policy <> 1 then
+    failwith "activity retry policy must permit exactly one attempt";
+  if Temporal.Duration.to_ms (Temporal.Activity.Retry_policy.initial_interval activity_retry_policy) <> 1L then
+    failwith "activity retry policy initial interval changed";
+  if Temporal.Duration.to_ms (Temporal.Activity.Retry_policy.maximum_interval activity_retry_policy) <> 1L then
+    failwith "activity retry policy maximum interval changed";
   let valid_tool = {
     kind = Function; name = tool_name "lookup"; description = "lookup";
     input_schema = `Assoc []; output_schema = None;
@@ -348,4 +354,25 @@ let () =
   in
   ignore (expect_ok (invoke_once ~task_queue:(task_queue "go-activities") ~dispatch request_value));
   if !calls <> 1 then failwith "wrapper dispatched more than once";
+  let default_queue_calls = ref 0 in
+  let default_queue_dispatch ?task_queue activity (request : request) =
+    incr default_queue_calls;
+    if task_queue <> None then failwith "omitted task queue must remain omitted";
+    assert_equal activity_name (Temporal.Activity.name activity);
+    assert_equal "order-42" (Operation_key.to_string request.operation_key);
+    Ok response_value
+  in
+  ignore (expect_ok (invoke_once ~dispatch:default_queue_dispatch request_value));
+  if !default_queue_calls <> 1 then failwith "default queue dispatch count";
+  let failure = Temporal.Error.make ~category:`Activity ~message:"provider failed" () in
+  let failed_calls = ref 0 in
+  let failing_dispatch ?task_queue:_ _activity _request =
+    incr failed_calls;
+    Error failure
+  in
+  (match invoke_once ~dispatch:failing_dispatch request_value with
+   | Error error when Temporal.Error.message error = "provider failed" -> ()
+   | Error _ -> failwith "wrapper changed activity failure"
+   | Ok _ -> failwith "wrapper swallowed activity failure");
+  if !failed_calls <> 1 then failwith "failed activity was retried by invoke_once";
   print_endline "llm_temporal typed wrapper tests passed"
