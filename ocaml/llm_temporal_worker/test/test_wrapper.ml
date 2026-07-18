@@ -174,6 +174,16 @@ let () =
              opaque = "state";
            }];
          } });
+  let valid_expiry_request = {
+    request_value with
+    continuation = Some {
+      handle = continuation_handle "continuation-42";
+      endpoint_id = None; model = None;
+      expires_at = Some "2026-07-18T13:45:00.123+10:00";
+      pinned = true; provider_state = None;
+    };
+  } in
+  ignore (expect_ok (Temporal.Codec.encode request_codec valid_expiry_request));
   let request_payload = expect_ok (Temporal.Codec.encode request_codec request_value) in
   assert_equal "json/plain" (List.assoc "encoding" request_payload.metadata);
   let request_envelope = Yojson.Safe.from_string (Bytes.to_string request_payload.data) in
