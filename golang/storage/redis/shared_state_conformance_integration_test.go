@@ -47,6 +47,9 @@ func TestLiveRedisLuaStoreFactoryConformance(t *testing.T) {
 		t.Fatalf("provisioned Lua script SHA = %q, want %q", sha, AdmissionLuaSHA1())
 	}
 	t.Cleanup(func() {
+		if !liveRedisLuaScriptCleanupAllowed() {
+			return
+		}
 		flushContext, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer flushCancel()
 		if err := client.ScriptFlush(flushContext).Err(); err != nil {
@@ -54,6 +57,28 @@ func TestLiveRedisLuaStoreFactoryConformance(t *testing.T) {
 		}
 	})
 	conformance.Run(t, liveRedisStoreFactoryWithMode(client, AdmissionModeLua))
+}
+
+func TestLiveRedisLuaScriptCleanupRequiresIsolatedProvisioning(t *testing.T) {
+	tests := []struct {
+		name      string
+		provision string
+		container string
+		prefix    string
+		wantAllow bool
+	}{
+		{name: "manual address", provision: "1", wantAllow: false},
+		{name: "provisioning disabled", container: "llmtw-redis-integration-123", prefix: "llmtw-redis-integration", wantAllow: false},
+		{name: "unrecognized container", provision: "1", container: "redis-shared-123", prefix: "llmtw-redis-integration", wantAllow: false},
+		{name: "isolated provisioned container", provision: "1", container: "llmtw-redis-integration-123", prefix: "llmtw-redis-integration", wantAllow: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := liveRedisLuaScriptCleanupAllowedValues(test.provision, test.container, test.prefix); got != test.wantAllow {
+				t.Fatalf("cleanup allowed = %t, want %t", got, test.wantAllow)
+			}
+		})
+	}
 }
 
 func TestLiveRedisFunctionBeginDecodesTwoFieldDenial(t *testing.T) {
@@ -267,6 +292,18 @@ func TestLiveRedisAddressForPublishedPort(t *testing.T) {
 
 func isLiveRedisPersistenceContainer(container, configuredPrefix string) bool {
 	return configuredPrefix != "" && strings.HasPrefix(container, configuredPrefix+"-")
+}
+
+func liveRedisLuaScriptCleanupAllowed() bool {
+	return liveRedisLuaScriptCleanupAllowedValues(
+		os.Getenv("LLMTW_REDIS_TEST_PROVISION"),
+		os.Getenv("LLMTW_REDIS_CONTAINER"),
+		os.Getenv("LLMTW_REDIS_CONTAINER_PREFIX"),
+	)
+}
+
+func liveRedisLuaScriptCleanupAllowedValues(provision, container, prefix string) bool {
+	return provision == "1" && isLiveRedisPersistenceContainer(container, prefix)
 }
 
 func openLiveRedis(t *testing.T) *redisclient.Client {
