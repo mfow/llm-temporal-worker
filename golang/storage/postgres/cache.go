@@ -410,6 +410,13 @@ func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request
 			if err := tx.QueryRow(ctx, fillQuery, request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:]).Scan(&existingOwner, &state, &existingLease, &existingEntry); err != nil {
 				return redactPostgresError(fmt.Errorf("reread PostgreSQL response cache fill: %w", err))
 			}
+			// The initial SELECT legitimately observed no row. Once the
+			// conflict-safe INSERT has completed, the reread supplies the
+			// lock result; clear the stale ErrNoRows before evaluating it
+			// below. Without this assignment, the successful conflict path
+			// was incorrectly reported as a lock failure under concurrent
+			// BeginFill calls.
+			err = nil
 		}
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("lock PostgreSQL response cache fill: %w", err))
