@@ -39,6 +39,17 @@ const (
 	liveSuccessfulProviderHold            = liveHeartbeatTimeout + time.Second
 )
 
+func TestLiveRedisKeyPrefixFollowsComposeNamespace(t *testing.T) {
+	t.Setenv("LLMTW_REDIS_KEY_PREFIX", "")
+	if got, want := liveRedisKeyPrefix(), "llmtw"; got != want {
+		t.Fatalf("default live Redis key prefix = %q, want %q", got, want)
+	}
+	t.Setenv("LLMTW_REDIS_KEY_PREFIX", "tenant-a.v1")
+	if got, want := liveRedisKeyPrefix(), "tenant-a.v1"; got != want {
+		t.Fatalf("configured live Redis key prefix = %q, want %q", got, want)
+	}
+}
+
 func TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum(t *testing.T) {
 	options := liveRecoveryWorkerOptions("construction")
 	// One panics in the Temporal SDK and zero silently selects its large default.
@@ -67,6 +78,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 	redisAddress := os.Getenv("LLMTW_REDIS_ADDR")
 	redisUsername := os.Getenv("LLMTW_REDIS_USERNAME")
 	redisPassword := os.Getenv("LLMTW_REDIS_PASSWORD")
+	redisKeyPrefix := liveRedisKeyPrefix()
 	if temporalAddress == "" || redisAddress == "" || redisUsername == "" || redisPassword == "" {
 		t.Skip("make compose-live-integration supplies the local Temporal and authenticated Redis addresses")
 	}
@@ -90,7 +102,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 		Mode:            redisstore.AdmissionModeFunction,
 		FunctionVersion: redisstore.AdmissionFunctionVersion,
 		Keys: redisstore.KeyOptions{
-			Prefix:    "llmtw-live-recovery",
+			Prefix:    redisKeyPrefix,
 			HashTag:   "admission",
 			KeySecret: liveKeySecret(queue),
 		},
@@ -217,6 +229,7 @@ func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
 	redisAddress := os.Getenv("LLMTW_REDIS_ADDR")
 	redisUsername := os.Getenv("LLMTW_REDIS_USERNAME")
 	redisPassword := os.Getenv("LLMTW_REDIS_PASSWORD")
+	redisKeyPrefix := liveRedisKeyPrefix()
 	if temporalAddress == "" || redisAddress == "" || redisUsername == "" || redisPassword == "" {
 		t.Skip("make compose-live-integration supplies the local Temporal and authenticated Redis addresses")
 	}
@@ -240,7 +253,7 @@ func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
 		Mode:            redisstore.AdmissionModeFunction,
 		FunctionVersion: redisstore.AdmissionFunctionVersion,
 		Keys: redisstore.KeyOptions{
-			Prefix:    "llmtw-live-keepalive",
+			Prefix:    redisKeyPrefix,
 			HashTag:   "admission",
 			KeySecret: liveKeySecret(queue),
 		},
@@ -397,6 +410,13 @@ func liveKeepaliveRequest() llm.Request {
 func liveKeySecret(queue string) []byte {
 	digest := sha256.Sum256([]byte("llmtw-live-recovery-key:" + queue))
 	return digest[:]
+}
+
+func liveRedisKeyPrefix() string {
+	if value := os.Getenv("LLMTW_REDIS_KEY_PREFIX"); value != "" {
+		return value
+	}
+	return "llmtw"
 }
 
 func waitForAmbiguousWorkflow(t *testing.T, ctx context.Context, run client.WorkflowRun) activity.SafeErrorDetails {

@@ -16,6 +16,10 @@ own containers, volumes, images, temporary Go cache, and key when it finishes:
 LLMTW_COMPOSE_LIVE=1 make compose-live-integration
 ```
 
+The live gate waits up to five minutes for the Compose healthchecks. This is a
+bounded startup allowance for the pinned Temporal, Redis, and worker healthcheck
+budgets; it does not weaken any readiness or recovery assertion.
+
 The target is intentionally distinct from `make compose-smoke`: the latter
 only validates the Compose model and never starts Docker services. The live
 gate starts a uniquely named local project, checks the worker's exact

@@ -223,6 +223,9 @@ compose-smoke:
 # removes only the project resources, generated continuation key, temporary Go
 # cache, and images it creates. It never sends a provider request: the Temporal
 # recovery test injects a content-free adapter in the Go test process.
+# The Compose wait timeout is five minutes: the Temporal and worker
+# healthchecks allow up to 212s (20s start period plus 24 checks at 5s
+# intervals with 3s timeouts), so a slow but healthy CI runner is not cut off.
 compose-live-integration:
 	@if [ "$${LLMTW_COMPOSE_LIVE:-0}" != "1" ]; then \
 		echo "compose-live-integration requires LLMTW_COMPOSE_LIVE=1; it starts local Docker services and is intentionally opt-in" >&2; \
@@ -246,6 +249,7 @@ compose-live-integration:
 	redis_port=0; \
 	redis_username="$${LLMTW_REDIS_USERNAME:-local}"; \
 	redis_password="$${LLMTW_REDIS_PASSWORD:-local-only}"; \
+	redis_key_prefix="$${LLMTW_REDIS_KEY_PREFIX:-llmtw}"; \
 	postgres_password="$${LLMTW_POSTGRES_PASSWORD:-local-only}"; \
 	mock_api_key=local-only; \
 	continuation_hmac="$$(LC_ALL=C od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')"; \
@@ -254,7 +258,7 @@ compose-live-integration:
 	key="$$tmpdir/continuation-hmac"; \
 	go_cache="$$tmpdir/gocache"; \
 	cleanup() { \
-		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
+		COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port" $(COMPOSE) --profile worker down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; \
 		docker image rm -f "$$worker_image" "$$mock_image" >/dev/null 2>&1 || true; \
 		rm -rf "$$tmpdir"; \
 	}; \
@@ -266,9 +270,9 @@ compose-live-integration:
 	fi; \
 	printf '%s' "$$continuation_hmac" > "$$key"; \
 	chmod 0444 "$$key"; \
-	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
+	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
 	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
-	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 180; then \
+	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 300; then \
 		echo "compose-live-integration Temporal healthcheck output (redacted):" >&2; \
 		temporal_container="$$( $(COMPOSE) ps -q temporal 2>/dev/null || true )"; \
 		if [ -n "$$temporal_container" ]; then \
@@ -319,7 +323,7 @@ compose-live-integration:
 		echo "compose-live-integration could not rediscover the Redis host port after lifecycle recovery" >&2; \
 		exit 1; \
 	fi; \
-	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'; then \
+	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'; then \
 		echo "compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):" >&2; \
 		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
 			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
