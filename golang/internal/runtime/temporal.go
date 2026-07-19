@@ -107,10 +107,7 @@ func loadTLSConfig(value config.TLSConfig, readFile func(string) ([]byte, error)
 	if err != nil {
 		return nil, errors.New("read Temporal TLS CA certificate")
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
+	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(encoded) {
 		return nil, errors.New("Temporal TLS CA certificate is invalid")
 	}

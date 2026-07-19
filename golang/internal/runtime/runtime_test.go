@@ -2,7 +2,13 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
@@ -526,6 +532,47 @@ func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 	if runtime.Health.Live() || runtime.Health.Ready() || !controller.stopped.Load() || !closed.Load() {
 		t.Fatal("cancellation did not complete graceful shutdown")
 	}
+}
+
+func TestLoadTLSConfigPinsConfiguredCA(t *testing.T) {
+	caPEM := testCertificateAuthorityPEM(t)
+	tlsConfig, err := loadTLSConfig(config.TLSConfig{Enabled: true, CAFile: "/temporal-ca.pem", ServerName: "temporal.example.test"}, func(path string) ([]byte, error) {
+		if path != "/temporal-ca.pem" {
+			t.Fatalf("path = %q, want configured CA file", path)
+		}
+		return caPEM, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tlsConfig.RootCAs == nil {
+		t.Fatal("RootCAs is nil")
+	}
+	if subjects := tlsConfig.RootCAs.Subjects(); len(subjects) != 1 {
+		t.Fatalf("RootCAs subjects = %d, want only configured CA", len(subjects))
+	}
+}
+
+func testCertificateAuthorityPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Temporal Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func TestLoadTLSConfigDoesNotExposeCertificateBytes(t *testing.T) {
