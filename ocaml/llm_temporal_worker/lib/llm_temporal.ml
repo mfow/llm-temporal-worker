@@ -2,3 +2,5 @@
 
 include Llm_temporal_models
 include Llm_temporal_invocation
+
+module Conversation = Llm_temporal_conversation
