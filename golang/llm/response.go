@@ -282,7 +282,8 @@ type Cost struct {
 	ReservedCostUSD *pricing.USD
 	ActualCostUSD   *pricing.USD
 	// Deprecated compatibility fields are accepted only while older workers
-	// drain; new JSON never emits them.
+	// drain; exact callers never emit them, while legacy-only callers retain the
+	// versioned compatibility shape during the transition.
 	Currency         string
 	ReservedMicroUSD int64
 	ActualMicroUSD   int64
