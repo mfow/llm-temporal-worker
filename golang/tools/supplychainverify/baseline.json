@@ -8,13 +8,13 @@
   "direct_modules": [
     {
       "path": "github.com/Azure/azure-sdk-for-go/sdk/azcore",
-      "version": "v1.17.0",
+      "version": "v1.22.0",
       "license": "MIT",
       "source": "https://github.com/Azure/azure-sdk-for-go"
     },
     {
       "path": "github.com/Azure/azure-sdk-for-go/sdk/azidentity",
-      "version": "v1.7.0",
+      "version": "v1.14.0",
       "license": "MIT",
       "source": "https://github.com/Azure/azure-sdk-for-go"
     },
