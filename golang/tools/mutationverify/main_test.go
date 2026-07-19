@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -25,4 +27,86 @@ func TestTrimOutputBoundsDiagnostic(t *testing.T) {
 	if got := trimOutput([]byte(long)); len(got) != (2<<10)+3 || !strings.HasSuffix(got, "...") {
 		t.Fatalf("trimOutput long length/suffix = %d/%q", len(got), got[len(got)-3:])
 	}
+}
+
+func TestMutationOverlaySmoke(t *testing.T) {
+	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
+	root := writeMutationFixture(t, `
+	if !Allows() {
+		t.Fatal("invariant violated")
+	}`)
+	mutant := fixtureMutation()
+
+	if err := runInvariant(root, "go", mutant); err != nil {
+		t.Fatalf("runInvariant() = %v", err)
+	}
+	if err := killMutant(root, "go", mutant); err != nil {
+		t.Fatalf("killMutant() = %v", err)
+	}
+
+	t.Run("surviving mutation is rejected", func(t *testing.T) {
+		surviving := mutant
+		surviving.name = "allows-unchanged"
+		surviving.to = "return true"
+		if err := killMutant(root, "go", surviving); err == nil || !strings.Contains(err.Error(), "survived invariant") {
+			t.Fatalf("killMutant() error = %v, want surviving-mutation diagnostic", err)
+		}
+	})
+
+	t.Run("non-test failure is rejected", func(t *testing.T) {
+		compileFailure := mutant
+		compileFailure.name = "allows-syntax-error"
+		compileFailure.to = "return ("
+		if err := killMutant(root, "go", compileFailure); err == nil || !strings.Contains(err.Error(), "did not fail through invariant") {
+			t.Fatalf("killMutant() error = %v, want invariant-failure diagnostic", err)
+		}
+	})
+}
+
+func TestRunInvariantReportsTestOutput(t *testing.T) {
+	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
+	root := writeMutationFixture(t, `
+	t.Fatal("baseline failure")`)
+
+	err := runInvariant(root, "go", fixtureMutation())
+	if err == nil || !strings.Contains(err.Error(), "TestInvariant failed") || !strings.Contains(err.Error(), "baseline failure") {
+		t.Fatalf("runInvariant() error = %v, want test name and output", err)
+	}
+}
+
+func TestVerifyRejectsInvalidRepositoryRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	if err := verify(root, "go"); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("verify() error = %v, want invalid-root diagnostic", err)
+	}
+}
+
+func fixtureMutation() mutation {
+	return mutation{
+		name:        "allows-false",
+		path:        "contract/contract.go",
+		from:        "return true",
+		to:          "return false",
+		packagePath: "./contract",
+		testName:    "TestInvariant",
+	}
+}
+
+func writeMutationFixture(t *testing.T, testBody string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "contract"), 0o700); err != nil {
+		t.Fatalf("MkdirAll() = %v", err)
+	}
+	files := map[string]string{
+		"go.mod":                    "module example.test\n\ngo 1.26\n",
+		"contract/contract.go":      "package contract\n\nfunc Allows() bool {\n\treturn true\n}\n",
+		"contract/contract_test.go": "package contract\n\nimport \"testing\"\n\nfunc TestInvariant(t *testing.T) {" + testBody + "\n}\n",
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) = %v", name, err)
+		}
+	}
+	return root
 }
