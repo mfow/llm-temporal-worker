@@ -103,6 +103,7 @@ func TestMaterializationCarriesEveryAncestorAndSnapshotMatchesReplay(t *testing.
 	leaf := childCheckpoint("three", "two", "tenant-a", "op-three", "three")
 	snapshot.Items = append(snapshot.Items, message("three"))
 	snapshot.Depth = 3
+	snapshot.Lineage = append(snapshot.Lineage, Handle("three"))
 	snapshot.Digest = snapshot.digest()
 	leaf.Delta = nil // the self-contained snapshot already includes this node
 	leaf.Snapshot = snapshot
@@ -185,6 +186,25 @@ func TestMaterializationRejectsUnmatchedToolFrontierAndLimits(t *testing.T) {
 	}
 	if _, err := graph.Materialize("tenant-a", "good"); err != nil {
 		t.Fatalf("matching tool result rejected: %v", err)
+	}
+}
+
+func TestMaterializationAllowsParallelToolCalls(t *testing.T) {
+	graph := NewCheckpointGraph(MaterializeLimits{})
+	root := rootCheckpoint("parallel", "tenant-a", "op-parallel")
+	root.Delta = []llm.Item{
+		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"one"}`)},
+		llm.ToolCall{ID: "call-2", Name: "lookup", Arguments: []byte(`{"q":"two"}`)},
+	}
+	if err := graph.PutRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	materialized, err := graph.Materialize("tenant-a", "parallel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(materialized.PendingToolCalls, []string{"call-1", "call-2"}) {
+		t.Fatalf("pending tool calls = %#v", materialized.PendingToolCalls)
 	}
 }
 

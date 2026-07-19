@@ -36,6 +36,7 @@ type CheckpointSnapshot struct {
 	Items    []llm.Item
 	Settings ModelState
 	Depth    int32
+	Lineage  []Handle
 	Digest   [32]byte
 }
 
@@ -73,6 +74,7 @@ type MaterializedState struct {
 	Items            []llm.Item
 	Settings         ModelState
 	PendingToolCalls []string
+	Lineage          []Handle
 }
 
 // CheckpointGraph is a concurrency-safe in-memory graph suitable for pure
@@ -224,7 +226,7 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 			return MaterializedState{}, ErrExpired
 		}
 		path = append(path, checkpoint)
-		if int32(len(path)) > graph.limits.MaxDepth || len(path) > graph.limits.MaxRows {
+		if int32(len(path)-1) > graph.limits.MaxDepth || len(path) > graph.limits.MaxRows {
 			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit")
 		}
 		if checkpoint.Parent == nil {
@@ -244,6 +246,16 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		}
 		if err := checkpoint.Snapshot.validate(); err != nil {
 			return MaterializedState{}, err
+		}
+		if checkpoint.Snapshot.Depth != checkpoint.Depth {
+			return MaterializedState{}, fmt.Errorf("checkpoint snapshot depth does not match checkpoint")
+		}
+		wantLineage := make([]Handle, 0, len(path)-index)
+		for lineageIndex := len(path) - 1; lineageIndex >= index; lineageIndex-- {
+			wantLineage = append(wantLineage, path[lineageIndex].Handle)
+		}
+		if !sameHandles(checkpoint.Snapshot.Lineage, wantLineage) {
+			return MaterializedState{}, fmt.Errorf("checkpoint snapshot lineage mismatch")
 		}
 		result.Items = cloneItems(checkpoint.Snapshot.Items)
 		result.Settings = checkpoint.Snapshot.Settings.Clone()
@@ -283,6 +295,10 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 	}
 	result.Items = cloneItems(result.Items)
 	result.PendingToolCalls = append([]string(nil), pending...)
+	result.Lineage = make([]Handle, 0, len(path))
+	for index := len(path) - 1; index >= 0; index-- {
+		result.Lineage = append(result.Lineage, path[index].Handle)
+	}
 	result.Settings = result.Settings.Clone()
 	return result, nil
 }
@@ -291,7 +307,7 @@ func (graph *CheckpointGraph) validateMaterializedLimits(items []llm.Item) error
 	if len(items) > graph.limits.MaxItems {
 		return fmt.Errorf("checkpoint materialization exceeds item limit")
 	}
-	bytes, err := canonicalItems(items)
+	bytes, err := canonicalItemsWithLimit(items, int(graph.limits.MaxBytes))
 	if err != nil {
 		return err
 	}
@@ -302,7 +318,7 @@ func (graph *CheckpointGraph) validateMaterializedLimits(items []llm.Item) error
 }
 
 func NewCheckpointSnapshot(materialized MaterializedState) *CheckpointSnapshot {
-	snapshot := &CheckpointSnapshot{Items: cloneItems(materialized.Items), Settings: materialized.Settings.Clone(), Depth: materialized.Depth}
+	snapshot := &CheckpointSnapshot{Items: cloneItems(materialized.Items), Settings: materialized.Settings.Clone(), Depth: materialized.Depth, Lineage: append([]Handle(nil), materialized.Lineage...)}
 	snapshot.Digest = snapshot.digest()
 	return snapshot
 }
@@ -329,8 +345,21 @@ func (snapshot CheckpointSnapshot) digest() [32]byte {
 		Items    []llm.Item
 		Settings ModelState
 		Depth    int32
-	}{checkpointSchemaVersion, snapshot.Items, snapshot.Settings, snapshot.Depth})
+		Lineage  []Handle
+	}{checkpointSchemaVersion, snapshot.Items, snapshot.Settings, snapshot.Depth, snapshot.Lineage})
 	return sha256.Sum256(data)
+}
+
+func sameHandles(left, right []Handle) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (checkpoint Checkpoint) clone() Checkpoint {
@@ -345,6 +374,7 @@ func (checkpoint Checkpoint) clone() Checkpoint {
 	if checkpoint.Snapshot != nil {
 		snapshot := *checkpoint.Snapshot
 		snapshot.Items = cloneItems(checkpoint.Snapshot.Items)
+		snapshot.Lineage = append([]Handle(nil), checkpoint.Snapshot.Lineage...)
 		snapshot.Settings = checkpoint.Snapshot.Settings.Clone()
 		result.Snapshot = &snapshot
 	}
@@ -414,9 +444,13 @@ func cloneItems(values []llm.Item) []llm.Item {
 }
 
 func canonicalItems(values []llm.Item) ([]byte, error) {
+	return canonicalItemsWithLimit(values, llm.DefaultCanonicalMaxBytes)
+}
+
+func canonicalItemsWithLimit(values []llm.Item, maxBytes int) ([]byte, error) {
 	data, err := json.Marshal(values)
 	if err != nil {
 		return nil, err
 	}
-	return llm.CanonicalJSON(data)
+	return llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
 }

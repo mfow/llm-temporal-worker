@@ -27,7 +27,12 @@ func validateItems(items []llm.Item) ([]string, error) {
 		}
 		if len(pending) > 0 {
 			if _, isResult := item.(llm.ToolResult); !isResult {
-				return nil, fmt.Errorf("transcript item %d starts a new turn before pending tool results", index)
+				if _, isCall := item.(llm.ToolCall); isCall {
+					// Parallel tool calls are one model turn and may arrive
+					// consecutively before any result.
+				} else {
+					return nil, fmt.Errorf("transcript item %d starts a new turn before pending tool results", index)
+				}
 			}
 		}
 		switch value := item.(type) {
