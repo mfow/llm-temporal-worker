@@ -71,6 +71,7 @@ const (
 	PhaseAdmission         Phase = "admission"
 	PhaseCompile           Phase = "compile"
 	PhaseDispatch          Phase = "dispatch"
+	PhasePoll              Phase = "poll"
 	PhaseStream            Phase = "stream"
 	PhaseLift              Phase = "lift"
 	PhaseFinalize          Phase = "finalize"
@@ -80,7 +81,7 @@ const (
 func (phase Phase) Valid() bool {
 	switch phase {
 	case PhaseDecode, PhaseNormalize, PhaseStateLoad, PhasePlan, PhasePrice,
-		PhaseAdmission, PhaseCompile, PhaseDispatch, PhaseStream, PhaseLift,
+		PhaseAdmission, PhaseCompile, PhaseDispatch, PhasePoll, PhaseStream, PhaseLift,
 		PhaseFinalize, PhaseContinuationWrite:
 		return true
 	default:
