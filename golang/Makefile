@@ -67,8 +67,9 @@ integration:
 	$(GO) test -race ./integration/...
 
 # Runs the readiness recovery gate against exactly one fresh, digest-pinned
-# Redis daemon. The test itself explicitly provisions the immutable Functions;
-# the worker only verifies it and never writes shared Redis code.
+# Redis daemon. The test itself explicitly provisions the immutable Functions
+# and compatibility script; the worker only verifies them and never writes
+# shared Redis code.
 readiness-integration:
 	@command -v docker >/dev/null 2>&1 || { \
 		echo "readiness-integration requires Docker" >&2; \
@@ -81,12 +82,12 @@ readiness-integration:
 	@container="$(READINESS_REDIS_CONTAINER_PREFIX)-$$$$"; \
 	cleanup() { docker rm -f "$$container" >/dev/null 2>&1 || true; }; \
 	trap cleanup EXIT INT TERM; \
-	docker run --detach --name "$$container" --publish 127.0.0.1:$(READINESS_REDIS_PORT):6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --save 60 1 --maxmemory-policy noeviction >/dev/null; \
+	docker run --detach --name "$$container" --publish 127.0.0.1:$(READINESS_REDIS_PORT):6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --appendfsync always --save 60 1 --maxmemory-policy noeviction >/dev/null; \
 	if ! LLMTW_READINESS_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_READINESS_REDIS_CONTAINER="$$container" $(GO) test -count=1 -tags=readinessintegration ./integration; then \
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi; \
-	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; then \
+	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(READINESS_REDIS_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; then \
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi
