@@ -518,7 +518,7 @@
       "source": {
         "path": "docs/index.md",
         "anchor": "#v1-completion-gate",
-        "quote": "The container runs as a non-root user, Kubernetes probes exercise real Redis and worker-PostgreSQL readiness dependencies, and two-replica smoke tests pass."
+        "quote": "The container runs as a non-root user, readiness probes exercise real Redis and configured blob-store dependencies, and two-replica Redis-backed smoke tests pass."
       },
       "implementation_paths": [
         "golang/deploy/kubernetes/base/deployment.yaml",
@@ -763,7 +763,7 @@
       "source": {
         "path": "docs/index.md",
         "anchor": "#v1-completion-gate",
-        "quote": "The in-memory exact-budget reference model and production Redis Function pass the same atomic-window transition suite, including concurrent overlapping-window admission tests; PostgreSQL journal writes/rebuilds pass their separate contract."
+        "quote": "The in-memory exact-budget reference model and production Redis Function pass the same atomic-window transition suite, including concurrent overlapping-window admission tests."
       },
       "implementation_paths": [
         "golang/storage/conformance/conformance.go",
