@@ -49,6 +49,8 @@ func TestReadinessIntegrationProvisionsRedisFunctionsForStorageGate(t *testing.T
 	target := makeTarget(t, string(makefile), "readiness-integration:\n", "\n\n# Runs the black-box StoreFactory contract")
 	for _, required := range []string{
 		`LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)"`,
+		`LLMTW_REDIS_CONTAINER="$$container"`,
+		`LLMTW_REDIS_CONTAINER_PREFIX="$(READINESS_REDIS_CONTAINER_PREFIX)"`,
 		"LLMTW_REDIS_TEST_PROVISION=1",
 		`-tags=integration ./storage/redis -run '^TestLiveRedis'`,
 	} {
