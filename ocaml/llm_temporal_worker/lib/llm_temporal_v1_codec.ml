@@ -321,7 +321,7 @@ let generate_response_of_json value =
   let* route = match optional "route" fields with None | Some `Null -> Ok None | Some value -> let* value = route_of_v1_json "generate response.route" value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "generate response.usage" value in Ok (Some value) in
   let* cost = required "generate response" "cost" fields >>= settled_cost_of_json "generate response.cost" in
-  let* diagnostics = required "generate response" "diagnostics" fields >>= list "generate response.diagnostics" >>= map_result (diagnostic_of_json "generate response.diagnostic") in
+  let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "generate response.diagnostics" value >>= map_result (diagnostic_of_json "generate response.diagnostic") in
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics }
 
 let encode_generate_request value = let* value = generate_request_to_json value in to_bytes value
@@ -388,7 +388,7 @@ let compaction_response_of_json value =
   let* provenance = match optional "provenance" fields with None | Some `Null -> Ok None | Some value -> let* value = provenance_of_json "compact response.provenance" value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "compact response.usage" value in Ok (Some value) in
   let* cost = required "compact response" "cost" fields >>= settled_cost_of_json "compact response.cost" in
-  let* diagnostics = required "compact response" "diagnostics" fields >>= list "compact response.diagnostics" >>= map_result (diagnostic_of_json "compact response.diagnostic") in
+  let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "compact response.diagnostics" value >>= map_result (diagnostic_of_json "compact response.diagnostic") in
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; checkpoint; cache; provenance; usage; cost; diagnostics }
 
 let encode_compact_request value = let* value = compact_request_to_json value in to_bytes value
