@@ -167,3 +167,52 @@ func TestTracerRecordErrorKeepsApprovedProviderFields(t *testing.T) {
 		t.Fatal("retry was exported to trace")
 	}
 }
+
+func TestTracerBoundsSpanNamesAndNoopContextPaths(t *testing.T) {
+	if observability.FromContext(nil) == nil {
+		t.Fatal("nil context returned nil tracer")
+	}
+	ctx := context.Background()
+	if got := observability.WithTracer(ctx, nil); got != ctx {
+		t.Fatal("nil tracer changed context")
+	}
+	var nilExporter *observability.MemoryExporter
+	if err := nilExporter.ExportSpans(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := nilExporter.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := nilExporter.Spans(); got != nil {
+		t.Fatalf("nil exporter spans = %v, want nil", got)
+	}
+
+	ratio := 2.0
+	exporter := &observability.MemoryExporter{}
+	tracer := observability.NewTracer(observability.TraceOptions{
+		Enabled: true, Exporter: exporter, SampleRatio: &ratio, Batch: true,
+	})
+	for _, name := range []string{"", strings.Repeat("x", 97), "prompt contents", "line\nbreak", "worker.event"} {
+		_, span := tracer.Start(ctx, name)
+		tracer.RecordError(span, nil)
+		span.End()
+	}
+	if err := tracer.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.Spans()
+	if len(spans) != 5 {
+		t.Fatalf("span count = %d, want 5", len(spans))
+	}
+	for index, span := range spans[:4] {
+		if got := span.Name(); got != "worker.event" {
+			t.Fatalf("span %d name = %q, want worker.event", index, got)
+		}
+	}
+	if got := spans[4].Name(); got != "worker.event" {
+		t.Fatalf("safe span name = %q, want worker.event", got)
+	}
+	if err := tracer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

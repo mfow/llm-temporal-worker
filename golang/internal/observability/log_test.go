@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"log/slog"
 )
 
 func TestLoggerDropsContentAndRawErrorsAndHashesTenant(t *testing.T) {
@@ -41,5 +42,46 @@ func TestLoggerRejectsUnsafeMessage(t *testing.T) {
 	logger.Info(context.Background(), "prompt: hidden user content")
 	if strings.Contains(output.String(), "hidden user content") {
 		t.Fatalf("unsafe message leaked: %s", output.String())
+	}
+}
+
+func TestLoggerConfigurationAndAttributeBoundaries(t *testing.T) {
+	if _, err := observability.NewLogger(observability.LogOptions{Level: "trace"}); err == nil {
+		t.Fatal("unsupported log level was accepted")
+	}
+	if _, err := observability.NewLogger(observability.LogOptions{Format: "xml"}); err == nil {
+		t.Fatal("unsupported log format was accepted")
+	}
+
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "text", Level: "warning", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logger.Enabled(context.Background(), slog.LevelInfo) {
+		t.Fatal("warning logger enabled info records")
+	}
+	if !logger.Enabled(context.Background(), slog.LevelWarn) {
+		t.Fatal("warning logger disabled warning records")
+	}
+	logger.Info(context.Background(), "this info record is filtered")
+	logger.Warn(context.Background(), "safe warning", slog.Int("duration_ms", 4), slog.String("provider", ""), slog.String("provider", strings.Repeat("x", 97)), slog.String("status", "line\nbreak"))
+	logger.Error(context.Background(), "", nil, slog.String("operation_id", "op-1"))
+	logger.Warn(context.Background(), strings.Repeat("x", 161))
+	logger.Warn(context.Background(), "control\tmessage")
+	if err := logger.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := observability.WithTime(-time.Second).Value.Int64(); got != 0 {
+		t.Fatalf("negative duration attribute = %d, want 0", got)
+	}
+	if got := observability.WithTime(1500 * time.Millisecond).Value.Int64(); got != 1500 {
+		t.Fatalf("positive duration attribute = %d, want 1500", got)
+	}
+	encoded := output.String()
+	for _, forbidden := range []string{"line", "break", strings.Repeat("x", 161), "filtered"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("unsafe or filtered log text %q was emitted: %s", forbidden, encoded)
+		}
 	}
 }
