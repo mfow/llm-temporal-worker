@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -21,6 +22,13 @@ type Input struct {
 	Catalog      Catalog
 	Continuation state.Constraints
 	Health       HealthView
+	// Affinity is an optional immutable checkpoint observation. It is applied
+	// only after normal route eligibility has produced candidates; it cannot
+	// authorize a route or change the requested service class.
+	Affinity *AffinityPreferences
+	// Now is captured by the engine's immutable snapshot clock so expiry
+	// decisions remain deterministic for one plan and are testable.
+	Now time.Time
 }
 
 // Catalog is an immutable route snapshot. The planner never reads process
@@ -37,14 +45,21 @@ type Model struct {
 }
 
 type Route struct {
-	ID             string
-	EndpointID     string
-	Provider       string
-	Family         string
-	Region         string
-	AccountRegion  string
-	Model          string
-	ModelLineage   string
+	ID            string
+	EndpointID    string
+	Provider      string
+	Family        string
+	Region        string
+	AccountRegion string
+	// EndpointAccountHMAC is a non-secret route identity digest used to match
+	// persisted provider affinity without storing an account identifier.
+	EndpointAccountHMAC [32]byte
+	Model               string
+	ModelLineage        string
+	// ModelRevision identifies the provider model revision used to establish a
+	// prompt-cache prefix. Empty revisions are normalized to Model when the
+	// catalog is compiled.
+	ModelRevision  string
 	Classes        []llm.ServiceClass
 	ProviderTiers  map[llm.ServiceClass]string
 	AllowedTenants []string
@@ -62,23 +77,26 @@ type Route struct {
 }
 
 type Candidate struct {
-	ID                string
-	RouteID           string
-	EndpointID        string
-	Provider          string
-	Family            string
-	Region            string
-	Model             string
-	ModelLineage      string
-	RequestedClass    llm.ServiceClass
-	AttemptedClass    llm.ServiceClass
-	FallbackIndex     int
-	RouteIndex        int
-	ProviderTier      string
-	CapabilityVersion string
-	PriceVersion      string
-	ExtensionDigest   string
-	Pinning           state.Pinning
+	ID                  string
+	RouteID             string
+	EndpointID          string
+	Provider            string
+	Family              string
+	Region              string
+	EndpointAccountHMAC [32]byte
+	Model               string
+	ModelLineage        string
+	ModelRevision       string
+	PriceAvailable      bool
+	RequestedClass      llm.ServiceClass
+	AttemptedClass      llm.ServiceClass
+	FallbackIndex       int
+	RouteIndex          int
+	ProviderTier        string
+	CapabilityVersion   string
+	PriceVersion        string
+	ExtensionDigest     string
+	Pinning             state.Pinning
 }
 
 func (candidate Candidate) Class() llm.ServiceClass { return candidate.AttemptedClass }
@@ -131,16 +149,18 @@ func (rejection Rejection) diagnostic() llm.Diagnostic {
 
 func digestCandidate(route Route, requested, attempted llm.ServiceClass, fallback, routeIndex int, extensionDigest string) (string, [32]byte, error) {
 	value := struct {
-		RouteID, EndpointID, Provider, Family, Model, Lineage string
-		Requested, Attempted                                  llm.ServiceClass
-		Tier                                                  string
-		Fallback, RouteIndex                                  int
-		Capability, Price, Extension, AccountRegion, Region   string
+		RouteID, EndpointID, Provider, Family, Model, Lineage, Revision string
+		Requested, Attempted                                            llm.ServiceClass
+		Tier                                                            string
+		Fallback, RouteIndex                                            int
+		Capability, Price, Extension, AccountRegion, Region             string
+		EndpointAccountHMAC                                             string
 	}{
-		RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: string(route.Family), Model: route.Model, Lineage: route.ModelLineage,
+		RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: string(route.Family), Model: route.Model, Lineage: route.ModelLineage, Revision: route.ModelRevision,
 		Requested: requested, Attempted: attempted, Tier: route.ProviderTiers[attempted], Fallback: fallback, RouteIndex: routeIndex,
 		Capability: route.Capabilities.Version, Price: route.PriceVersion, Extension: extensionDigest,
 		AccountRegion: route.AccountRegion, Region: route.Region,
+		EndpointAccountHMAC: hex.EncodeToString(route.EndpointAccountHMAC[:]),
 	}
 	data, err := llm.CanonicalJSON(mustJSON(value))
 	if err != nil {

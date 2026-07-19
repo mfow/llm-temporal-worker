@@ -59,6 +59,33 @@ insert a class the caller omitted. Random or latency-weighted selection is
 outside v1 because it weakens reproducibility; operators change order through a
 new configuration snapshot.
 
+### Provider prompt-cache affinity
+
+An immutable checkpoint may carry an ordered `ProviderCacheAffinitySet`. Each
+record contains provider/route identity, endpoint-account HMAC, region, API
+family, model lineage and revision, cache epoch, observed cache-read/write
+tokens, and an optional expiry. The planner validates those records and applies
+them only after ordinary route eligibility has produced candidates. An exact
+soft-affinity route is moved to the front of its existing requested/attempted
+service-class group; it never moves across a class fallback boundary.
+
+Affinity is a preference, not authorization. Tenant and residency policy,
+endpoint enablement, credential scope, requested class, capability/context
+requirements, health, pricing, and budget admission remain authoritative. An
+expired or malformed observation is ignored or rejected before dispatch, and a
+route absent from the immutable catalog cannot be introduced by an affinity
+record. Required opaque continuation state continues to use the existing exact
+provider pinning rules.
+
+Provider prompt-cache keys are HMAC-SHA256 digests over a versioned canonical
+tuple of tenant scope, parent checkpoint transcript digest, provider cache
+epoch, and compatible model lineage. The output is safe provider metadata; raw
+tenant IDs, prompt content, content hashes, and credentials are not emitted as
+keys. Forks that share one immutable parent therefore reuse the same prefix
+identity while still producing independent operations and responses. Cache
+read/write token observations remain separate from worker exact-response cache
+accounting.
+
 ## Candidate identity
 
 A candidate identity includes:

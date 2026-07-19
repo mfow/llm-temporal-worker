@@ -106,7 +106,7 @@ func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (s
 		planSpan.End()
 		return streamSetup{}, err
 	}
-	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints))
+	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints, now))
 	if err != nil {
 		engine.recordTraceError(planCtx, planSpan, err)
 		planSpan.End()
@@ -235,8 +235,8 @@ func (engine *Engine) cancelPreparedStream(ctx context.Context, setup streamSetu
 }
 
 // routingInput keeps Stream and Generate on the exact same planning input.
-func routingInput(request llm.Request, snapshot Snapshot, constraints state.Constraints) routing.Input {
-	return routing.Input{Request: request, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health}
+func routingInput(request llm.Request, snapshot Snapshot, constraints state.Constraints, now time.Time) routing.Input {
+	return routing.Input{Request: request, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health, Now: now}
 }
 
 func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation, emitter *streamEmitter) error {
