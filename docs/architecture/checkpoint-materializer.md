@@ -22,4 +22,3 @@ This is the durable-state-independent slice of the design. PostgreSQL
 publication, blob ordering, Activity payload wiring, and retention remain
 separate concerns and must use this contract rather than reimplementing
 materialization in an adapter.
-
