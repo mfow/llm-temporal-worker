@@ -85,7 +85,7 @@ func TestPostgresFoundationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get blob: %v", err)
 	}
-	if loaded.BlobID != record.BlobID || loaded.ScopeID != first.ID || loaded.ByteLength != int64(len(value)) {
+	if loaded.BlobID != record.BlobID || loaded.ScopeID != first.ID || loaded.ByteLength != int64(len("object bytes")) {
 		t.Fatalf("loaded blob metadata = %#v", loaded)
 	}
 }
