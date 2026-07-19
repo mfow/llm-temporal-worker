@@ -97,7 +97,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 		planSpan.End()
 		return llm.Response{}, err
 	}
-	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints))
+	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints, now))
 	if err != nil {
 		engine.recordTraceError(planCtx, planSpan, err)
 		planSpan.End()

@@ -33,6 +33,9 @@ func (planner DeterministicPlanner) Plan(ctx context.Context, input Input) (Plan
 	if request.Model == "" {
 		return Plan{}, fmt.Errorf("request model is required")
 	}
+	if input.Affinity != nil && input.Now.IsZero() {
+		return Plan{}, fmt.Errorf("provider cache affinity planning time is required")
+	}
 	model, ok := input.Catalog.Models[request.Model]
 	if !ok {
 		return Plan{Model: request.Model, Version: input.Catalog.Version}, fmt.Errorf("no configured routes for logical model %q", request.Model)
@@ -59,6 +62,13 @@ func (planner DeterministicPlanner) Plan(ctx context.Context, input Input) (Plan
 		}
 	}
 	sortedRejections(plan.Rejections)
+	if input.Affinity != nil {
+		preferred, err := PreferProviderCacheAffinity(plan, input.Affinity, input.Now)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan = preferred
+	}
 	plan.Digest = digestPlan(plan)
 	plan.DigestHex = fmt.Sprintf("%x", plan.Digest[:])
 	if len(plan.Candidates) == 0 {
@@ -129,6 +139,10 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	if lineage == "" {
 		lineage = route.Model
 	}
+	revision := route.ModelRevision
+	if revision == "" {
+		revision = route.Model
+	}
 	pin := route.Pinning
 	if pin.Provider == "" {
 		pin = state.Pinning{Provider: route.Provider, EndpointID: route.EndpointID, AccountRegion: route.AccountRegion, Family: string(route.Family), ModelLineage: lineage}
@@ -150,7 +164,7 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	if err != nil {
 		return reject(RejectInvalid, "candidate", err.Error())
 	}
-	return Candidate{ID: id, RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: route.Family, Region: route.Region, Model: route.Model, ModelLineage: lineage, RequestedClass: requested, AttemptedClass: attempted, FallbackIndex: fallbackIndex, RouteIndex: routeIndex, ProviderTier: tier, CapabilityVersion: route.Capabilities.Version, PriceVersion: route.PriceVersion, ExtensionDigest: extensionDigest, Pinning: pin}, Rejection{}, true
+	return Candidate{ID: id, RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: route.Family, Region: route.Region, EndpointAccountHMAC: route.EndpointAccountHMAC, Model: route.Model, ModelLineage: lineage, ModelRevision: revision, PriceAvailable: route.PriceAvailable, RequestedClass: requested, AttemptedClass: attempted, FallbackIndex: fallbackIndex, RouteIndex: routeIndex, ProviderTier: tier, CapabilityVersion: route.Capabilities.Version, PriceVersion: route.PriceVersion, ExtensionDigest: extensionDigest, Pinning: pin}, Rejection{}, true
 }
 
 func requiredFeatures(request llm.Request, continuation state.Constraints) []Feature {
@@ -210,6 +224,12 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 			route := &model.Routes[index]
 			if err := validateRouteShape(*route); err != nil {
 				return Catalog{}, err
+			}
+			if route.ModelLineage == "" {
+				route.ModelLineage = route.Model
+			}
+			if route.ModelRevision == "" {
+				route.ModelRevision = route.Model
 			}
 			if _, exists := seen[route.ID]; exists {
 				return Catalog{}, fmt.Errorf("model %q duplicate route %q", name, route.ID)
