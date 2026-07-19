@@ -26,6 +26,7 @@ func TestPrepareRequestIsolatesApplicationSettings(t *testing.T) {
 		Tools:      []llm.Tool{{Name: "lookup"}},
 		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceRequired, Name: "lookup"},
 		Output:     &llm.OutputSpec{MaxTokens: &max, Format: llm.OutputFormat{Kind: llm.OutputKindJSON}},
+		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &max},
 		Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
 	}
 	original := request
@@ -33,11 +34,14 @@ func TestPrepareRequestIsolatesApplicationSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(compact.Tools) != 0 || compact.ToolPolicy.Mode != llm.ToolChoiceNone || compact.Continuation != nil {
+	if len(compact.Tools) != 0 || compact.ToolPolicy.Mode != llm.ToolChoiceNone || compact.Continuation != nil || compact.Reasoning != nil {
 		t.Fatalf("isolated request retained application controls: %#v", compact)
 	}
 	if compact.Output == nil || compact.Output.Format.Kind != llm.OutputKindText || compact.Output.MaxTokens == nil || *compact.Output.MaxTokens != policy.OutputReserveTokens {
 		t.Fatalf("isolated output = %#v", compact.Output)
+	}
+	if len(compact.Instructions) < 2 || !strings.Contains(compact.Instructions[0].Text, "Do not call tools") || !strings.Contains(compact.Instructions[1].Text, "balanced") {
+		t.Fatalf("compaction prompt/style missing: %#v", compact.Instructions)
 	}
 	if len(original.Tools) != 1 || original.ToolPolicy.Mode != llm.ToolChoiceRequired || original.Output.Format.Kind != llm.OutputKindJSON {
 		t.Fatalf("source request mutated: %#v", original)

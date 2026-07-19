@@ -27,13 +27,19 @@ func Prompt(version string) (string, error) {
 
 // PrepareRequest constructs the isolated summarizer call.  It copies the
 // caller's routing and sampling settings, but never mutates the caller and
-// always strips application tools, tool policy, continuation, and structured
-// output.  The returned request can therefore only ask for bounded plain text.
+// always strips application tools, tool policy, continuation, reasoning, and
+// structured output. It injects the versioned repository prompt and selected
+// summary style as policy instructions. The returned request can therefore
+// only ask for bounded plain text.
 func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, policy Policy) (llm.Request, error) {
 	if operationKey == "" {
 		return llm.Request{}, errors.New("compaction operation key is required")
 	}
 	if err := policy.Validate(); err != nil {
+		return llm.Request{}, err
+	}
+	prompt, err := Prompt(policy.PromptVersion)
+	if err != nil {
 		return llm.Request{}, err
 	}
 	if len(input) == 0 {
@@ -43,11 +49,20 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 	result := source
 	result.OperationKey = operationKey
 	result.Input = append([]llm.Item(nil), input...)
-	result.Instructions = append([]llm.Instruction(nil), source.Instructions...)
+	result.Instructions = make([]llm.Instruction, 0, len(source.Instructions)+2)
+	result.Instructions = append(result.Instructions,
+		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: prompt},
+		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "Summary style: " + string(policy.SummaryStyle)},
+	)
+	result.Instructions = append(result.Instructions, source.Instructions...)
 	result.Tools = nil
 	result.ToolPolicy = llm.ToolPolicy{Mode: llm.ToolChoiceNone}
 	result.Output = &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindText}}
 	result.Continuation = nil
+	// Reasoning is an application setting, not part of the bounded plain-text
+	// summarizer contract. Leaving it enabled could reserve unbounded provider
+	// reasoning tokens even though OutputReserveTokens is capped.
+	result.Reasoning = nil
 	if source.ServiceClassFallbacks != nil {
 		result.ServiceClassFallbacks = append([]llm.ServiceClass(nil), source.ServiceClassFallbacks...)
 	}
@@ -55,10 +70,6 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 		value := *source.Sampling
 		value.StopSequences = append([]string(nil), source.Sampling.StopSequences...)
 		result.Sampling = &value
-	}
-	if source.Reasoning != nil {
-		value := *source.Reasoning
-		result.Reasoning = &value
 	}
 	return result, nil
 }
