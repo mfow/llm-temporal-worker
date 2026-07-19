@@ -37,5 +37,5 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 			legacyTotal, _ = legacyTotal.Add(legacy)
 		}
 	}
-	return Cost{USD: totalUSD, MicroUSD: legacyTotal, Currency: entry.Currency, Method: CostCatalogUsage, CatalogVersion: entry.Version}, nil
+	return Cost{USD: totalUSD, MicroUSD: legacyTotal, Method: CostCatalogUsage, CatalogVersion: entry.Version}, nil
 }

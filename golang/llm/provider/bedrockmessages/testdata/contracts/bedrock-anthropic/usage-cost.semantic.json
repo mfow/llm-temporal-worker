@@ -1,7 +1,7 @@
 {
   "api_version": "llm.temporal/v1",
   "continuation": {"endpoint_id": "bedrock-fixture", "handle": "bedrock-messages:msg-bedrock-usage", "model": "claude-contract", "pinned": true},
-  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-bedrock-usage",
   "output": [

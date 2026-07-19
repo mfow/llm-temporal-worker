@@ -321,7 +321,7 @@
     },
     "pricing": {
       "type": "object", "additionalProperties": false, "required": ["catalogs", "require_price_when_budgeted"],
-      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "require_price_when_budgeted": { "type": "boolean" }, "currency": { "const": "USD" } }
+      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "require_price_when_budgeted": { "type": "boolean" } }
     },
     "budget_window": {
       "type": "object", "additionalProperties": false, "required": ["duration", "bucket"],

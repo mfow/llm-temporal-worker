@@ -25,7 +25,6 @@ type Estimate struct {
 	MicroUSD         pricing.MicroUSD
 	// CostUSD is the exact fixed-scale reservation used by new callers.
 	CostUSD        pricing.USD
-	Currency       string
 	CatalogVersion string
 }
 
@@ -94,7 +93,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 			return Estimate{}, err
 		}
 	}
-	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, Currency: entry.Currency, CatalogVersion: entry.Version}, nil
+	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, CatalogVersion: entry.Version}, nil
 }
 
 func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, entries map[string]pricing.Entry) (Estimate, error) {

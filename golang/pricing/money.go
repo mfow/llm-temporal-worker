@@ -66,6 +66,33 @@ func MicroFromUSD(usd USD) (MicroUSD, error) {
 	return result, nil
 }
 
+// CeilMicroFromUSD materializes a non-negative exact USD amount at the Redis
+// integer boundary without undercharging. Any positive fractional microUSD is
+// rounded up, and a result above RedisSafeLimit is rejected.
+func CeilMicroFromUSD(usd USD) (MicroUSD, error) {
+	if err := usd.valid(); err != nil {
+		return 0, err
+	}
+	units := new(big.Int)
+	if usd.units != nil {
+		units.Set(usd.units)
+	}
+	divisor := big.NewInt(1_000_000_000_000)
+	remainder := new(big.Int)
+	units.QuoRem(units, divisor, remainder)
+	if remainder.Sign() > 0 {
+		units.Add(units, big.NewInt(1))
+	}
+	if !units.IsInt64() {
+		return 0, fmt.Errorf("USD value overflows microUSD compatibility range")
+	}
+	result := MicroUSD(units.Int64())
+	if !result.Valid() {
+		return 0, fmt.Errorf("USD value exceeds Redis-safe microUSD range")
+	}
+	return result, nil
+}
+
 func checkedInt64(value int64) error {
 	if value < 0 || value > math.MaxInt64 {
 		return fmt.Errorf("value is outside non-negative int64 range")

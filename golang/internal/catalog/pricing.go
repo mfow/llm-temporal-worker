@@ -73,8 +73,8 @@ func compilePricing(document pricingDocument) (PricingCatalog, error) {
 	if err := validateIdentifier(id, "id"); err != nil {
 		return PricingCatalog{}, err
 	}
-	if strings.TrimSpace(document.Currency) == "" {
-		return PricingCatalog{}, fmt.Errorf("currency must be non-empty")
+	if strings.TrimSpace(document.Currency) != "USD" {
+		return PricingCatalog{}, fmt.Errorf("currency must be USD")
 	}
 	if len(document.Entries) == 0 {
 		return PricingCatalog{}, fmt.Errorf("entries must not be empty")
@@ -93,7 +93,7 @@ func compilePricing(document pricingDocument) (PricingCatalog, error) {
 		seen[key] = struct{}{}
 		entries = append(entries, entry)
 	}
-	compiled, err := pricing.CompileCatalog(document.Version, document.Currency, entries)
+	compiled, err := pricing.CompileUSD(document.Version, entries)
 	if err != nil {
 		return PricingCatalog{}, err
 	}
@@ -177,7 +177,6 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 		Model:          fileEntry.Model,
 		ProviderTier:   providerTier,
 		Prices:         pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
-		Currency:       document.Currency,
 		EffectiveFrom:  fileEntry.EffectiveFrom,
 		EffectiveUntil: fileEntry.EffectiveUntil,
 		Provenance:     provenance,

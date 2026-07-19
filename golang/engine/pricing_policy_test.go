@@ -57,7 +57,7 @@ func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ReservedMicroUSD != 0 || response.Cost.ActualMicroUSD != 0 || response.Cost.Method != "" || response.Cost.CatalogVersion != "" {
+	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ReservedCostUSD != nil || response.Cost.ActualCostUSD != nil || response.Cost.Method != "" || response.Cost.CatalogVersion != "" {
 		t.Fatalf("unpriced response cost = %#v, want unknown zero-value monetary facts", response.Cost)
 	}
 	operation, err := harness.admission.Get(context.Background(), response.OperationID)
@@ -144,7 +144,7 @@ func TestGenerateRejectsUnbudgetedUnpricedCandidateWhenPolicyIsStrict(t *testing
 
 func testPriceCatalog(t *testing.T, entries ...pricing.Entry) pricing.Catalog {
 	t.Helper()
-	catalog, err := pricing.CompileCatalog("prices-1", "USD", entries)
+	catalog, err := pricing.CompileUSD("prices-1", entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func testPriceCatalog(t *testing.T, entries ...pricing.Entry) pricing.Catalog {
 func priceEntryForTier(tier string) pricing.Entry {
 	return pricing.Entry{
 		Provider: "provider-1", Family: string(provider.FamilyOpenAIResponses), EndpointID: "endpoint-1", Region: "us-east-1", Model: "provider-model", ProviderTier: tier,
-		Currency: "USD", Version: "prices-1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")},
+		Version: "prices-1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")},
 	}
 }
 

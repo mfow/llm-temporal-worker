@@ -1,6 +1,6 @@
 {
   "api_version": "llm.temporal/v1",
-  "cost": {"actual_microusd": 5, "catalog_version": "", "currency": "USD", "method": "openrouter_reported", "reserved_microusd": 0},
+  "cost": {"actual_cost_usd": "0.000004560000000000", "catalog_version": "", "method": "openrouter_reported", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-usage-cost",
   "output": [

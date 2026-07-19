@@ -68,7 +68,7 @@ func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 	if !ok || extra["text"] != true {
 		t.Fatalf("exa extra body = %#v", wire["extra_body"])
 	}
-	if result.Response.Cost.ActualMicroUSD != 2 || result.Response.Provider.RequestID != "exa-req-1" || result.Response.Provider.GenerationID != "exa-generation-1" {
+	if result.Response.Cost.ActualCostUSD == nil || result.Response.Cost.ActualCostUSD.String() != "0.000001230000000000" || result.Response.Provider.RequestID != "exa-req-1" || result.Response.Provider.GenerationID != "exa-generation-1" {
 		t.Fatalf("exa response metadata = %#v", result.Response)
 	}
 	if len(result.Response.Output) != 2 {

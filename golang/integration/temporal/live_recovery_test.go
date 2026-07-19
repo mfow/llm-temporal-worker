@@ -357,9 +357,9 @@ func newLiveRecoveryEngine(t *testing.T, admissions admission.AdmissionStore, re
 	if err != nil {
 		t.Fatal(err)
 	}
-	priceCatalog, err := pricing.CompileCatalog("live-recovery-prices-v1", "USD", []pricing.Entry{{
+	priceCatalog, err := pricing.CompileUSD("live-recovery-prices-v1", []pricing.Entry{{
 		Provider: "content-free-fixture", Family: string(provider.FamilyOpenAIResponses), EndpointID: "live-recovery-endpoint",
-		Region: "local", Model: "content-free-model", ProviderTier: "standard", Currency: "USD", Version: "live-recovery-prices-v1",
+		Region: "local", Model: "content-free-model", ProviderTier: "standard", Version: "live-recovery-prices-v1",
 		Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")},
 	}})
 	if err != nil {

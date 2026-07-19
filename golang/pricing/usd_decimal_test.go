@@ -55,6 +55,28 @@ func TestUSDParseCanonicalPrecisionAndBounds(t *testing.T) {
 	}
 }
 
+func TestUSDParseExponentFormExactly(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{"1.23e-7", "0.000000123000000000"},
+		{"1.23E-7", "0.000000123000000000"},
+		{"1e2", "100.000000000000000000"},
+		{"0e999", "0.000000000000000000"},
+	} {
+		got, err := ParseUSD(test.input)
+		if err != nil || got.String() != test.want {
+			t.Fatalf("ParseUSD(%q) = %s, %v; want %s", test.input, got.String(), err, test.want)
+		}
+	}
+	for _, input := range []string{"1e-19", "1.2e999", "1e", "1e+", "1efoo"} {
+		if _, err := ParseUSD(input); err == nil {
+			t.Errorf("ParseUSD(%q) accepted an inexact or malformed exponent", input)
+		}
+	}
+}
+
 func TestUSDCheckedArithmeticAndRatio(t *testing.T) {
 	one := MustUSD("1")
 	tenth := MustUSD("0.1")

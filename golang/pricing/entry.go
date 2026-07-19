@@ -21,7 +21,6 @@ type Entry struct {
 	Model          string
 	ProviderTier   string
 	Prices         UnitPrices
-	Currency       string `json:"-"`
 	EffectiveFrom  time.Time
 	EffectiveUntil time.Time
 	Provenance     string
@@ -51,11 +50,10 @@ const (
 )
 
 type Cost struct {
-	// USD is the authoritative exact amount. MicroUSD and Currency are kept
-	// solely for the versioned Redis/provider compatibility boundary.
+	// USD is the authoritative exact amount. MicroUSD is materialized only
+	// when the engine crosses into the integer Redis admission boundary.
 	USD            USD
 	MicroUSD       MicroUSD
-	Currency       string
 	Method         CostMethod
 	CatalogVersion string
 }

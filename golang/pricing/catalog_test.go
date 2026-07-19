@@ -7,8 +7,8 @@ import (
 )
 
 func TestCatalogResolveExactEntryAndReload(t *testing.T) {
-	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "default", Currency: "USD", Version: "entry-v1", EffectiveFrom: time.Unix(1, 0), Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
-	catalog, err := CompileCatalog("catalog-v1", "USD", []Entry{entry})
+	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "default", Version: "entry-v1", EffectiveFrom: time.Unix(1, 0), Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	catalog, err := CompileUSD("catalog-v1", []Entry{entry})
 	if err != nil {
 		t.Fatal(err)
 	}

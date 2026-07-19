@@ -152,9 +152,6 @@ func applyDefaults(config *Config) {
 	if config.Capabilities.UnknownInStrictMode == "" {
 		config.Capabilities.UnknownInStrictMode = "reject"
 	}
-	if config.Pricing.Currency == "" {
-		config.Pricing.Currency = "USD"
-	}
 	if config.Telemetry.Logs.Format == "" {
 		config.Telemetry.Logs.Format = "json"
 	}

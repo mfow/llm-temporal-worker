@@ -69,8 +69,18 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 	if got.Header.Get("Authorization") != "Bearer or-key" || got.Header.Get("HTTP-Referer") != "https://client.example" || got.Header.Get("X-OpenRouter-Title") != "contract" {
 		t.Fatalf("openrouter headers = %#v", got.Header)
 	}
-	if result.Response.Provider.GenerationID != "gen-1" || result.Response.Cost.ActualMicroUSD != 2 {
+	if result.Response.Provider.GenerationID != "gen-1" || result.Response.Cost.ActualCostUSD == nil || result.Response.Cost.ActualCostUSD.String() != "0.000001230000000000" {
 		t.Fatalf("openrouter metadata = %#v", result.Response)
+	}
+}
+
+func TestParseDecimalUSDAcceptsExponentForm(t *testing.T) {
+	amount, err := parseDecimalUSD(json.RawMessage(`1.23e-7`), "openrouter_cost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := amount.String(); got != "0.000000123000000000" {
+		t.Fatalf("exponent cost = %s, want 0.000000123000000000", got)
 	}
 }
 

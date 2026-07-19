@@ -45,9 +45,9 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "response usage could not be priced", err), candidate.estimate.MicroUSD)
 		}
 		reservedUSD, _ := pricing.USDFromMicro(operation.ReservedMicroUSD)
-		response.Cost = llm.Cost{Status: llm.CostStatusKnown, ReservedCostUSD: &reservedUSD, ActualCostUSD: &actual.USD, Currency: actual.Currency, ReservedMicroUSD: int64(operation.ReservedMicroUSD), ActualMicroUSD: int64(actual.MicroUSD), Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
+		response.Cost = llm.Cost{Status: llm.CostStatusKnown, ReservedCostUSD: &reservedUSD, ActualCostUSD: &actual.USD, Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
 	} else {
-		response.Cost = llm.Cost{Status: llm.CostStatusUnknown, ReservedMicroUSD: int64(operation.ReservedMicroUSD)}
+		response.Cost = llm.Cost{Status: llm.CostStatusUnknown}
 	}
 	if response.Status == "" {
 		response.Status = llm.ResponseStatusCompleted
@@ -87,32 +87,22 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation completion failed", err)
 	}
 	recordCompletion(ctx, response)
-	response.Cost.ReservedMicroUSD = int64(operation.ReservedMicroUSD)
 	return response, nil
 }
 
 func actualCost(entry pricing.Entry, response llm.Response) (pricing.Cost, error) {
 	if response.Cost.Method != "" {
-		if response.Cost.ActualCostUSD != nil {
-			if err := response.Cost.ActualCostUSD.Validate(); err != nil {
-				return pricing.Cost{}, fmt.Errorf("provider-reported USD cost is invalid: %w", err)
-			}
-			legacy, _ := pricing.MicroFromUSD(*response.Cost.ActualCostUSD)
-			return pricing.Cost{USD: *response.Cost.ActualCostUSD, MicroUSD: legacy, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
+		if response.Cost.ActualCostUSD == nil {
+			return pricing.Cost{}, fmt.Errorf("provider-reported cost has no exact USD amount")
 		}
-		actual := pricing.MicroUSD(response.Cost.ActualMicroUSD)
-		if !actual.Valid() {
-			return pricing.Cost{}, fmt.Errorf("provider-reported cost is outside safe range")
+		if err := response.Cost.ActualCostUSD.Validate(); err != nil {
+			return pricing.Cost{}, fmt.Errorf("provider-reported USD cost is invalid: %w", err)
 		}
-		currency := response.Cost.Currency
-		if currency == "" {
-			currency = entry.Currency
-		}
-		exact, err := pricing.USDFromMicro(actual)
+		legacy, err := pricing.CeilMicroFromUSD(*response.Cost.ActualCostUSD)
 		if err != nil {
 			return pricing.Cost{}, err
 		}
-		return pricing.Cost{USD: exact, MicroUSD: actual, Currency: currency, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
+		return pricing.Cost{USD: *response.Cost.ActualCostUSD, MicroUSD: legacy, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
 	}
 	return pricing.CostFromUsage(entry, pricing.Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ReasoningTokens: response.Usage.ReasoningTokens, CacheReadTokens: response.Usage.CacheReadTokens, CacheWriteTokens: response.Usage.CacheWriteTokens})
 }

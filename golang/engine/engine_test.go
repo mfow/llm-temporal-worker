@@ -173,9 +173,9 @@ func newHarnessWithAdmission(t testing.TB, adapter provider.Adapter, admissionSt
 	}
 	entries := make([]pricing.Entry, 0, len(classes))
 	for _, class := range classes {
-		entries = append(entries, pricing.Entry{Provider: "provider-1", Family: string(provider.FamilyOpenAIResponses), EndpointID: "endpoint-1", Region: "us-east-1", Model: "provider-model", ProviderTier: tiers[class], Currency: "USD", Version: "prices-1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")}})
+		entries = append(entries, pricing.Entry{Provider: "provider-1", Family: string(provider.FamilyOpenAIResponses), EndpointID: "endpoint-1", Region: "us-east-1", Model: "provider-model", ProviderTier: tiers[class], Version: "prices-1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")}})
 	}
-	priceCatalog, err := pricing.CompileCatalog("prices-1", "USD", entries)
+	priceCatalog, err := pricing.CompileUSD("prices-1", entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +402,14 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkFallsBackWithoutAmbiguity(t
 			if operation.State != admission.StateCompleted || operation.Attempt.Dispatch != admission.Accepted {
 				t.Fatalf("operation after fallback = %#v, want completed accepted operation", operation)
 			}
-			if got, want := int64(operation.IncurredMicroUSD), response.Cost.ActualMicroUSD; got != want {
+			if response.Cost.ActualCostUSD == nil {
+				t.Fatal("fallback response omitted exact actual cost")
+			}
+			actual, err := compatibilityActualMicroUSD(*response.Cost.ActualCostUSD)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := int64(operation.IncurredMicroUSD), int64(actual); got != want {
 				t.Fatalf("incurred cost = %d, want fallback actual cost %d", got, want)
 			}
 		})
