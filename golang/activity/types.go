@@ -15,6 +15,10 @@ import (
 const (
 	APIVersion           = "llm.temporal/v1"
 	GenerateActivityName = "llm.generate.v1"
+	CompactAPIVersion    = llm.CompactAPIVersion
+	QueryAPIVersion      = llm.QueryAPIVersion
+	CompactActivityName  = llm.CompactActivityName
+	QueryActivityName    = llm.QueryActivityName
 	DefaultInlineBytes   = 256 * 1024
 )
 

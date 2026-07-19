@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/query/v1/query-response.json",
+  "title": "llm.temporal/query/v1 QueryResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "operation_key", "query_execution_id", "kind", "observed_at", "source", "freshness", "complete", "result", "cost_status", "actual_cost_usd"],
+  "properties": {
+    "api_version": {"const": "llm.temporal/query/v1"},
+    "operation_key": {"type": "string", "minLength": 1},
+    "query_execution_id": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["provider_status", "model_inventory", "credit_status", "budget_status", "spend_summary"]},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source": {"enum": ["persisted", "persisted_and_refreshed", "redis_budget_generation"]},
+    "freshness": {"enum": ["current", "stale", "unknown"]},
+    "complete": {"type": "boolean"},
+    "next_cursor": {"type": ["string", "null"], "maxLength": 512},
+    "result": {"oneOf": [{"$ref": "#/$defs/provider_page"}, {"$ref": "#/$defs/model_page"}, {"$ref": "#/$defs/credit_page"}, {"$ref": "#/$defs/budget"}, {"$ref": "#/$defs/spend"}]},
+    "cost_status": {"enum": ["exact", "unknown"]},
+    "actual_cost_usd": {"type": ["string", "null"], "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,18})?$"},
+    "cost_method": {"enum": ["control_query_zero", "provider_reported", "catalog_usage"]},
+    "cost_unknown_reason_code": {"type": "string", "pattern": "^[a-z0-9_]{1,64}$"}
+  },
+  "$defs": {
+    "provider_page": {"type": "object", "additionalProperties": false, "required": ["routes"], "properties": {"routes": {"type": "array", "items": {"$ref": "#/$defs/route"}}}},
+    "route": {"type": "object", "additionalProperties": false, "required": ["route_id", "provider", "endpoint", "availability", "observed_at", "stale_after"], "properties": {"route_id": {"type": "string"}, "provider": {"type": "string"}, "endpoint": {"type": "string"}, "availability": {"enum": ["available", "degraded", "unavailable"]}, "credit_state": {"enum": ["ok", "low", "exhausted", "unknown"]}, "billing_state": {"enum": ["ok", "blocked", "unknown"]}, "circuit_state": {"enum": ["closed", "open", "half_open"]}, "observed_at": {"type": "string", "format": "date-time"}, "stale_after": {"type": "string", "format": "date-time"}, "safe_code": {"type": "string"}}},
+    "model_page": {"type": "object", "additionalProperties": false, "required": ["models"], "properties": {"models": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["provider", "endpoint", "provider_model_id", "lifecycle", "capabilities", "complete_snapshot"], "properties": {"provider": {"type": "string"}, "endpoint": {"type": "string"}, "provider_model_id": {"type": "string"}, "display_name": {"type": ["string", "null"]}, "lifecycle": {"enum": ["active", "deprecated", "retired"]}, "capabilities": {"type": "array", "items": {"type": "string"}}, "complete_snapshot": {"type": "boolean"}}}}}},
+    "credit_page": {"type": "object", "additionalProperties": false, "required": ["endpoints"], "properties": {"endpoints": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["provider", "endpoint", "credit_state", "billing_state", "evidence_source"], "properties": {"provider": {"type": "string"}, "endpoint": {"type": "string"}, "credit_state": {"enum": ["ok", "low", "exhausted", "unknown"]}, "billing_state": {"enum": ["ok", "blocked", "unknown"]}, "confirmed_at": {"type": ["string", "null"], "format": "date-time"}, "evidence_source": {"enum": ["provider_api", "operator", "unknown"]}, "safe_evidence_code": {"type": "string"}}}}}},
+    "budget": {"type": "object", "additionalProperties": false, "required": ["active_at", "generation_id", "manifest_digest", "stream_high_water_mark", "windows"], "properties": {"active_at": {"type": "string", "format": "date-time"}, "generation_id": {"type": "string"}, "manifest_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "stream_high_water_mark": {"type": "string"}, "windows": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["policy_key", "window_key", "coverage_start", "coverage_end", "limit_usd", "reserved_cost_usd", "accounted_cost_usd", "available_usd"], "properties": {"policy_key": {"type": "string"}, "window_key": {"type": "string"}, "coverage_start": {"type": "string", "format": "date-time"}, "coverage_end": {"type": "string", "format": "date-time"}, "limit_usd": {"type": "string"}, "reserved_cost_usd": {"type": "string"}, "accounted_cost_usd": {"type": "string"}, "available_usd": {"type": "string"}, "retry_after_seconds": {"type": ["integer", "null"], "minimum": 0}}}}}},
+    "spend": {"type": "object", "additionalProperties": false, "required": ["start_time", "end_time", "buckets"], "properties": {"start_time": {"type": "string", "format": "date-time"}, "end_time": {"type": "string", "format": "date-time"}, "buckets": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["known_actual_cost_usd", "exact_operation_count", "unknown_operation_count", "completeness"], "properties": {"group": {"type": "object", "additionalProperties": false, "properties": {"operation_kind": {"type": ["string", "null"]}, "provider": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}}}, "known_actual_cost_usd": {"type": "string"}, "exact_operation_count": {"type": "integer", "minimum": 0}, "unknown_operation_count": {"type": "integer", "minimum": 0}, "completeness": {"enum": ["complete", "partial"]}}}}}}
+  }
+}
