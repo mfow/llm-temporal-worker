@@ -1,11 +1,15 @@
 package observability_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 )
 
@@ -50,4 +54,165 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 	if !strings.Contains(output, `origin="worker"`) || !strings.Contains(output, `origin="other"`) {
 		t.Fatalf("failure origins were not restricted to the fixed vocabulary: %s", output)
 	}
+}
+
+func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{
+		Endpoints:             []string{"endpoint-a"},
+		Models:                []string{"model-a"},
+		Policies:              []string{"policy-a"},
+		Windows:               []string{"hour"},
+		ErrorClasses:          []string{"none"},
+		Phases:                []string{"total"},
+		Statuses:              []string{"completed"},
+		Outcomes:              []string{"success"},
+		Methods:               []string{"provider"},
+		OperationStates:       []string{"started"},
+		ContinuationDecisions: []string{"continue"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	if got := observability.MetricsFromContext(ctx); got != metrics {
+		t.Fatalf("metrics from context = %p, want %p", got, metrics)
+	}
+
+	metrics.RecordActivity("completed", "none", 2*time.Second, "total")
+	metrics.RecordActivityFailure("provider")
+	metrics.RecordProviderAttempt("endpoint-a", "model-a", "priority", "success", time.Second)
+	metrics.RecordServiceClass("standard", "priority", "endpoint-a")
+	metrics.RecordBudgetAdmission("policy-a", "success")
+	metrics.SetBudgetReserved("policy-a", "hour", 12.5)
+	metrics.RecordCost("endpoint-a", "model-a", "standard", "provider", 7.25)
+	metrics.RecordExactCost("endpoint-a", "model-a", "standard", "provider")
+	metrics.RecordOperationState("started")
+	metrics.RecordAmbiguous("endpoint-a")
+	metrics.RecordContinuation("continue")
+	metrics.RecordConfigReload("success")
+	metrics.SetWorkerPolling(true)
+	metrics.SetWorkerPolling(false)
+	metrics.SetHeartbeatAge(-time.Second)
+
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFamilies := []string{
+		"llmtw_activity_total", "llmtw_activity_duration_seconds", "llmtw_activity_failure_total",
+		"llmtw_provider_attempt_total", "llmtw_provider_duration_seconds", "llmtw_service_class_actual_total",
+		"llmtw_budget_admission_total", "llmtw_budget_reserved_micro_usd", "llmtw_cost_micro_usd_total",
+		"llmtw_cost_usd_total", "llmtw_operation_state_total", "llmtw_ambiguous_total",
+		"llmtw_continuation_total", "llmtw_config_reload_total", "llmtw_worker_polling",
+		"llmtw_heartbeat_age_seconds",
+	}
+	seen := make(map[string]bool, len(families))
+	for _, family := range families {
+		seen[family.GetName()] = true
+	}
+	for _, name := range wantFamilies {
+		if !seen[name] {
+			t.Fatalf("metric family %q was not gathered; families = %v", name, seen)
+		}
+	}
+	if got := metricValue(families, "llmtw_budget_reserved_micro_usd", nil); got != 12.5 {
+		t.Fatalf("reserved budget = %v, want 12.5", got)
+	}
+	if got := metricValue(families, "llmtw_worker_polling", nil); got != 0 {
+		t.Fatalf("worker polling = %v, want 0 after stop", got)
+	}
+	if got := metricValue(families, "llmtw_heartbeat_age_seconds", nil); got != 0 {
+		t.Fatalf("heartbeat age = %v, want negative ages clamped to 0", got)
+	}
+	if got := metricValue(families, "llmtw_cost_usd_total", map[string]string{
+		"endpoint": "endpoint-a", "model": "model-a", "class": "standard", "method": "provider",
+	}); got != 1 {
+		t.Fatalf("exact cost event count = %v, want 1", got)
+	}
+
+	response := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("metrics handler status = %d, want 200", response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "llmtw_provider_attempt_total") {
+		t.Fatalf("metrics handler omitted provider counter: %s", response.Body.String())
+	}
+}
+
+func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
+	var metrics *observability.Metrics
+	if got := observability.MetricsFromContext(observability.WithMetrics(context.Background(), metrics)); got != nil {
+		t.Fatalf("nil metrics binding = %p, want nil", got)
+	}
+	if got, err := metrics.Gather(); got != nil || err != nil {
+		t.Fatalf("nil metrics Gather = (%v, %v), want (nil, nil)", got, err)
+	}
+	response := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("nil metrics handler status = %d, want 404", response.Code)
+	}
+	metrics.RecordActivity("completed", "none", time.Second, "total")
+	metrics.RecordActivityFailure("worker")
+	metrics.RecordProviderAttempt("endpoint", "model", "economy", "success", time.Second)
+	metrics.RecordServiceClass("standard", "priority", "endpoint")
+	metrics.RecordBudgetAdmission("policy", "success")
+	metrics.SetBudgetReserved("policy", "window", 1)
+	metrics.RecordCost("endpoint", "model", "standard", "provider", 1)
+	metrics.RecordExactCost("endpoint", "model", "standard", "provider")
+	metrics.RecordOperationState("started")
+	metrics.RecordAmbiguous("endpoint")
+	metrics.RecordContinuation("continue")
+	metrics.RecordConfigReload("success")
+	metrics.SetWorkerPolling(true)
+	metrics.SetHeartbeatAge(time.Second)
+
+	defaults, err := observability.NewMetrics(observability.AllowedValues{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults.RecordActivity("completed", "none", time.Second, "total")
+	families, err := defaults.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metricValue(families, "llmtw_activity_total", map[string]string{
+		"status": "completed", "error_class": "none",
+	}); got != 1 {
+		t.Fatalf("default built-in labels were not retained: %v", got)
+	}
+}
+
+func metricValue(families []*dto.MetricFamily, name string, labels map[string]string) float64 {
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			matched := true
+			for key, want := range labels {
+				found := false
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == key && label.GetValue() == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				if metric.Gauge != nil {
+					return metric.GetGauge().GetValue()
+				}
+				if metric.Counter != nil {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
 }
