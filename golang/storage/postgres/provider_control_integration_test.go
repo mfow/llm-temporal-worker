@@ -167,34 +167,57 @@ func TestProviderControlFirstProjectionConcurrencyIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository := DefaultProviderStatusRepository(pool, namespace)
-	firstReady := make(chan struct{})
-	firstStart := make(chan struct{})
-	secondReady := make(chan struct{})
+	ready := make(chan struct{}, 2)
+	allowFirst := make(chan struct{})
+	firstRead := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondRead := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	hooks := providerStatusTestHooks{
+		beforeRouteLock: func(event control.StatusEvent) {
+			ready <- struct{}{}
+			if event.EventDigest == first.EventDigest {
+				<-allowFirst
+				return
+			}
+			<-firstRead
+		},
+		afterProjectionRead: func(event control.StatusEvent, _ bool) {
+			if event.EventDigest == first.EventDigest {
+				close(firstRead)
+				<-releaseFirst
+				return
+			}
+			close(secondRead)
+			<-releaseSecond
+		},
+	}
 	errs := make(chan error, 2)
 	var group sync.WaitGroup
 	group.Add(1)
 	go func() {
 		defer group.Done()
-		close(firstReady)
-		<-firstStart
-		_, err := repository.PersistStatusEvent(ctx, first)
+		_, err := repository.persistStatusEvent(ctx, first, hooks)
 		errs <- err
 	}()
-	<-firstReady
-	close(firstStart)
-	// Let the first transaction acquire the route advisory lock before
-	// starting the second transaction. The second call still overlaps the
-	// first whenever the first is in its projection write, and this ordering
-	// makes the timestamp ordering deterministic for the assertion below.
-	time.Sleep(10 * time.Millisecond)
 	group.Add(1)
 	go func() {
 		defer group.Done()
-		close(secondReady)
-		_, err := repository.PersistStatusEvent(ctx, second)
+		_, err := repository.persistStatusEvent(ctx, second, hooks)
 		errs <- err
 	}()
-	<-secondReady
+	<-ready
+	<-ready
+	close(allowFirst)
+	<-firstRead
+	select {
+	case <-secondRead:
+		t.Fatal("second projection was read while first transaction held the route barrier")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	<-secondRead
+	close(releaseSecond)
 	group.Wait()
 	close(errs)
 	for err := range errs {

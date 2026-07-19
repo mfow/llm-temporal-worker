@@ -26,6 +26,13 @@ type ProviderStatusRepository struct {
 	Namespace Namespace
 }
 
+// providerStatusTestHooks coordinate the deterministic missing-row race test
+// without adding synchronization controls to the production API.
+type providerStatusTestHooks struct {
+	beforeRouteLock     func(control.StatusEvent)
+	afterProjectionRead func(control.StatusEvent, bool)
+}
+
 func DefaultProviderStatusRepository(pool *pgxpool.Pool, namespace Namespace) ProviderStatusRepository {
 	return ProviderStatusRepository{Pool: pool, Namespace: namespace}
 }
@@ -72,6 +79,10 @@ func providerRouteAdvisoryLockKey(namespace Namespace, configDigest [32]byte, ro
 // are valid but stale or for a different endpoint remain in the ledger for
 // auditability and return applied=false.
 func (repository ProviderStatusRepository) PersistStatusEvent(ctx context.Context, event control.StatusEvent) (applied bool, err error) {
+	return repository.persistStatusEvent(ctx, event, providerStatusTestHooks{})
+}
+
+func (repository ProviderStatusRepository) persistStatusEvent(ctx context.Context, event control.StatusEvent, hooks providerStatusTestHooks) (applied bool, err error) {
 	if err := repository.validate(); err != nil {
 		return false, err
 	}
@@ -91,6 +102,9 @@ func (repository ProviderStatusRepository) PersistStatusEvent(ctx context.Contex
 		return false, redactPostgresError(fmt.Errorf("begin provider status transaction: %w", err))
 	}
 	defer tx.Rollback(ctx)
+	if hooks.beforeRouteLock != nil {
+		hooks.beforeRouteLock(event)
+	}
 	lockKey := providerRouteAdvisoryLockKey(repository.Namespace, event.ConfigDigest, event.RouteID)
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey); err != nil {
 		return false, redactPostgresError(fmt.Errorf("lock provider route projection: %w", err))
@@ -131,6 +145,9 @@ func (repository ProviderStatusRepository) PersistStatusEvent(ctx context.Contex
 	exists := rowErr == nil
 	if rowErr != nil && !errors.Is(rowErr, pgx.ErrNoRows) {
 		return false, redactPostgresError(fmt.Errorf("lock provider route status: %w", rowErr))
+	}
+	if hooks.afterProjectionRead != nil {
+		hooks.afterProjectionRead(event, exists)
 	}
 	if exists {
 		if len(currentConfigDigest) != len(current.ConfigDigest) || len(currentAccountHMAC) != len(current.EndpointAccountHMAC) || len(currentEventDigest) != len(current.LastEventDigest) {
