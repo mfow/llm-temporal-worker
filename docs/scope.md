@@ -163,6 +163,14 @@ The current v1 in-scope/out-of-scope lists describe shipped behavior. The new
 design is delivered in independently releasable phases; it is not one enlarged
 “initial release” gate:
 
+Accordingly, the current v1 readiness gate covers the shared Redis backend and
+the configured blob store used for oversized payloads and results. Worker-owned
+PostgreSQL readiness, the durable operation/budget journal, and PostgreSQL
+rebuild/restore proof belong to the staged Phase A/B targets below; they are not
+current v1 release prerequisites. The traceability catalog must not record those
+target requirements as current v1 evidence until their implementation and
+protected verification runs exist.
+
 1. **Phase A — durable conversation core:** worker-owned PostgreSQL namespace,
    encrypted inline/blob payloads, operation/attempt ledger, immutable
    checkpoints and forks, exact USD accounting, restart-safe provider polling,

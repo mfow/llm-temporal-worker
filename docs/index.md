@@ -34,10 +34,10 @@ is the single status/authority index:
 | Ambiguous dispatch | Never resend automatically when a provider may have accepted a billable request |
 | Continuation | Immutable opaque handles backed by a state store and pinned to an endpoint when provider state requires it |
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
-| Shared state | PostgreSQL is the durable record; Redis is the required production optimization for conservative active-budget admission, throttles, and replica coordination; memory is single-process development/test only |
+| Shared state | Redis is the v1 shared-state backend for conservative active-budget admission, throttles, and replica coordination; the configured blob store holds oversized payloads and results; memory is single-process development/test only |
 | Activity scope | Generate, Compact, and typed Query only; tool execution and agent-loop orchestration stay in caller workflows |
 | Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported. Compact and Query are separate final-response Activities |
-| Deployment | One stateless worker image, horizontally scalable only when replicas share both configured Redis and worker-PostgreSQL namespaces |
+| Deployment | One stateless worker image, horizontally scalable when replicas share the configured Redis and production blob-store dependencies |
 | Go baseline | Go 1.26, using the latest security patch in that release line |
 
 ## Read in this order
@@ -89,12 +89,11 @@ The first release is complete only when all of these statements are true:
   and refuses to replay an ambiguous provider dispatch.
 - The in-memory exact-budget reference model and production Redis Function pass
   the same atomic-window transition suite, including concurrent
-  overlapping-window admission tests; PostgreSQL journal writes/rebuilds pass
-  their separate contract.
+  overlapping-window admission tests.
 - The worker passes Temporal Activity tests for retry, heartbeat, cancellation,
   graceful shutdown, and non-retryable error typing.
-- The container runs as a non-root user, Kubernetes probes exercise real
-  Redis and worker-PostgreSQL readiness dependencies, and two-replica smoke
+- The container runs as a non-root user, readiness probes exercise real Redis
+  and configured blob-store dependencies, and two-replica Redis-backed smoke
   tests pass.
 - Pull-request and master GitHub Actions are green; master also builds daily at
   05:00 in `Australia/Sydney`.
