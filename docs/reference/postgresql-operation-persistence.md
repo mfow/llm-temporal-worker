@@ -1,0 +1,44 @@
+# PostgreSQL operation persistence
+
+Task 5 adds the durable one-shot operation boundary used by the Temporal
+worker. `storage/postgres.OperationRepository` implements the existing
+`admission.AdmissionStore` lifecycle while storing the normalized request
+manifest, request-fingerprint HMAC, result digest, exact-or-unknown USD cost,
+and every route attempt in the worker schema.
+
+## Replay and transitions
+
+`Begin` derives a keyed operation key from the caller's id and scope. A replay
+with the same request fingerprint returns the existing operation; a different
+fingerprint returns `admission.ErrOperationConflict`. Dispatch, continuation,
+completion, failure, and provider-pending updates are compare-and-set
+transitions performed inside a read-committed transaction. Dispatch tokens are
+deterministic HMACs of the operation UUID, so a worker restart can safely
+reconstruct the token without persisting a bearer secret.
+
+The engine's `tenant\x00operation-key` scope format is split only for keyed
+scope lookup; the original scope key is retained in an authenticated encrypted
+column. Reads hydrate the scope, lease/operation expiry, request digest, and
+result reference metadata needed by the result store after a worker restart.
+
+Provider identifiers and request/result payloads are never logged or embedded
+in SQL text. The operation row stores HMACs and opaque encrypted markers; the
+blob/result repository remains responsible for payload bytes.
+
+## Cost contract
+
+Terminal operations require either an exact `pricing.USD` amount and an
+allowed method, or an unknown amount with a safe reason code. Decimal values
+are bound as canonical `NUMERIC(38,18)` text. Explicit cache replays use the
+`worker_cache_zero` method and the exact zero amount.
+
+The repository is intentionally bounded to one-shot Temporal activities. It
+does not add a live streaming path.
+
+## Validation
+
+The PostgreSQL integration tests are opt-in through the existing
+`LLMTW_POSTGRES_ADDR` test configuration. Unit tests cover manifest shape,
+stable HMAC/UUID derivation, safe reason normalization, and exact money
+encoding. `OperationRepository.Attempts` and `AttemptRepository.List` expose
+all persisted attempts for release conformance and operational inspection.

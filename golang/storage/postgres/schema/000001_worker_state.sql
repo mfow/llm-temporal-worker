@@ -68,6 +68,8 @@ CREATE TABLE __SCHEMA__.__PREFIX__operations (
         CHECK (octet_length(operation_key_hmac) = 32),
     request_fingerprint_hmac bytea NOT NULL
         CHECK (octet_length(request_fingerprint_hmac) = 32),
+    request_digest bytea NOT NULL
+        CHECK (octet_length(request_digest) = 32),
     request_schema_version integer NOT NULL
         CHECK (request_schema_version > 0),
     request_manifest_jsonb jsonb NOT NULL
@@ -76,6 +78,13 @@ CREATE TABLE __SCHEMA__.__PREFIX__operations (
     request_blob_id uuid
         REFERENCES __SCHEMA__.__PREFIX__blobs(blob_id) ON DELETE RESTRICT,
     request_key_id text,
+    scope_key_ciphertext bytea,
+    scope_key_key_id text,
+    scope_key_context_digest bytea
+        CHECK (
+            scope_key_context_digest IS NULL OR
+            octet_length(scope_key_context_digest) = 32
+        ),
     config_digest bytea NOT NULL
         REFERENCES __SCHEMA__.__PREFIX__configuration_snapshots(config_digest)
         ON DELETE RESTRICT,
@@ -100,6 +109,10 @@ CREATE TABLE __SCHEMA__.__PREFIX__operations (
     result_digest bytea CHECK (
         result_digest IS NULL OR octet_length(result_digest) = 32
     ),
+    result_byte_length bigint CHECK (
+        result_byte_length IS NULL OR result_byte_length >= 0
+    ),
+    result_media_type text,
     cache_entry_id uuid,
     route_id text,
     endpoint_id text,
@@ -138,6 +151,7 @@ CREATE TABLE __SCHEMA__.__PREFIX__operations (
     poll_count integer NOT NULL DEFAULT 0 CHECK (poll_count >= 0),
     lease_owner uuid,
     lease_expires_at timestamptz,
+    operation_expires_at timestamptz NOT NULL,
     reserved_cost_usd numeric(38,18) NOT NULL DEFAULT 0
         CHECK (reserved_cost_usd >= 0),
     incurred_cost_usd numeric(38,18) NOT NULL DEFAULT 0
@@ -189,6 +203,12 @@ CREATE TABLE __SCHEMA__.__PREFIX__operations (
     ),
     CHECK (
         request_inline_ciphertext IS NULL = (request_key_id IS NULL)
+    ),
+    CHECK (
+        scope_key_ciphertext IS NULL = (scope_key_key_id IS NULL)
+    ),
+    CHECK (
+        scope_key_ciphertext IS NULL = (scope_key_context_digest IS NULL)
     ),
     CHECK (
         result_inline_ciphertext IS NULL = (result_key_id IS NULL)
