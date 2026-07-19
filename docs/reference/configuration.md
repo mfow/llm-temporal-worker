@@ -421,6 +421,9 @@ When Redis is shared, grant the worker role the configured key pattern
 **~<key-prefix>:*** (for example **~llmtw:***), plus the reviewed command set.
 The prefix is namespace isolation only; it is not a tenant boundary or an
 authentication mechanism, and the Redis Function library name remains global.
+The effective prefix is immutable for the lifetime of a worker process: a
+configuration reload that changes it is rejected before new clients are built.
+Deploy a new worker process when moving to a different Redis namespace.
 
 The required PostgreSQL subsection has this shape:
 
