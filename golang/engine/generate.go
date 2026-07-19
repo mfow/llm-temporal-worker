@@ -150,6 +150,9 @@ func (engine *Engine) loadContinuation(ctx context.Context, request llm.Request,
 	if handle == "" {
 		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation handle is empty", nil)
 	}
+	if request.Context.Tenant == "" {
+		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation tenant is required", state.ErrTenantMismatch)
+	}
 	continuation, err := engine.dependencies.Continuations.Get(ctx, handle)
 	if err != nil {
 		code := provider.CodeStateUnavailable
