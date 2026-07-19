@@ -289,7 +289,7 @@ func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
 		}}
 		policy.Windows = make([]budget.Window, 0, len(policyValue.Windows))
 		for index, windowValue := range policyValue.Windows {
-			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), Limit: pricing.MicroUSD(windowValue.LimitMicroUSD)})
+			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: pricing.MicroUSD(windowValue.LimitMicroUSD)})
 		}
 		if err := policy.Validate(value.Limits.MaxBudgetBucketsPerWindow); err != nil {
 			return nil, fmt.Errorf("budget policy %q: %w", policy.ID, err)

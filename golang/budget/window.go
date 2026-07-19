@@ -13,11 +13,14 @@ type Window struct {
 	ID       string
 	Duration time.Duration
 	Bucket   time.Duration
+	// LimitUSD is the authoritative exact budget limit. Limit is retained for
+	// the versioned Redis compatibility path only.
+	LimitUSD pricing.USD
 	Limit    pricing.MicroUSD
 }
 
 func (window Window) Validate(maxBuckets int) error {
-	if window.Duration <= 0 || window.Bucket <= 0 || window.Limit <= 0 {
+	if window.Duration <= 0 || window.Bucket <= 0 || (window.LimitUSD.IsZero() && window.Limit <= 0) {
 		return fmt.Errorf("duration, bucket, and limit must be positive")
 	}
 	if window.Bucket > window.Duration || maxBuckets <= 0 {
@@ -27,8 +30,30 @@ func (window Window) Validate(maxBuckets int) error {
 	if buckets > int64(maxBuckets) {
 		return fmt.Errorf("window has %d buckets, limit is %d", buckets, maxBuckets)
 	}
-	if window.Limit > pricing.RedisSafeLimit {
+	if !window.LimitUSD.IsZero() {
+		if err := window.LimitUSD.Validate(); err != nil {
+			return err
+		}
+	} else if window.Limit > pricing.RedisSafeLimit {
 		return fmt.Errorf("window limit exceeds Redis-safe range")
+	}
+	return nil
+}
+
+// ValidateUSD applies the fixed-scale NUMERIC(38,18) contract and never
+// converts through microUSD.
+func (window Window) ValidateUSD(maxBuckets int) error {
+	if window.Duration <= 0 || window.Bucket <= 0 || window.LimitUSD.IsZero() {
+		return fmt.Errorf("duration, bucket, and exact USD limit must be positive")
+	}
+	if err := window.LimitUSD.Validate(); err != nil {
+		return err
+	}
+	if window.Bucket > window.Duration || maxBuckets <= 0 {
+		return fmt.Errorf("bucket exceeds bounded window")
+	}
+	if int64(window.Duration/window.Bucket)+2 > int64(maxBuckets) {
+		return fmt.Errorf("window has %d buckets, limit is %d", int64(window.Duration/window.Bucket)+2, maxBuckets)
 	}
 	return nil
 }
@@ -113,4 +138,36 @@ func (window Window) RetryAfter(buckets map[int64]pricing.MicroUSD, amount prici
 		return candidate, nil
 	}
 	return math.MaxInt64, nil
+}
+
+func (window Window) ActiveSumUSD(buckets map[int64]pricing.USD, at time.Time) (pricing.USD, error) {
+	first, last := window.Range(at)
+	total := pricing.MustUSD("0")
+	for index := first; index <= last; index++ {
+		value := buckets[index]
+		var err error
+		total, err = total.Add(value)
+		if err != nil {
+			return pricing.USD{}, err
+		}
+	}
+	return total, nil
+}
+
+func (window Window) CanReserveUSD(buckets map[int64]pricing.USD, amount pricing.USD, at time.Time) (bool, pricing.USD, error) {
+	if err := window.ValidateUSD(1 << 20); err != nil {
+		return false, pricing.USD{}, err
+	}
+	if err := amount.Validate(); err != nil {
+		return false, pricing.USD{}, err
+	}
+	active, err := window.ActiveSumUSD(buckets, at)
+	if err != nil {
+		return false, pricing.USD{}, err
+	}
+	remaining, err := window.LimitUSD.Sub(active)
+	if err != nil || amount.Cmp(remaining) > 0 {
+		return false, active, nil
+	}
+	return true, active, nil
 }

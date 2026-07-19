@@ -3,6 +3,8 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 type ResponseStatus string
@@ -274,7 +276,13 @@ func (status CostStatus) Valid() bool {
 }
 
 type Cost struct {
-	Status           CostStatus
+	Status CostStatus
+	// Exact USD fields are the v1 contract. A nil pointer means unknown; a
+	// non-nil zero value is known free.
+	ReservedCostUSD *pricing.USD
+	ActualCostUSD   *pricing.USD
+	// Deprecated compatibility fields are accepted only while older workers
+	// drain; new JSON never emits them.
 	Currency         string
 	ReservedMicroUSD int64
 	ActualMicroUSD   int64
@@ -289,12 +297,37 @@ func (cost Cost) MarshalJSON() ([]byte, error) {
 	if cost.Status != "" && !cost.Status.Valid() {
 		return nil, fmt.Errorf("cost status %q is invalid", cost.Status)
 	}
-	fields := map[string]any{
-		"currency":          cost.Currency,
-		"reserved_microusd": cost.ReservedMicroUSD,
-		"actual_microusd":   cost.ActualMicroUSD,
-		"method":            cost.Method,
-		"catalog_version":   cost.CatalogVersion,
+	reserved := cost.ReservedCostUSD
+	actual := cost.ActualCostUSD
+	if reserved == nil && cost.ReservedMicroUSD != 0 {
+		converted, err := pricing.USDFromMicro(pricing.MicroUSD(cost.ReservedMicroUSD))
+		if err != nil {
+			return nil, err
+		}
+		reserved = &converted
+	}
+	if actual == nil && cost.ActualMicroUSD != 0 {
+		converted, err := pricing.USDFromMicro(pricing.MicroUSD(cost.ActualMicroUSD))
+		if err != nil {
+			return nil, err
+		}
+		actual = &converted
+	}
+	fields := map[string]any{"method": cost.Method, "catalog_version": cost.CatalogVersion}
+	if cost.ReservedCostUSD != nil || cost.ActualCostUSD != nil {
+		if reserved != nil {
+			fields["reserved_cost_usd"] = reserved
+		}
+		if actual != nil {
+			fields["actual_cost_usd"] = actual
+		}
+	} else {
+		// Existing workers use the versioned Redis compatibility shape. Keep
+		// that shape only when no exact fields were supplied; exact callers
+		// always get the USD contract above.
+		fields["currency"] = cost.Currency
+		fields["reserved_microusd"] = cost.ReservedMicroUSD
+		fields["actual_microusd"] = cost.ActualMicroUSD
 	}
 	if cost.Status != "" {
 		fields["cost_status"] = cost.Status
@@ -302,12 +335,21 @@ func (cost Cost) MarshalJSON() ([]byte, error) {
 	return marshalObject(fields)
 }
 
+func (cost *Cost) UnmarshalJSON(data []byte) error {
+	decoded, err := decodeCost(data)
+	if err != nil {
+		return err
+	}
+	*cost = decoded
+	return nil
+}
+
 func decodeCost(data []byte) (Cost, error) {
 	fields, err := decodeObject(data)
 	if err != nil {
 		return Cost{}, err
 	}
-	if err := checkUnknownFields(fields, "cost_status", "currency", "reserved_microusd", "actual_microusd", "method", "catalog_version"); err != nil {
+	if err := checkUnknownFields(fields, "cost_status", "reserved_cost_usd", "actual_cost_usd", "method", "catalog_version", "currency", "reserved_microusd", "actual_microusd"); err != nil {
 		return Cost{}, err
 	}
 	cost := Cost{}
@@ -328,13 +370,25 @@ func decodeCost(data []byte) (Cost, error) {
 	if cost.CatalogVersion, _, err = optionalString(fields, "catalog_version"); err != nil {
 		return Cost{}, err
 	}
-	if raw, ok := fields["reserved_microusd"]; ok {
+	if raw, ok := fields["reserved_cost_usd"]; ok {
+		var value pricing.USD
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return Cost{}, fmt.Errorf("cost reserved_cost_usd: %w", err)
+		}
+		cost.ReservedCostUSD = &value
+	} else if raw, ok := fields["reserved_microusd"]; ok {
 		cost.ReservedMicroUSD, err = decodeInt64(raw)
 		if err != nil {
 			return Cost{}, fmt.Errorf("cost reserved_microusd: %w", err)
 		}
 	}
-	if raw, ok := fields["actual_microusd"]; ok {
+	if raw, ok := fields["actual_cost_usd"]; ok {
+		var value pricing.USD
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return Cost{}, fmt.Errorf("cost actual_cost_usd: %w", err)
+		}
+		cost.ActualCostUSD = &value
+	} else if raw, ok := fields["actual_microusd"]; ok {
 		cost.ActualMicroUSD, err = decodeInt64(raw)
 		if err != nil {
 			return Cost{}, fmt.Errorf("cost actual_microusd: %w", err)

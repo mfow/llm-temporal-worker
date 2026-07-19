@@ -51,6 +51,9 @@ func recordCompletion(ctx context.Context, response llm.Response) {
 	}
 	metrics.RecordServiceClass(string(response.Service.Requested), string(actual), response.Route.EndpointID)
 	if response.Cost.Status == llm.CostStatusKnown {
+		if response.Cost.ActualCostUSD != nil {
+			metrics.RecordExactCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method)
+		}
 		metrics.RecordCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method, float64(response.Cost.ActualMicroUSD))
 	}
 }

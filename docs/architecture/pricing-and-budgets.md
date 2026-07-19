@@ -13,7 +13,7 @@ SDK. A request is admitted only when its worst eligible spend fits every
 matching budget window. Completion replaces the reservation with measured cost;
 an ambiguous call keeps its full reservation.
 
-V1 budgets govern monetary spend in integer micro-US dollars (`microUSD`).
+V1 budgets govern monetary spend in exact fixed-scale USD (`NUMERIC(38,18)`).
 Provider rate limits and token/request quotas are separate controls and do not
 pretend to be financial budgets.
 
@@ -24,7 +24,7 @@ parsed exactly into integer numerator/scale form; binary floating point is
 forbidden in pricing and admission.
 
 ```go
-type MicroUSD int64
+type USD struct { /* checked integer at 10^-18 scale */ }
 
 type UnitPrices struct {
 	InputPerMillion       DecimalUSD
@@ -36,20 +36,19 @@ type UnitPrices struct {
 }
 ```
 
-Every positive component is multiplied with integer usage and rounded up to the
-next microUSD at the request boundary. Components are summed with checked
-arithmetic. Refunds and final actual totals retain integer units.
+Every positive component is multiplied with integer usage and rounded up only
+at the fixed 18-digit USD boundary. Components are summed with checked exact
+arithmetic. Values smaller than one microUSD remain representable. A nil USD
+pointer means unknown; a non-nil zero value means known free.
 
 Redis Lua numbers are exact only within their integer-safe range. Configuration
 compilation rejects any single limit, bucket total, reservation, or possible
 sum at or above `2^53` microUSD. Go code also checks `int64` overflow.
 
-This is a documented current-implementation limitation, not the target
-representation. The PostgreSQL durable ledger replaces microUSD with
-**NUMERIC(38,18)**, providing 18
-fractional digits and 20 whole-dollar digits. Its contract tests cover
-sub-micro-dollar amounts, whole dollars, ten-dollar charges, large aggregates,
-and overflow rejection without any binary floating-point conversion.
+The exact Go pricing and budget contracts now use the same **NUMERIC(38,18)**
+shape as the durable ledger, providing 18 fractional digits and 20 whole-dollar
+digits. Redis compatibility materialization remains an explicit boundary and
+does not define the public money representation.
 
 ## Price catalog
 
@@ -83,9 +82,9 @@ Currency, method, and catalog version are empty, no monetary reservation is
 created, and a provider-reported amount is not promoted to an auditable cost
 without a current catalog quote. Metrics make the condition visible.
 
-The Phase A contract replacement removes that zero sentinel. Unknown catalog components and actual costs are
-NULL with an explicit status/reason, while exact zero means known free. Known
-spend totals exclude NULLs and separately report unknown operation counts.
+Unknown catalog components and actual costs are NULL with an explicit
+status/reason, while exact zero means known free. Known spend totals exclude
+NULLs and separately report unknown operation counts.
 
 ## Estimation
 
@@ -129,11 +128,13 @@ Final cost uses this precedence:
 3. locally reconstructed usage priced by the pinned catalog;
 4. full reservation when the outcome or usage is ambiguous.
 
-The public `llm.Cost` response includes reserved and actual/retained microUSD,
-method, currency, and catalog version. The estimate is used for admission but
-is not serialized as a separate response cost field. When an adapter receives
-an authoritative provider cost, the raw value remains in the safe provider or
-usage raw-facts maps; it is not copied into `llm.Cost`.
+The public `llm.Cost` response includes nullable `reserved_cost_usd` and
+`actual_cost_usd` values, method, and catalog version. It has no generic
+currency discriminator. The estimate is used for admission but is not
+serialized as a separate response cost field. When an adapter receives an
+authoritative provider cost, the raw value remains in the safe provider or
+usage raw-facts maps; it is not copied into `llm.Cost` without an exact catalog
+quote.
 
 If measured cost exceeds the conservative reservation, completion still records
 the full cost because it was already incurred. It atomically adds the excess,

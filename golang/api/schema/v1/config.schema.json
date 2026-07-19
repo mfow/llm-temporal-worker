@@ -319,12 +319,13 @@
       "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "unknown_in_strict_mode": { "enum": ["reject", "allow"] } }
     },
     "pricing": {
-      "type": "object", "additionalProperties": false, "required": ["catalogs", "require_price_when_budgeted", "currency"],
+      "type": "object", "additionalProperties": false, "required": ["catalogs", "require_price_when_budgeted"],
       "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "require_price_when_budgeted": { "type": "boolean" }, "currency": { "const": "USD" } }
     },
     "budget_window": {
-      "type": "object", "additionalProperties": false, "required": ["duration", "bucket", "limit_micro_usd"],
-      "properties": { "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_micro_usd": { "type": "integer", "minimum": 1 } }
+      "type": "object", "additionalProperties": false, "required": ["duration", "bucket"],
+      "properties": { "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,20})(\\.[0-9]{1,18})?$" }, "limit_micro_usd": { "type": "integer", "minimum": 1 } },
+      "anyOf": [{"required": ["limit_usd"]}, {"required": ["limit_micro_usd"]}]
     },
     "budget_policy": {
       "type": "object", "additionalProperties": false, "required": ["id", "match", "windows"],

@@ -15,19 +15,23 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 		{entry.Prices.ReasoningPerMillion, usage.ReasoningTokens, "reasoning"},
 		{entry.Prices.PerRequest, 1, "per_request"},
 	}
-	total := MicroUSD(0)
+	totalUSD := MustUSD("0")
+	legacyTotal := MicroUSD(0)
 	for _, component := range components {
 		if component.units < 0 {
 			return Cost{}, fmt.Errorf("usage %s is negative", component.name)
 		}
-		value, err := CeilMicroUSD(component.price, component.units, 1_000_000)
+		value, err := CeilUSD(component.price, component.units, 1_000_000)
 		if err != nil {
 			return Cost{}, fmt.Errorf("usage %s: %w", component.name, err)
 		}
-		total, err = total.Add(value)
+		totalUSD, err = totalUSD.Add(value)
 		if err != nil {
 			return Cost{}, err
 		}
+		if legacy, legacyErr := CeilMicroUSD(component.price, component.units, 1_000_000); legacyErr == nil {
+			legacyTotal, _ = legacyTotal.Add(legacy)
+		}
 	}
-	return Cost{MicroUSD: total, Currency: entry.Currency, Method: CostCatalogUsage, CatalogVersion: entry.Version}, nil
+	return Cost{USD: totalUSD, MicroUSD: legacyTotal, Currency: entry.Currency, Method: CostCatalogUsage, CatalogVersion: entry.Version}, nil
 }

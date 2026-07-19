@@ -63,6 +63,45 @@ func CompileCatalog(version, currency string, entries []Entry) (Catalog, error) 
 	return Catalog{Version: version, Currency: currency, Entries: copyEntries, Digest: digest}, nil
 }
 
+// CompileUSD compiles the public USD-only catalog contract. Currency is
+// intentionally absent from its signature and canonical digest; callers
+// cannot accidentally mix catalogs or inject an FX discriminator. The older
+// CompileCatalog entry point remains only for decoding pre-migration catalog
+// documents at the isolated compatibility boundary.
+func CompileUSD(version string, entries []Entry) (Catalog, error) {
+	if version == "" {
+		return Catalog{}, fmt.Errorf("pricing catalog version is required")
+	}
+	copyEntries := append([]Entry(nil), entries...)
+	for index := range copyEntries {
+		entry := &copyEntries[index]
+		if entry.Provider == "" || entry.Family == "" || entry.EndpointID == "" || entry.Model == "" || entry.ProviderTier == "" {
+			return Catalog{}, fmt.Errorf("pricing entry %d identity is incomplete", index)
+		}
+		for name, price := range map[string]DecimalUSD{
+			"input": entry.Prices.InputPerMillion, "output": entry.Prices.OutputPerMillion, "cache_read": entry.Prices.CacheReadPerMillion, "cache_write": entry.Prices.CacheWritePerMillion, "reasoning": entry.Prices.ReasoningPerMillion, "per_request": entry.Prices.PerRequest,
+		} {
+			if err := price.valid(); err != nil {
+				return Catalog{}, fmt.Errorf("pricing entry %d %s: %w", index, name, err)
+			}
+		}
+		if !entry.EffectiveFrom.IsZero() && !entry.EffectiveUntil.IsZero() && !entry.EffectiveUntil.After(entry.EffectiveFrom) {
+			return Catalog{}, fmt.Errorf("pricing entry %d effective interval is empty", index)
+		}
+		entry.Currency = ""
+	}
+	sort.SliceStable(copyEntries, func(i, j int) bool { return entryKey(copyEntries[i]) < entryKey(copyEntries[j]) })
+	canonical, err := json.Marshal(struct {
+		Version string  `json:"version"`
+		Entries []Entry `json:"entries"`
+	}{version, copyEntries})
+	if err != nil {
+		return Catalog{}, err
+	}
+	digest := sha256.Sum256(canonical)
+	return Catalog{Version: version, Entries: copyEntries, Digest: digest}, nil
+}
+
 func (catalog Catalog) DigestHex() string { return hex.EncodeToString(catalog.Digest[:]) }
 
 func entryKey(entry Entry) string {
