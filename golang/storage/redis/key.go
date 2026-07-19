@@ -78,6 +78,22 @@ func (space keySpace) budgetKey(policy, window string) string {
 	return space.admissionPrefix() + "budget:" + space.digest("budget", policy, window)
 }
 
+func (space keySpace) throttleDigest(kind, scope string) string {
+	return space.digest("throttle", kind, scope)
+}
+
+func (space keySpace) throttleKey(kind, scope string) string {
+	return space.throttleKeyDigest(kind, space.throttleDigest(kind, scope))
+}
+
+func (space keySpace) throttleKeyDigest(kind, digest string) string {
+	return space.admissionPrefix() + "throttle:" + kind + ":" + digest
+}
+
+func (space keySpace) throttleReservationKey(id string) string {
+	return space.admissionKey("throttle-reservation", id)
+}
+
 func (space keySpace) digest(purpose string, values ...string) string {
 	mac := hmac.New(sha256.New, space.secret)
 	write := func(value string) {

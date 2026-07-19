@@ -11,4 +11,7 @@ var admissionFunctionSource string
 //go:embed functions/continuation.lua
 var continuationFunctionSource string
 
+//go:embed functions/throttle.lua
+var throttleFunctionSource string
+
 var continuationPutScript = redisclient.NewScript(continuationFunctionSource)

@@ -54,6 +54,16 @@ identity mismatch, and the single configured hash slot. Failure logs pass
 through the repository redactor; the trusted master workflow runs this live
 gate while pull-request CI remains offline.
 
+Operational request, token, and concurrency limits use the separate
+`ThrottleStore` and its `llmtw_throttle_v1/throttle_v1` Function. A throttle
+lease is an opaque, idempotent reservation: every requested limit is checked
+before any counter increments, and a transport error is resolved by `Lookup`
+before retrying. Throttle counters and leases are namespaced by the same
+configured prefix/hash tag and expire at the largest requested window. They
+are coordination state, not monetary facts, and are never used as a
+PostgreSQL accounting fallback. See [Redis operational throttles](../reference/redis-throttles.md)
+for the public API and deployment contract.
+
 Budget hashes receive a Redis TTL only when the operation has an explicit
 expiry; the TTL is the operation retention plus the longest matching window.
 This keeps every bucket needed by an in-flight operation visible while
