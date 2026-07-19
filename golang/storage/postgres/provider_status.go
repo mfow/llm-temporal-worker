@@ -8,6 +8,8 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -49,6 +51,22 @@ func validateStatusEvent(event control.StatusEvent) error {
 	return nil
 }
 
+// providerRouteAdvisoryLockKey derives the transaction lock used to serialize
+// the first projection row for a route. PostgreSQL cannot lock a missing row;
+// without this lock, two first events can both read an empty projection and
+// race to write projection_version=1. The namespace is included so separate
+// worker schemas in one database do not unnecessarily share route locks.
+func providerRouteAdvisoryLockKey(namespace Namespace, configDigest [32]byte, routeID string) int64 {
+	hashInput := make([]byte, 0, len(namespace.String())+1+len(configDigest)+1+len(routeID))
+	hashInput = append(hashInput, namespace.String()...)
+	hashInput = append(hashInput, 0)
+	hashInput = append(hashInput, configDigest[:]...)
+	hashInput = append(hashInput, 0)
+	hashInput = append(hashInput, routeID...)
+	digest := sha256.Sum256(hashInput)
+	return int64(binary.BigEndian.Uint64(digest[:8]))
+}
+
 // PersistStatusEvent appends event to the ledger and applies it to the route
 // projection. A duplicate event digest is an idempotent no-op. Events that
 // are valid but stale or for a different endpoint remain in the ledger for
@@ -73,6 +91,10 @@ func (repository ProviderStatusRepository) PersistStatusEvent(ctx context.Contex
 		return false, redactPostgresError(fmt.Errorf("begin provider status transaction: %w", err))
 	}
 	defer tx.Rollback(ctx)
+	lockKey := providerRouteAdvisoryLockKey(repository.Namespace, event.ConfigDigest, event.RouteID)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey); err != nil {
+		return false, redactPostgresError(fmt.Errorf("lock provider route projection: %w", err))
+	}
 
 	var eventID int64
 	insertEvent := "INSERT INTO " + events + " (event_digest, config_digest, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, observed_at, source, availability, credit_state, billing_state, safe_error_code, provider_code, evidence_digest, config_epoch, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,''),$15,$16,$17) ON CONFLICT (event_digest) DO NOTHING RETURNING event_id"

@@ -53,8 +53,10 @@ silently presenting a fabricated current result.
 
 `ProviderStatusRepository.PersistStatusEvent` consumes a validated
 `StatusEvent` in one transaction. It appends the event (with its deterministic
-digest as an idempotency key), locks the route projection, applies the domain
-sticky-incident rules, and commits the current projection. Stale observations
+digest as an idempotency key), takes a transaction-scoped advisory lock for the
+configuration/route identity (including when the projection row does not yet
+exist), locks the route projection, applies the domain sticky-incident rules,
+and commits the current projection. Stale observations
 remain in the append-only ledger but do not replace the current projection.
 `GetRouteStatus` reads only the projection and never returns raw provider
 response data.

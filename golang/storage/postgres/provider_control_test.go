@@ -107,3 +107,22 @@ func TestProviderControlMigrationStoresIdempotencyAndProjectionDigests(t *testin
 		}
 	}
 }
+
+func TestProviderRouteAdvisoryLockKeyIsStableAndNamespaceScoped(t *testing.T) {
+	configDigest := sha256.Sum256([]byte("config"))
+	namespace, err := NewNamespace("llm_worker", "llm_worker", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := providerRouteAdvisoryLockKey(namespace, configDigest, "route")
+	if key != providerRouteAdvisoryLockKey(namespace, configDigest, "route") {
+		t.Fatal("route advisory lock key is not stable")
+	}
+	otherNamespace, err := NewNamespace("llm_worker", "other_worker", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key == providerRouteAdvisoryLockKey(otherNamespace, configDigest, "route") {
+		t.Fatal("different namespaces share a route advisory lock key")
+	}
+}
