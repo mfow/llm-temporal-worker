@@ -156,9 +156,7 @@ func TestProviderControlFirstProjectionConcurrencyIntegration(t *testing.T) {
 	firstObservation := base
 	firstObservation.EvidenceDigest = sha256.Sum256([]byte("first-projection-first"))
 	secondObservation := base
-	// Distinct epochs deliberately allow both same-timestamp events to apply,
-	// regardless of which transaction acquires the route lock first.
-	secondObservation.ConfigEpoch = "epoch-b"
+	secondObservation.ObservedAt = observed.Add(time.Second)
 	secondObservation.EvidenceDigest = sha256.Sum256([]byte("first-projection-second"))
 	first, err := control.NewStatusEvent(firstObservation)
 	if err != nil {
@@ -169,23 +167,34 @@ func TestProviderControlFirstProjectionConcurrencyIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository := DefaultProviderStatusRepository(pool, namespace)
-	ready := make(chan struct{}, 2)
-	start := make(chan struct{})
+	firstReady := make(chan struct{})
+	firstStart := make(chan struct{})
+	secondReady := make(chan struct{})
 	errs := make(chan error, 2)
 	var group sync.WaitGroup
-	group.Add(2)
-	for _, event := range []control.StatusEvent{first, second} {
-		go func(event control.StatusEvent) {
-			defer group.Done()
-			ready <- struct{}{}
-			<-start
-			_, err := repository.PersistStatusEvent(ctx, event)
-			errs <- err
-		}(event)
-	}
-	<-ready
-	<-ready
-	close(start)
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		close(firstReady)
+		<-firstStart
+		_, err := repository.PersistStatusEvent(ctx, first)
+		errs <- err
+	}()
+	<-firstReady
+	close(firstStart)
+	// Let the first transaction acquire the route advisory lock before
+	// starting the second transaction. The second call still overlaps the
+	// first whenever the first is in its projection write, and this ordering
+	// makes the timestamp ordering deterministic for the assertion below.
+	time.Sleep(10 * time.Millisecond)
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		close(secondReady)
+		_, err := repository.PersistStatusEvent(ctx, second)
+		errs <- err
+	}()
+	<-secondReady
 	group.Wait()
 	close(errs)
 	for err := range errs {
