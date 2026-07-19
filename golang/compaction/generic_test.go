@@ -16,6 +16,11 @@ func TestPolicyDefaultsAndValidation(t *testing.T) {
 	if err := policy.Validate(); err == nil {
 		t.Fatal("target at trigger threshold unexpectedly accepted")
 	}
+	policy = DefaultPolicy()
+	policy.Version = "future"
+	if err := policy.Validate(); err == nil {
+		t.Fatal("unknown policy version unexpectedly accepted")
+	}
 }
 
 func TestPrepareRequestIsolatesApplicationSettings(t *testing.T) {

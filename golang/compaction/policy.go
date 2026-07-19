@@ -63,11 +63,11 @@ func DefaultPolicy() Policy {
 // provider work.  Bounds are deliberately conservative protocol limits, not
 // a provider context-window claim.
 func (policy Policy) Validate() error {
-	if policy.Version == "" {
-		return fmt.Errorf("compaction policy version is required")
+	if policy.Version != PolicyVersion {
+		return fmt.Errorf("unsupported compaction policy version %q", policy.Version)
 	}
-	if policy.PromptVersion == "" {
-		return fmt.Errorf("compaction prompt version is required")
+	if policy.PromptVersion != PromptVersion {
+		return fmt.Errorf("unsupported compaction prompt version %q", policy.PromptVersion)
 	}
 	if !policy.SummaryStyle.valid() {
 		return fmt.Errorf("compaction summary_style %q is invalid", policy.SummaryStyle)
