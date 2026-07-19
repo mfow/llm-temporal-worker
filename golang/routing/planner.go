@@ -78,8 +78,13 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	reject := func(code, path, detail string) (Candidate, Rejection, bool) {
 		return Candidate{}, Rejection{Code: code, RouteID: route.ID, Path: path, Detail: detail}, false
 	}
-	if request.Context.Tenant != "" && len(route.AllowedTenants) > 0 && !containsString(route.AllowedTenants, request.Context.Tenant) {
-		return reject(RejectTenant, "context.tenant", "route does not permit the request tenant")
+	if len(route.AllowedTenants) > 0 {
+		if request.Context.Tenant == "" {
+			return reject(RejectTenant, "context.tenant", "route requires a request tenant")
+		}
+		if !containsString(route.AllowedTenants, request.Context.Tenant) {
+			return reject(RejectTenant, "context.tenant", "route does not permit the request tenant")
+		}
 	}
 	region := request.Context.Tags["region"]
 	if region != "" && len(route.AllowedRegions) > 0 && !containsString(route.AllowedRegions, region) {
