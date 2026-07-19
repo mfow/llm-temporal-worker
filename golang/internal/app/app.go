@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 )
+
+var errRedisKeyPrefixImmutable = errors.New("redis key prefix cannot change during reload")
 
 type ClientSet interface {
 	Close(context.Context) error
@@ -207,6 +210,13 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 	nextConfig, err := app.builder.Build(ctx, data)
 	if err != nil {
 		return err
+	}
+	if current := app.current.Load(); current != nil && current.Config != nil {
+		currentPrefix := current.Config.Config().State.Redis.KeyPrefix
+		nextPrefix := nextConfig.Config().State.Redis.KeyPrefix
+		if currentPrefix != nextPrefix {
+			return errRedisKeyPrefixImmutable
+		}
 	}
 	var clients ClientSet
 	if app.clients != nil {

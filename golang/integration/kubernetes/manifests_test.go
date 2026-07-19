@@ -61,6 +61,13 @@ func TestBaseManifestSecurityContract(t *testing.T) {
 	if strings.Contains(deployment, "image: ") && regexp.MustCompile(`(?m)^\s*image:\s*[^\s@]+:[^\s@]+\s*$`).MatchString(deployment) {
 		t.Error("base deployment must not use a mutable image tag")
 	}
+	if strings.Contains(deployment, "name: LLMTW_REDIS_KEY_PREFIX") {
+		t.Error("base deployment must not override Redis key_prefix from the ConfigMap")
+	}
+	config := readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")
+	if !strings.Contains(config, "key_prefix: llmtw") {
+		t.Error("base ConfigMap configuration must declare the Redis key prefix")
+	}
 
 	serviceAccount := readRepositoryFile(t, "deploy", "kubernetes", "base", "serviceaccount.yaml")
 	if !strings.Contains(serviceAccount, "automountServiceAccountToken: false") {
