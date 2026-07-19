@@ -38,6 +38,8 @@ module Temporal_task_queue : S
 module Query_execution_id : S
 module Budget_policy_key : S
 module Budget_generation_id : S
+module Provider_model_id : S
+module Window_key : S
 
 module Checkpoint : sig
   type t = private string

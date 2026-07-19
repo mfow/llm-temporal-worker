@@ -31,6 +31,8 @@ module Temporal_task_queue = Identifier.Temporal_task_queue
 module Query_execution_id = Identifier.Query_execution_id
 module Budget_policy_key = Identifier.Budget_policy_key
 module Budget_generation_id = Identifier.Budget_generation_id
+module Provider_model_id = Identifier.Provider_model_id
+module Window_key = Identifier.Window_key
 module Checkpoint = Identifier.Checkpoint
 module Query_cursor = Identifier.Query_cursor
 module Budget_stream_id = Identifier.Budget_stream_id
@@ -400,7 +402,7 @@ type provider_status_page = { routes : provider_route_status list }
 type model_inventory_entry = {
   provider : Provider_id.t;
   endpoint : Endpoint_id.t;
-  provider_model_id : string;
+  provider_model_id : Provider_model_id.t;
   display_name : string option;
   lifecycle : model_lifecycle;
   capabilities : model_capability list;
@@ -425,7 +427,7 @@ type credit_status_page = { endpoints : credit_status_entry list }
 
 type budget_window_status = {
   policy_key : Budget_policy_key.t;
-  window_key : string;
+  window_key : Window_key.t;
   coverage_start : Ptime.t;
   coverage_end : Ptime.t;
   limit_usd : Usd_decimal.t;

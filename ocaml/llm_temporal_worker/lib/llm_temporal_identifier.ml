@@ -43,6 +43,8 @@ end
 module Query_execution_id = Make_nonempty ()
 module Budget_policy_key = Make_nonempty ()
 module Budget_generation_id = Make_nonempty ()
+module Provider_model_id = Make_nonempty ()
+module Window_key = Make_nonempty ()
 
 module Checkpoint = struct
   type t = string

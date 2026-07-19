@@ -559,7 +559,7 @@ let provider_page_of_json context value =
   Ok { routes }
 
 let inventory_to_json (value : model_inventory_entry) =
-  `Assoc (["provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "provider_model_id", `String value.provider_model_id; "lifecycle", `String (lifecycle_to_string value.lifecycle); "capabilities", `List (List.map (fun value -> `String value) value.capabilities); "complete_snapshot", `Bool value.complete_snapshot] @ string_option "display_name" value.display_name)
+  `Assoc (["provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "provider_model_id", `String (Provider_model_id.to_string value.provider_model_id); "lifecycle", `String (lifecycle_to_string value.lifecycle); "capabilities", `List (List.map (fun value -> `String value) value.capabilities); "complete_snapshot", `Bool value.complete_snapshot] @ string_option "display_name" value.display_name)
 
 let inventory_of_json context value =
   let* fields = closed context ["provider"; "endpoint"; "provider_model_id"; "display_name"; "lifecycle"; "capabilities"; "complete_snapshot"] value in
@@ -570,7 +570,7 @@ let inventory_of_json context value =
   let* lifecycle = required context "lifecycle" fields >>= string (context ^ ".lifecycle") >>= lifecycle_of_string context in
   let* capabilities = required context "capabilities" fields >>= list (context ^ ".capabilities") >>= map_result (string (context ^ ".capability")) in
   let* complete_snapshot = required context "complete_snapshot" fields >>= bool (context ^ ".complete_snapshot") in
-  Ok { provider = Provider_id.of_string provider; endpoint = Endpoint_id.of_string endpoint; provider_model_id; display_name; lifecycle; capabilities; source = Unknown_inventory_source; complete_snapshot; safe_metadata = Safe_metadata.empty }
+  Ok { provider = Provider_id.of_string provider; endpoint = Endpoint_id.of_string endpoint; provider_model_id = Provider_model_id.of_string provider_model_id; display_name; lifecycle; capabilities; source = Unknown_inventory_source; complete_snapshot; safe_metadata = Safe_metadata.empty }
 
 let model_page_to_json (value : model_inventory_page) = `Assoc ["models", `List (List.map inventory_to_json value.models)]
 let model_page_of_json context value = let* fields = closed context ["models"] value in let* models = required context "models" fields >>= list (context ^ ".models") >>= map_result (inventory_of_json (context ^ ".model")) in Ok { models }
@@ -596,7 +596,7 @@ let usd_json value = `String (Usd_decimal.to_string value)
 let usd_of_field context fields name = required context name fields >>= string (context ^ "." ^ name) >>= fun value -> match Usd_decimal.of_string value with Ok value -> Ok value | Error message -> Error (errorf "%s.%s: %s" context name message)
 
 let window_to_json (value : budget_window_status) =
-  `Assoc (["policy_key", `String (Budget_policy_key.to_string value.policy_key); "window_key", `String value.window_key; "coverage_start", time_to_json value.coverage_start; "coverage_end", time_to_json value.coverage_end; "limit_usd", usd_json value.limit_usd; "reserved_cost_usd", usd_json value.reserved_cost_usd; "accounted_cost_usd", usd_json value.accounted_cost_usd; "available_usd", usd_json value.available_usd] @ option_field "retry_after_seconds" (fun value -> `Intlit (Int64.to_string value)) value.retry_after_seconds)
+  `Assoc (["policy_key", `String (Budget_policy_key.to_string value.policy_key); "window_key", `String (Window_key.to_string value.window_key); "coverage_start", time_to_json value.coverage_start; "coverage_end", time_to_json value.coverage_end; "limit_usd", usd_json value.limit_usd; "reserved_cost_usd", usd_json value.reserved_cost_usd; "accounted_cost_usd", usd_json value.accounted_cost_usd; "available_usd", usd_json value.available_usd] @ option_field "retry_after_seconds" (fun value -> `Intlit (Int64.to_string value)) value.retry_after_seconds)
 
 let window_of_json context value =
   let* fields = closed context ["policy_key"; "window_key"; "coverage_start"; "coverage_end"; "limit_usd"; "reserved_cost_usd"; "accounted_cost_usd"; "available_usd"; "retry_after_seconds"] value in
@@ -609,7 +609,7 @@ let window_of_json context value =
   let* accounted_cost_usd = usd_of_field context fields "accounted_cost_usd" in
   let* available_usd = usd_of_field context fields "available_usd" in
   let* retry_after_seconds = match optional "retry_after_seconds" fields with None | Some `Null -> Ok None | Some value -> int64 (context ^ ".retry_after_seconds") value >>= fun value -> nonnegative (context ^ ".retry_after_seconds") value >>= fun () -> Ok (Some value) in
-  Ok { policy_key = Budget_policy_key.of_string policy_key; window_key; coverage_start; coverage_end; limit_usd; reserved_cost_usd; accounted_cost_usd; available_usd; retry_after_seconds }
+  Ok { policy_key = Budget_policy_key.of_string policy_key; window_key = Window_key.of_string window_key; coverage_start; coverage_end; limit_usd; reserved_cost_usd; accounted_cost_usd; available_usd; retry_after_seconds }
 
 let budget_to_json (value : budget_status) = `Assoc ["active_at", time_to_json value.active_at; "generation_id", `String (Budget_generation_id.to_string value.generation_id); "manifest_digest", `String (Sha256_digest.to_hex value.manifest_digest); "stream_high_water_mark", `String (Budget_stream_id.to_string value.stream_high_water_mark); "windows", `List (List.map window_to_json value.windows)]
 let budget_of_json context value =
