@@ -52,6 +52,7 @@ func TestReadinessIntegrationProvisionsRedisFunctionsForStorageGate(t *testing.T
 		`LLMTW_REDIS_CONTAINER="$$container"`,
 		`LLMTW_REDIS_CONTAINER_PREFIX="$(READINESS_REDIS_CONTAINER_PREFIX)"`,
 		"LLMTW_REDIS_TEST_PROVISION=1",
+		"redis-server --appendonly yes --appendfsync always --save 60 1 --maxmemory-policy noeviction",
 		`-tags=integration ./storage/redis -run '^TestLiveRedis'`,
 	} {
 		if !strings.Contains(target, required) {

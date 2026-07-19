@@ -82,7 +82,7 @@ readiness-integration:
 	@container="$(READINESS_REDIS_CONTAINER_PREFIX)-$$$$"; \
 	cleanup() { docker rm -f "$$container" >/dev/null 2>&1 || true; }; \
 	trap cleanup EXIT INT TERM; \
-	docker run --detach --name "$$container" --publish 127.0.0.1:$(READINESS_REDIS_PORT):6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --save 60 1 --maxmemory-policy noeviction >/dev/null; \
+	docker run --detach --name "$$container" --publish 127.0.0.1:$(READINESS_REDIS_PORT):6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --appendfsync always --save 60 1 --maxmemory-policy noeviction >/dev/null; \
 	if ! LLMTW_READINESS_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_READINESS_REDIS_CONTAINER="$$container" $(GO) test -count=1 -tags=readinessintegration ./integration; then \
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
