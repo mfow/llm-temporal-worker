@@ -851,7 +851,7 @@ KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 
 ```sh
 make image-verify
-docker build --build-arg VERSION=test --build-arg REVISION=test --build-arg BUILD_TIME=2026-07-14T00:00:00Z .
+cd golang && docker build --build-arg VERSION=test --build-arg REVISION=test --build-arg BUILD_TIME=2026-07-14T00:00:00Z .
 ```
 
 ## Task 23: Produce a release-evidence record and final-image SBOM

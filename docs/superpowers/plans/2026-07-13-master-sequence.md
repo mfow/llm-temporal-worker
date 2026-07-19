@@ -162,7 +162,7 @@ make verify
 make integration
 make compose-smoke
 make kustomize-verify
-docker build --tag llm-temporal-worker:release-candidate .
+cd golang && docker build --tag llm-temporal-worker:release-candidate .
 git diff --exit-code
 git status --short
 ```
