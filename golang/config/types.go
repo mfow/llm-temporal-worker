@@ -121,12 +121,13 @@ type TemporalWorkerConfig struct {
 }
 
 type StateConfig struct {
-	Kind                       string      `yaml:"kind" json:"kind"`
-	OperationTerminalRetention Duration    `yaml:"operation_terminal_retention" json:"operation_terminal_retention"`
-	AmbiguousRetention         Duration    `yaml:"ambiguous_retention" json:"ambiguous_retention"`
-	ContinuationRetention      Duration    `yaml:"continuation_retention" json:"continuation_retention"`
-	ReservationLease           Duration    `yaml:"reservation_lease" json:"reservation_lease"`
-	Redis                      RedisConfig `yaml:"redis" json:"redis"`
+	Kind                       string         `yaml:"kind" json:"kind"`
+	OperationTerminalRetention Duration       `yaml:"operation_terminal_retention" json:"operation_terminal_retention"`
+	AmbiguousRetention         Duration       `yaml:"ambiguous_retention" json:"ambiguous_retention"`
+	ContinuationRetention      Duration       `yaml:"continuation_retention" json:"continuation_retention"`
+	ReservationLease           Duration       `yaml:"reservation_lease" json:"reservation_lease"`
+	Redis                      RedisConfig    `yaml:"redis" json:"redis"`
+	Postgres                   PostgresConfig `yaml:"postgres" json:"postgres"`
 }
 
 type RedisConfig struct {
@@ -143,6 +144,23 @@ type RedisConfig struct {
 	DialTimeout         Duration  `yaml:"dial_timeout" json:"dial_timeout"`
 	OperationTimeout    Duration  `yaml:"operation_timeout" json:"operation_timeout"`
 	RequiredPersistence string    `yaml:"required_persistence" json:"required_persistence"`
+}
+
+// PostgresConfig selects the authoritative durable-state namespace. Database,
+// schema, and table_prefix are deliberately independent so deployments can
+// isolate workers without relying on search_path.
+type PostgresConfig struct {
+	Addresses        []string  `yaml:"addresses" json:"addresses"`
+	Database         string    `yaml:"database" json:"database"`
+	Schema           string    `yaml:"schema" json:"schema"`
+	TablePrefix      string    `yaml:"table_prefix" json:"table_prefix"`
+	Username         SecretRef `yaml:"username" json:"username"`
+	Password         SecretRef `yaml:"password" json:"password"`
+	TLS              TLSConfig `yaml:"tls" json:"tls"`
+	MaxConnections   int       `yaml:"max_connections" json:"max_connections"`
+	DialTimeout      Duration  `yaml:"dial_timeout" json:"dial_timeout"`
+	StatementTimeout Duration  `yaml:"statement_timeout" json:"statement_timeout"`
+	LockTimeout      Duration  `yaml:"lock_timeout" json:"lock_timeout"`
 }
 
 type BlobStoreConfig struct {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ func Load(data []byte) (Config, error) {
 		return Config{}, fmt.Errorf("configuration YAML: %w", err)
 	}
 	applyDefaults(&config)
+	applyPostgresEnvOverrides(&config)
 	canonicalize(&config)
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -86,6 +88,24 @@ func applyDefaults(config *Config) {
 	if config.State.ReservationLease == 0 {
 		config.State.ReservationLease = Duration(2 * time.Minute)
 	}
+	if config.State.Postgres.Database == "" {
+		config.State.Postgres.Database = "llm_worker"
+	}
+	if config.State.Postgres.Schema == "" {
+		config.State.Postgres.Schema = "llm_worker"
+	}
+	if config.State.Postgres.MaxConnections == 0 {
+		config.State.Postgres.MaxConnections = 32
+	}
+	if config.State.Postgres.DialTimeout == 0 {
+		config.State.Postgres.DialTimeout = Duration(2 * time.Second)
+	}
+	if config.State.Postgres.StatementTimeout == 0 {
+		config.State.Postgres.StatementTimeout = Duration(30 * time.Second)
+	}
+	if config.State.Postgres.LockTimeout == 0 {
+		config.State.Postgres.LockTimeout = Duration(2 * time.Second)
+	}
 	if config.BlobStore.Kind == "" {
 		config.BlobStore.Kind = "s3"
 	}
@@ -145,6 +165,21 @@ func applyDefaults(config *Config) {
 			endpoint.Timeout = Duration(115 * time.Second)
 			config.Endpoints[name] = endpoint
 		}
+	}
+}
+
+func applyPostgresEnvOverrides(config *Config) {
+	if config == nil {
+		return
+	}
+	if value, ok := os.LookupEnv("LLMTW_POSTGRES_DATABASE"); ok {
+		config.State.Postgres.Database = value
+	}
+	if value, ok := os.LookupEnv("LLMTW_POSTGRES_SCHEMA"); ok {
+		config.State.Postgres.Schema = value
+	}
+	if value, ok := os.LookupEnv("LLMTW_POSTGRES_TABLE_PREFIX"); ok {
+		config.State.Postgres.TablePrefix = value
 	}
 }
 

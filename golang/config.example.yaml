@@ -52,6 +52,25 @@ state:
     dial_timeout: 2s
     operation_timeout: 3s
     required_persistence: aof_and_rdb
+  postgres:
+    addresses: [postgres.example.internal:5432]
+    database: llm_worker
+    schema: llm_worker
+    table_prefix: ""
+    username:
+      kind: env
+      name: POSTGRES_USERNAME
+    password:
+      kind: file
+      path: /var/run/secrets/postgres-password
+    tls:
+      enabled: true
+      server_name: postgres.example.internal
+      ca_file: /var/run/ca/postgres.pem
+    max_connections: 64
+    dial_timeout: 2s
+    statement_timeout: 30s
+    lock_timeout: 2s
 
 blob_store:
   kind: s3

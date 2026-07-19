@@ -138,7 +138,8 @@
         "ambiguous_retention": { "$ref": "#/$defs/duration" },
         "continuation_retention": { "$ref": "#/$defs/duration" },
         "reservation_lease": { "$ref": "#/$defs/duration" },
-        "redis": { "$ref": "#/$defs/redis" }
+        "redis": { "$ref": "#/$defs/redis" },
+        "postgres": { "$ref": "#/$defs/postgres" }
       }
     },
     "redis": {
@@ -154,6 +155,22 @@
         "max_connections": { "type": "integer", "minimum": 1 },
         "dial_timeout": { "$ref": "#/$defs/duration" }, "operation_timeout": { "$ref": "#/$defs/duration" },
         "required_persistence": { "enum": ["aof_and_rdb", "aof", "rdb"] }
+      }
+    },
+    "postgres": {
+      "type": "object", "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "addresses": {},
+        "database": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
+        "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
+        "table_prefix": { "type": "string", "pattern": "^$|^[a-z][a-z0-9_]{0,22}_$", "maxLength": 24 },
+        "username": {}, "password": {},
+        "tls": {},
+        "max_connections": { "type": "integer", "minimum": 1 },
+        "dial_timeout": { "$ref": "#/$defs/duration" },
+        "statement_timeout": { "$ref": "#/$defs/duration" },
+        "lock_timeout": { "$ref": "#/$defs/duration" }
       }
     },
     "blob_store": {

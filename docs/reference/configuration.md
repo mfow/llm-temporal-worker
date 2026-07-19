@@ -474,6 +474,14 @@ This unreleased change must not implement or document copying, backfill,
 dual-read, dual-write, legacy namespace fallback, or renaming between namespace
 choices. A post-release namespace change requires a separate migration design.
 
+The schema foundation lives in
+[`golang/storage/postgres`](../../golang/storage/postgres/namespace.go). The
+checked-in migration template is rendered only after namespace validation and
+uses schema-qualified `pgx.Identifier` values; startup verification is
+read-only, while `Install` is reserved for an explicit provisioning step.
+Run `make postgres-integration` from `golang/` to exercise the namespace and
+contract gates against the pinned PostgreSQL service image.
+
 ## Pricing and budget matching
 
 `pricing.require_price_when_budgeted` controls the explicit unpriced policy.

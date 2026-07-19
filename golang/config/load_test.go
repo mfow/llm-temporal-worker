@@ -285,6 +285,26 @@ func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesPostgresNamespaceEnvironmentOverrides(t *testing.T) {
+	t.Setenv("LLMTW_POSTGRES_DATABASE", "worker_db")
+	t.Setenv("LLMTW_POSTGRES_SCHEMA", "worker_state")
+	t.Setenv("LLMTW_POSTGRES_TABLE_PREFIX", "tenant_")
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Postgres.Database != "worker_db" || loaded.State.Postgres.Schema != "worker_state" || loaded.State.Postgres.TablePrefix != "tenant_" {
+		t.Fatalf("unexpected PostgreSQL namespace: %#v", loaded.State.Postgres)
+	}
+}
+
+func TestLoadRejectsDurableStateUntilDurableFactoryIsWired(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "  kind: redis\n", "  kind: durable\n", 1)
+	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "state.kind") {
+		t.Fatalf("durable state was accepted without a durable factory: %v", err)
+	}
+}
+
 func TestLoadCanonicalizesOutboundProviderHosts(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),

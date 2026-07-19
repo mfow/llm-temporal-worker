@@ -97,6 +97,18 @@ jobs:
     name: Verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+        env:
+          POSTGRES_USER: llmtw
+          POSTGRES_PASSWORD: llmtw
+          POSTGRES_DB: llm_worker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llmtw -d llm_worker"
+          --health-interval 5s --health-timeout 3s --health-retries 24
 
     steps:
       - name: Check out repository
@@ -177,6 +189,15 @@ jobs:
         run: |
           make schema-verify
           make docs-verify
+
+      - name: Verify PostgreSQL schema and namespace
+        if: steps.go.outputs.present == 'true'
+        working-directory: golang
+        env:
+          LLMTW_POSTGRES_ADDR: 127.0.0.1:5432
+          LLMTW_POSTGRES_DATABASE: llm_worker
+          LLMTW_POSTGRES_SCHEMA: llm_worker
+        run: make postgres-integration
 
       - name: Vet
         if: steps.go.outputs.present == 'true'
