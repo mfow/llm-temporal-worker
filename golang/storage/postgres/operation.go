@@ -306,7 +306,10 @@ func (r OperationRepository) transitionDispatch(ctx context.Context, request adm
 	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var stateValue string
 		var number int
-		selectQ := "SELECT state, poll_count FROM " + operations + " WHERE operation_id=$1 FOR UPDATE"
+		// poll_count tracks provider polling, not route attempts. Derive the
+		// next attempt from the durable attempt rows while holding the operation
+		// lock so retries cannot reuse attempt number one.
+		selectQ := "SELECT state, COALESCE((SELECT MAX(attempt_number) FROM " + attempts + " WHERE operation_id=$1),0) FROM " + operations + " WHERE operation_id=$1 FOR UPDATE"
 		if err := tx.QueryRow(ctx, selectQ, opID).Scan(&stateValue, &number); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return admission.ErrOperationNotFound
@@ -540,7 +543,16 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 	}
 	stateValue, status, method := failurePersistence(request.Certainty)
 	actual := pricing.MustUSD("0")
-	actualText, _ := usdText(actual)
+	actualText := ""
+	if status == "exact" {
+		actualText, _ = usdText(actual)
+	}
+	retentionSQL := "NULL"
+	retentionArgs := []any{opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(safeReason(request.Reason))}
+	if stateValue != "ambiguous" {
+		retentionSQL = "clock_timestamp()+$7 * interval '1 second'"
+		retentionArgs = append(retentionArgs, r.Retention.Seconds())
+	}
 	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var current string
 		if err := tx.QueryRow(ctx, "SELECT state FROM "+operations+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&current); err != nil {
@@ -555,7 +567,7 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 		if !r.validToken(opID, request.DispatchToken) {
 			return admission.ErrInvalidToken
 		}
-		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state=$2, actual_cost_usd=$3, cost_status=$4, cost_method=$5, cost_unknown_reason_code=$6, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$7 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1", opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(safeReason(request.Reason)), r.Retention.Seconds())
+		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state=$2, actual_cost_usd=$3, cost_status=$4, cost_method=$5, cost_unknown_reason_code=$6, completed_at=clock_timestamp(), retention_expires_at="+retentionSQL+", lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1", retentionArgs...)
 		return err
 	})
 }
