@@ -30,6 +30,9 @@ func TestCostExactUSDJSONPreservesUnknownAndKnownFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if string(unknownJSON) != `{"actual_cost_usd":null,"catalog_version":"","cost_status":"unknown","method":"","reserved_cost_usd":null}` {
+		t.Fatalf("unknown cost JSON = %s", unknownJSON)
+	}
 	var unknownDecoded llm.Cost
 	if err := json.Unmarshal(unknownJSON, &unknownDecoded); err != nil {
 		t.Fatal(err)

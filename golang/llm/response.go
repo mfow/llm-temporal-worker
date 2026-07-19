@@ -315,13 +315,11 @@ func (cost Cost) MarshalJSON() ([]byte, error) {
 		actual = &converted
 	}
 	fields := map[string]any{"method": cost.Method, "catalog_version": cost.CatalogVersion}
-	if cost.ReservedCostUSD != nil || cost.ActualCostUSD != nil {
-		if reserved != nil {
-			fields["reserved_cost_usd"] = reserved
-		}
-		if actual != nil {
-			fields["actual_cost_usd"] = actual
-		}
+	if cost.Status != "" || cost.ReservedCostUSD != nil || cost.ActualCostUSD != nil {
+		// v1 responses always carry both nullable exact fields. A nil value is
+		// meaningful: it records that the cost is unknown rather than zero.
+		fields["reserved_cost_usd"] = reserved
+		fields["actual_cost_usd"] = actual
 	} else {
 		// Existing workers use the versioned Redis compatibility shape. Keep
 		// that shape only when no exact fields were supplied; exact callers
@@ -372,11 +370,13 @@ func decodeCost(data []byte) (Cost, error) {
 		return Cost{}, err
 	}
 	if raw, ok := fields["reserved_cost_usd"]; ok {
-		var value pricing.USD
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return Cost{}, fmt.Errorf("cost reserved_cost_usd: %w", err)
+		if string(raw) != "null" {
+			var value pricing.USD
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return Cost{}, fmt.Errorf("cost reserved_cost_usd: %w", err)
+			}
+			cost.ReservedCostUSD = &value
 		}
-		cost.ReservedCostUSD = &value
 	} else if raw, ok := fields["reserved_microusd"]; ok {
 		cost.ReservedMicroUSD, err = decodeInt64(raw)
 		if err != nil {
@@ -384,11 +384,13 @@ func decodeCost(data []byte) (Cost, error) {
 		}
 	}
 	if raw, ok := fields["actual_cost_usd"]; ok {
-		var value pricing.USD
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return Cost{}, fmt.Errorf("cost actual_cost_usd: %w", err)
+		if string(raw) != "null" {
+			var value pricing.USD
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return Cost{}, fmt.Errorf("cost actual_cost_usd: %w", err)
+			}
+			cost.ActualCostUSD = &value
 		}
-		cost.ActualCostUSD = &value
 	} else if raw, ok := fields["actual_microusd"]; ok {
 		cost.ActualMicroUSD, err = decodeInt64(raw)
 		if err != nil {

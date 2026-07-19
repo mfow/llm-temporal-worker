@@ -133,6 +133,11 @@ func TestResponseCostStatus(t *testing.T) {
 	if !bytes.Contains(encoded, []byte(`"cost_status":"unknown"`)) {
 		t.Fatalf("unknown-cost response omitted cost_status: %s", encoded)
 	}
+	for _, field := range []string{`"reserved_cost_usd":null`, `"actual_cost_usd":null`} {
+		if !bytes.Contains(encoded, []byte(field)) {
+			t.Fatalf("unknown-cost response omitted exact nullable field %s: %s", field, encoded)
+		}
+	}
 	var decoded llm.Response
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("unmarshal unknown-cost response: %v", err)
