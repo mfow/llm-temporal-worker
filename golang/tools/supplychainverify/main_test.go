@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -279,6 +281,316 @@ func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 		if !strings.Contains(string(master), expected) {
 			t.Fatalf("master workflow does not contain %q", expected)
 		}
+	}
+}
+
+func TestReadFindingsMergesDuplicatesAndRejectsMalformedStreams(t *testing.T) {
+	t.Parallel()
+
+	findings, err := readFindings(strings.NewReader(`{"event":"progress"}
+{"finding":{"osv":" GO-2099-0002 ","trace":[]}}
+{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}
+{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"},{"package":"example.test/one/vulnerable"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []vulnerabilityFinding{{ID: "GO-2099-0001", HasReachableTrace: true}, {ID: "GO-2099-0002"}}
+	if !reflect.DeepEqual(findings, want) {
+		t.Fatalf("findings = %#v, want %#v", findings, want)
+	}
+
+	for _, input := range []string{
+		`{"finding":{"osv":"OSV-1"}}`,
+		`{"finding":{"osv":"GO-2099-0001","trace":["not-an-object"]}}`,
+		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":123,"version":"v1.2.3"}]}}`,
+		`{"finding":`,
+	} {
+		if _, err := readFindings(strings.NewReader(input)); err == nil {
+			t.Fatalf("readFindings accepted malformed stream %s", input)
+		}
+	}
+}
+
+func TestHasReachableTraceClassifiesScannerShapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		trace     []json.RawMessage
+		reachable bool
+		wantErr   bool
+	}{
+		{name: "no trace", trace: nil},
+		{name: "module only", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one"}`)}, reachable: true},
+		{name: "complete module frame", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":"v1.2.3"}`)}},
+		{name: "blank module frame", trace: []json.RawMessage{json.RawMessage(`{"module":"","version":"v1.2.3"}`)}, reachable: true},
+		{name: "extra frame fields", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":"v1.2.3","package":"vulnerable"}`)}, reachable: true},
+		{name: "multiple frames", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":"v1.2.3"}`), json.RawMessage(`{"package":"vulnerable"}`)}, reachable: true},
+		{name: "malformed frame", trace: []json.RawMessage{json.RawMessage(`"not-an-object"`)}, wantErr: true},
+		{name: "malformed module", trace: []json.RawMessage{json.RawMessage(`{"module":123,"version":"v1.2.3"}`)}, wantErr: true},
+		{name: "malformed version", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":123}`)}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			reachable, err := hasReachableTrace(test.trace)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("hasReachableTrace accepted malformed frame")
+				}
+				return
+			}
+			if err != nil || reachable != test.reachable {
+				t.Fatalf("hasReachableTrace = %v, %v; want %v", reachable, err, test.reachable)
+			}
+		})
+	}
+}
+
+func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
+	t.Parallel()
+
+	validException := func() vulnerabilityException {
+		return vulnerabilityException{
+			ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z",
+			Remediation: "https://example.test/security/GO-2099-0001", Scope: "module_only",
+		}
+	}
+	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		mutate func(*baseline)
+		want   string
+	}{
+		{name: "wrong version", mutate: func(value *baseline) { value.Version = 2 }, want: "version"},
+		{name: "no allowed licenses", mutate: func(value *baseline) { value.AllowedLicenses = nil }, want: "no allowed licenses"},
+		{name: "empty allowed license", mutate: func(value *baseline) { value.AllowedLicenses[0] = " " }, want: "empty allowed license"},
+		{name: "duplicate allowed license", mutate: func(value *baseline) { value.AllowedLicenses = append(value.AllowedLicenses, "MIT") }, want: "repeats allowed license"},
+		{name: "incomplete module", mutate: func(value *baseline) { value.DirectModules[0].Version = "" }, want: "incomplete direct module"},
+		{name: "duplicate module", mutate: func(value *baseline) { value.DirectModules = append(value.DirectModules, value.DirectModules[0]) }, want: "repeats direct module"},
+		{name: "unapproved license", mutate: func(value *baseline) { value.DirectModules[0].License = "GPL-3.0" }, want: "unapproved license"},
+		{name: "invalid module source", mutate: func(value *baseline) { value.DirectModules[0].Source = "http://example.test/one" }, want: "invalid source"},
+		{name: "invalid exception id", mutate: func(value *baseline) {
+			exception := validException()
+			exception.ID = "CVE-2099-0001"
+			value.VulnerabilityExceptions = []vulnerabilityException{exception}
+		}, want: "requires an id"},
+		{name: "duplicate exception", mutate: func(value *baseline) {
+			exception := validException()
+			value.VulnerabilityExceptions = []vulnerabilityException{exception, exception}
+		}, want: "repeats vulnerability exception"},
+		{name: "expired exception", mutate: func(value *baseline) {
+			exception := validException()
+			exception.Expires = "2026-07-13T00:00:00Z"
+			value.VulnerabilityExceptions = []vulnerabilityException{exception}
+		}, want: "expired"},
+		{name: "invalid remediation", mutate: func(value *baseline) {
+			exception := validException()
+			exception.Remediation = "http://example.test/remediation"
+			value.VulnerabilityExceptions = []vulnerabilityException{exception}
+		}, want: "invalid remediation"},
+		{name: "invalid scope", mutate: func(value *baseline) {
+			exception := validException()
+			exception.Scope = "package_only"
+			value.VulnerabilityExceptions = []vulnerabilityException{exception}
+		}, want: "invalid scope"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			value := testBaseline()
+			test.mutate(&value)
+			if _, err := validateBaseline(value, now); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateBaseline error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateInventoryRejectsEveryDriftShape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		requirements []moduleRequirement
+		want         string
+	}{
+		{name: "duplicate direct module", requirements: append(testRequirements(), testRequirements()[0]), want: "repeats direct module"},
+		{name: "module missing from baseline", requirements: append(testRequirements(), moduleRequirement{Path: "example.test/new", Version: "v1.2.3"}), want: "missing from the reviewed baseline"},
+		{name: "version drift", requirements: []moduleRequirement{{Path: "example.test/one", Version: "v9.9.9"}, testRequirements()[1]}, want: "version differs"},
+		{name: "baseline module absent from go.mod", requirements: testRequirements()[:1], want: "is not in go.mod"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateInventory(testBaseline().DirectModules, test.requirements); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateInventory error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateComponentStatusRequiresPass(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		edit func(*componentStatus)
+		want string
+	}{
+		{name: "invalid status", edit: func(status *componentStatus) { status.Test = "unknown" }, want: "invalid status"},
+		{name: "failed component", edit: func(status *componentStatus) { status.Source = "fail" }, want: "did not pass"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			status := componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
+			test.edit(&status)
+			if err := validateComponentStatus(status); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateComponentStatus error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestWriteReportFileCreatesPrivateNestedReport(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nested", "security-verify.json")
+	if err := writeReportFile(path, verificationReport{Version: baselineVersion, Status: "fail", Findings: []string{}, ApprovedFindings: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if permission := info.Mode().Perm(); permission != 0o600 {
+		t.Fatalf("report permissions = %o, want 600", permission)
+	}
+	var report verificationReport
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contents, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "fail" || report.Version != baselineVersion {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestCommandSmokeWritesRedactedReport(t *testing.T) {
+	baseline := testBaseline()
+	baseline.VulnerabilityExceptions = []vulnerabilityException{{
+		ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z",
+		Remediation: "https://example.test/security/GO-2099-0001", Scope: "reachable",
+	}}
+	root := t.TempDir()
+	write := func(name string, contents []byte) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	baselineJSON, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goModJSON, err := json.Marshal(goMod{Require: []moduleRequirement{{Path: "example.test/one", Version: "v1.2.3"}, {Path: "example.test/two", Version: "v2.3.4"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselinePath := write("baseline.json", baselineJSON)
+	goModPath := write("go-mod.json", goModJSON)
+	vulnerabilityPath := write("vulnerabilities.json", []byte(`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"/private/raw-scanner-trace.txt"}}}]}}`))
+	reportPath := filepath.Join(root, "reports", "security-verify.json")
+
+	moduleDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(root, "supplychainverify")
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	build.Dir = moduleDirectory
+	build.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "go-cache"))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, output)
+	}
+
+	command := exec.Command(binaryPath, "-baseline", baselinePath, "-go-mod", goModPath, "-vulnerability-output", vulnerabilityPath, "-report", reportPath)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("supplychainverify failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "supply chain verification passed") {
+		t.Fatalf("command output = %s", output)
+	}
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(report), "raw-scanner-trace.txt") || strings.Contains(string(report), "trace") {
+		t.Fatalf("report retained scanner detail: %s", report)
+	}
+	var value verificationReport
+	if err := json.Unmarshal(report, &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Status != "pass" || !reflect.DeepEqual(value.ApprovedFindings, []string{"GO-2099-0001"}) {
+		t.Fatalf("report = %#v", value)
+	}
+}
+
+func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	write := func(name, contents string) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	baselinePath := write("baseline.json", `{"version":1,"allowed_licenses":["MIT"],"direct_modules":[{"path":"example.test/one","version":"v1.2.3","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`)
+	goModPath := write("go-mod.json", `{"Require":[{"Path":"example.test/one","Version":"v1.2.3"}]}`)
+	vulnerabilityPath := write("vulnerabilities.json", "")
+	components := componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
+	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+
+	report, err := execute(baselinePath, goModPath, vulnerabilityPath, components, now)
+	if err != nil || report.Status != "pass" || report.DirectModuleCount != 1 {
+		t.Fatalf("execute success = %#v, %v", report, err)
+	}
+
+	tests := []struct {
+		name       string
+		baseline   string
+		goMod      string
+		vulnerable string
+		components componentStatus
+		want       string
+	}{
+		{name: "missing baseline", baseline: filepath.Join(root, "missing-baseline.json"), goMod: goModPath, vulnerable: vulnerabilityPath, components: components, want: "cannot read baseline"},
+		{name: "invalid baseline", baseline: write("invalid-baseline.json", "{"), goMod: goModPath, vulnerable: vulnerabilityPath, components: components, want: "baseline is not valid JSON"},
+		{name: "missing go.mod inventory", baseline: baselinePath, goMod: filepath.Join(root, "missing-go-mod.json"), vulnerable: vulnerabilityPath, components: components, want: "cannot read go.mod inventory"},
+		{name: "invalid go.mod inventory", baseline: baselinePath, goMod: write("invalid-go-mod.json", "{"), vulnerable: vulnerabilityPath, components: components, want: "go.mod inventory is not valid JSON"},
+		{name: "missing vulnerability output", baseline: baselinePath, goMod: goModPath, vulnerable: filepath.Join(root, "missing-vulnerabilities.json"), components: components, want: "cannot read vulnerability output"},
+		{name: "invalid vulnerability output", baseline: baselinePath, goMod: goModPath, vulnerable: write("invalid-vulnerabilities.json", "{"), components: components, want: "vulnerability output is not valid JSON"},
+		{name: "invalid component status", baseline: baselinePath, goMod: goModPath, vulnerable: vulnerabilityPath, components: componentStatus{Test: "unknown", Source: "pass", GoMod: "pass", Vulnerability: "pass"}, want: "component test has an invalid status"},
+		{name: "failed component", baseline: baselinePath, goMod: goModPath, vulnerable: vulnerabilityPath, components: componentStatus{Test: "pass", Source: "fail", GoMod: "pass", Vulnerability: "pass"}, want: "component source did not pass"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			report, err := execute(test.baseline, test.goMod, test.vulnerable, test.components, now)
+			if err == nil || report.Status != "fail" || !strings.Contains(err.Error(), test.want) || report.Error != err.Error() {
+				t.Fatalf("execute error = %#v, %v; want %q", report, err, test.want)
+			}
+		})
 	}
 }
 
