@@ -33,6 +33,7 @@ targets=(
   "./pricing FuzzParseDecimalAndCeil"
   "./pricing FuzzUSDParseRoundTrip"
   "./routing FuzzPlannerCanonicalizesServiceClassFallbacks"
+  "./routing FuzzProviderCacheKeyForkIdentity"
   "./state FuzzVerifyHandleNeverPanics"
   "./storage/redis FuzzOperationCodecRoundTrip"
 )

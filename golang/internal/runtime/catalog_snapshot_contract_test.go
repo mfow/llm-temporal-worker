@@ -191,6 +191,16 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	if route.ID != "route-a" || route.Provider != "test-provider" || route.Family != string(provider.FamilyOpenAIResponses) || route.Region != "australiaeast" || route.AccountRegion != "au" || route.ModelLineage != "gpt-test" || route.PriceVersion != "prices-v1" || !route.PriceAvailable {
 		t.Fatalf("compiled route identity = %#v", route)
 	}
+	if route.EndpointAccountHMAC == [32]byte{} {
+		t.Fatal("compiled route is missing endpoint-account identity HMAC")
+	}
+	second, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Models["logical-model"].Routes[0].EndpointAccountHMAC != route.EndpointAccountHMAC {
+		t.Fatal("runtime endpoint-account identity HMAC is not deterministic")
+	}
 	if route.ProviderTiers[llm.ServiceClassStandard] != "standard" || len(route.ExtensionNames) != 2 || route.ExtensionNames[0] != "alpha" || route.ExtensionNames[1] != "zeta" {
 		t.Fatalf("compiled route classes/extensions = %#v", route)
 	}
@@ -199,6 +209,63 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	}
 	if routes.Version != value.Version || len(route.AllowedTenants) != 1 || route.AllowedTenants[0] != "tenant-a" || route.AllowedRegions[0] != "au" {
 		t.Fatalf("compiled route constraints = %#v", route)
+	}
+}
+
+func TestRuntimeCatalogRouteAffinityUsesCompiledAccountIdentity(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	model := value.Models["logical-model"]
+	model.Routes = append(model.Routes, config.RouteConfig{ID: "route-b", Endpoint: "endpoint-a", Model: "gpt-test", Classes: []llm.ServiceClass{llm.ServiceClassStandard}})
+	value.Models["logical-model"] = model
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled := routes.Models["logical-model"].Routes
+	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	plan, err := (routing.DeterministicPlanner{}).Plan(context.Background(), routing.Input{
+		Request: llm.Request{OperationKey: "runtime-affinity", Model: "logical-model", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant-a"}},
+		Catalog: routes,
+		Now:     now,
+		Affinity: &routing.AffinityPreferences{Soft: routing.ProviderCacheAffinitySet{{
+			Provider: compiled[1].Provider, RouteID: compiled[1].ID, EndpointID: compiled[1].EndpointID, EndpointAccountHMAC: compiled[1].EndpointAccountHMAC,
+			Region: compiled[1].Region, EndpointFamily: compiled[1].Family, ModelLineage: compiled[1].ModelLineage, RouteModelRevision: compiled[1].ModelRevision, CacheEpoch: "epoch-1", LastSuccessAt: now.Add(-time.Minute),
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Candidates) != 2 || plan.Candidates[0].RouteID != "route-b" {
+		t.Fatalf("runtime route affinity did not move compiled route: %#v", plan.Candidates)
+	}
+	wrongAccount := routing.ProviderCacheAffinitySet{{
+		Provider: compiled[1].Provider, RouteID: compiled[1].ID, EndpointID: compiled[1].EndpointID, EndpointAccountHMAC: routing.DeriveEndpointAccountHMAC(compiled[1].Provider, compiled[1].EndpointID, "other-account", compiled[1].Region, value.Version),
+		Region: compiled[1].Region, EndpointFamily: compiled[1].Family, ModelLineage: compiled[1].ModelLineage, RouteModelRevision: compiled[1].ModelRevision, CacheEpoch: "epoch-1", LastSuccessAt: now.Add(-time.Minute),
+	}}
+	unchanged, err := (routing.DeterministicPlanner{}).Plan(context.Background(), routing.Input{
+		Request: llm.Request{OperationKey: "runtime-affinity-wrong-account", Model: "logical-model", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant-a"}},
+		Catalog: routes, Now: now, Affinity: &routing.AffinityPreferences{Soft: wrongAccount},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Candidates[0].RouteID != "route-a" {
+		t.Fatalf("affinity from another runtime account changed route order: %#v", unchanged.Candidates)
+	}
+}
+
+func TestRuntimeEndpointAccountIdentitySeparatesAccounts(t *testing.T) {
+	one := routing.DeriveEndpointAccountHMAC("provider", "endpoint", "au", "australiaeast", "config-v1")
+	same := routing.DeriveEndpointAccountHMAC("provider", "endpoint", "au", "australiaeast", "config-v1")
+	other := routing.DeriveEndpointAccountHMAC("provider", "endpoint", "nz", "australiaeast", "config-v1")
+	if one == [32]byte{} || one != same {
+		t.Fatal("runtime endpoint-account identity is not stable")
+	}
+	if one == other {
+		t.Fatal("runtime endpoint-account identity did not separate account regions")
+	}
+	if got := routing.DeriveEndpointAccountHMAC("", "endpoint", "", "", "config-v1"); got != [32]byte{} {
+		t.Fatal("runtime endpoint-account identity guessed an unavailable account")
 	}
 }
 

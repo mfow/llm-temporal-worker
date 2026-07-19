@@ -20,6 +20,12 @@ Implementation starts from the landed OCaml validation baseline, including PR
 109. Preserve those validation improvements and regenerate fixtures from the
 final Go contract.
 
+The protocol layer now contains the Task 17 Generate, Compact, and Query v1
+wire records, closed Yojson codecs, exact decimal-cost representation, and
+their three Temporal Activity descriptors. The ergonomic immutable conversation
+and GADT query facades remain subsequent layers and do not change this wire
+boundary.
+
 Delivery follows the shared phase order: the rebuilt Generate facade is Phase
 A, Compact and Redis budget materialization are Phase B, the opt-in exact cache
 is Phase C, and typed Query clients are Phase D. These are implementation

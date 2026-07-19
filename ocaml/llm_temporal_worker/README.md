@@ -88,10 +88,11 @@ match Llm_temporal.Conversation.respond
 `Conversation.to_request` is available when a workflow needs to inspect or
 inject the exact low-level request.  `respond_with` accepts an injectable
 typed dispatcher for deterministic tests; production code normally uses
-`respond` or `start_respond`.  The conversation wrapper currently covers the
-Generate activity only.  Compact and typed control-query builders remain
-separate protocol work, so this API does not invent a checkpoint or query
-fallback representation.
+`respond` or `start_respond`.  The conversation wrapper remains focused on the
+Generate activity.  The protocol layer now also exposes exact Compact and
+typed Query v1 records, Yojson codecs, and the `llm.compact.v1`/`llm.query.v1`
+Activity descriptors; these low-level records stay separate from the
+ergonomic conversation facade.
 
 Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
 enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
