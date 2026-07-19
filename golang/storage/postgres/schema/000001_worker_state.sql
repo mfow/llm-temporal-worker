@@ -1178,6 +1178,8 @@ CREATE INDEX __PREFIX__price_entries_unresolved_idx
 
 CREATE TABLE __SCHEMA__.__PREFIX__provider_status_events (
     event_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_digest bytea NOT NULL UNIQUE
+        CHECK (octet_length(event_digest) = 32),
     config_digest bytea NOT NULL
         REFERENCES __SCHEMA__.__PREFIX__configuration_snapshots(config_digest)
         ON DELETE RESTRICT,
@@ -1209,7 +1211,8 @@ CREATE TABLE __SCHEMA__.__PREFIX__provider_status_events (
     provider_code text,
     evidence_digest bytea NOT NULL CHECK (octet_length(evidence_digest) = 32),
     config_epoch text NOT NULL,
-    expires_at timestamptz NOT NULL
+    expires_at timestamptz NOT NULL,
+    CHECK (expires_at > observed_at)
 );
 
 CREATE TABLE __SCHEMA__.__PREFIX__provider_route_status (
@@ -1222,6 +1225,7 @@ CREATE TABLE __SCHEMA__.__PREFIX__provider_route_status (
         CHECK (octet_length(endpoint_account_hmac) = 32),
     provider text NOT NULL,
     endpoint_family text NOT NULL,
+    config_epoch text NOT NULL,
     availability text NOT NULL CHECK (
         availability IN ('available', 'degraded', 'unavailable', 'unknown')
     ),
@@ -1239,6 +1243,8 @@ CREATE TABLE __SCHEMA__.__PREFIX__provider_route_status (
     last_event_id bigint NOT NULL
         REFERENCES __SCHEMA__.__PREFIX__provider_status_events(event_id)
         ON DELETE RESTRICT,
+    last_event_digest bytea NOT NULL
+        CHECK (octet_length(last_event_digest) = 32),
     last_success_at timestamptz,
     last_failure_at timestamptz,
     credit_confirmed_at timestamptz,
@@ -1274,6 +1280,7 @@ CREATE TABLE __SCHEMA__.__PREFIX__provider_inventory_snapshots (
         endpoint_account_hmac,
         observed_at
     ),
+    CHECK (expires_at > observed_at),
     CHECK (
         next_cursor_ciphertext IS NULL =
         (next_cursor_key_id IS NULL)
@@ -1294,6 +1301,7 @@ CREATE TABLE __SCHEMA__.__PREFIX__provider_inventory_models (
     capability_digest bytea NOT NULL CHECK (octet_length(capability_digest) = 32),
     safe_metadata jsonb NOT NULL DEFAULT '{}'::jsonb
         CHECK (jsonb_typeof(safe_metadata) = 'object'),
+    CHECK (length(provider_model_id) BETWEEN 1 AND 256),
     PRIMARY KEY (inventory_snapshot_id, provider_model_id)
 );
 
