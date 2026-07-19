@@ -30,7 +30,6 @@ func TestTrimOutputBoundsDiagnostic(t *testing.T) {
 }
 
 func TestMutationOverlaySmoke(t *testing.T) {
-	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
 	root := writeMutationFixture(t, `
 	if !Allows() {
 		t.Fatal("invariant violated")
@@ -64,7 +63,6 @@ func TestMutationOverlaySmoke(t *testing.T) {
 }
 
 func TestRunInvariantReportsTestOutput(t *testing.T) {
-	t.Setenv("GOCACHE", filepath.Join(t.TempDir(), "gocache"))
 	root := writeMutationFixture(t, `
 	t.Fatal("baseline failure")`)
 
