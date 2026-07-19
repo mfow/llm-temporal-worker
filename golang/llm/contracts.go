@@ -1246,6 +1246,9 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 }
 
 func (response QueryResponseV1) validate() error {
+	if err := validateQueryResult(response.Kind, response.Result); err != nil {
+		return err
+	}
 	if err := validateQueryTimestamp("observed_at", response.ObservedAt); err != nil {
 		return err
 	}

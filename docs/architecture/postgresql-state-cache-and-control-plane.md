@@ -2159,10 +2159,13 @@ The response repeats **kind** and uses exactly one associated result:
     "routes": [
       {
         "route_id": "openai-primary",
+        "provider": "openai",
+        "endpoint": "https://api.openai.com",
         "availability": "available",
         "credit_state": "ok",
         "billing_state": "ok",
-        "observed_at": "2026-07-18T03:14:15.100000Z"
+        "observed_at": "2026-07-18T03:14:15.100000Z",
+        "stale_after": "2026-07-18T03:19:15.100000Z"
       }
     ]
   },
