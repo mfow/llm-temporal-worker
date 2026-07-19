@@ -43,7 +43,7 @@ func newResponseCacheFixture(t *testing.T) responseCacheFixture {
 	}
 	blobs := BlobRepository{Pool: operations.Pool, Namespace: operations.Namespace, Keys: operations.Keys, NewID: UUIDv7}
 	digest := sha256.Sum256([]byte(originID + "-blob"))
-	blob, err := blobs.PutLocator(ctx, scope.ID, "cache-fixture", BlobMetadata{Digest: digest, ByteLength: 8, MediaType: "application/json"}, []byte("fixture"))
+	blob, err := blobs.PutLocator(ctx, scope.ID, "cache-fixture", BlobMetadata{StoreID: "cache-fixture-store", Digest: digest, ByteLength: 8, MediaType: "application/json"}, []byte("fixture"))
 	if err != nil {
 		t.Fatal(err)
 	}
