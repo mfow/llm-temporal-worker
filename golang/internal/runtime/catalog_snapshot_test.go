@@ -23,8 +23,7 @@ func TestRoutePriceIdentityUsesEndpointIdentity(t *testing.T) {
 	}
 	bundle := catalog.Bundle{Pricing: map[string]catalog.PricingCatalog{
 		"prices": {Version: "prices-v1", Catalog: pricing.Catalog{
-			Version:  "prices-v1",
-			Currency: "USD",
+			Version: "prices-v1",
 			Entries: []pricing.Entry{
 				{Provider: "wrong-provider", Family: "openai_responses", EndpointID: "other-endpoint", Region: "australiaeast", Model: "model", ProviderTier: "standard", Version: "wrong"},
 				{Provider: "right-provider", Family: "openai_responses", EndpointID: "target-endpoint", Region: "australiaeast", Model: "model", ProviderTier: "standard", Version: "right"},
@@ -50,7 +49,7 @@ func TestRoutePriceIdentityRejectsMissingEndpointQuote(t *testing.T) {
 		},
 	}
 	bundle := catalog.Bundle{Pricing: map[string]catalog.PricingCatalog{
-		"prices": {Catalog: pricing.Catalog{Version: "prices-v1", Currency: "USD", Entries: []pricing.Entry{{
+		"prices": {Catalog: pricing.Catalog{Version: "prices-v1", Entries: []pricing.Entry{{
 			Provider: "provider", Family: "openai_responses", EndpointID: "other", Model: "model", ProviderTier: "priority",
 		}}}},
 	}}
@@ -75,7 +74,7 @@ func TestRoutePriceIdentityUsesVerifiedIdentityWithoutCurrentQuote(t *testing.T)
 	}
 	stale := pricing.Entry{Provider: "verified-provider", Family: "openai_responses", EndpointID: "target-endpoint", Region: "australiaeast", Model: "model", ProviderTier: "priority", Version: "old-v1", EffectiveUntil: when.Add(-time.Second)}
 	bundle := catalog.Bundle{Pricing: map[string]catalog.PricingCatalog{
-		"prices": {Version: "prices-v1", Catalog: pricing.Catalog{Version: "prices-v1", Currency: "USD", Entries: []pricing.Entry{stale}}},
+		"prices": {Version: "prices-v1", Catalog: pricing.Catalog{Version: "prices-v1", Entries: []pricing.Entry{stale}}},
 	}}
 
 	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, when)

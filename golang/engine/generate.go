@@ -306,7 +306,7 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 	case admission.StateDispatching:
 		response, err := engine.dependencies.Results.Get(ctx, operation.ID)
 		if err == nil {
-			actual := pricing.MicroUSD(response.Cost.ActualMicroUSD)
+			actual := pricing.MicroUSD(0)
 			if response.Cost.ActualCostUSD != nil {
 				actual, err = compatibilityActualMicroUSD(*response.Cost.ActualCostUSD)
 				if err != nil {

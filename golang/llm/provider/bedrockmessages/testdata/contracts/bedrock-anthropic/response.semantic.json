@@ -10,7 +10,7 @@
       {"endpoint_family": "messages", "kind": "provider_state", "media_type": "application/vnd.anthropic.content-block+json", "opaque": "eyJ0eXBlIjoicmVkYWN0ZWRfdGhpbmtpbmciLCJkYXRhIjoib3BhcXVlLVtSRURBQ1RFRF0ifQ==", "provider": "bedrock"}
     ]
   },
-  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-bedrock-request",
   "output": [

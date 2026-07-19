@@ -254,7 +254,6 @@ type CapabilityConfig struct {
 type PricingConfig struct {
 	Catalogs                 []CatalogRef `yaml:"catalogs" json:"catalogs"`
 	RequirePriceWhenBudgeted bool         `yaml:"require_price_when_budgeted" json:"require_price_when_budgeted"`
-	Currency                 string       `yaml:"currency" json:"currency"`
 }
 
 type CatalogRef struct {

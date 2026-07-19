@@ -1,6 +1,6 @@
 {
   "api_version": "llm.temporal/v1",
-  "cost": {"actual_microusd": 2, "catalog_version": "", "currency": "USD", "method": "exa_reported", "reserved_microusd": 0},
+  "cost": {"actual_cost_usd": "0.000001230000000000", "catalog_version": "", "method": "exa_reported", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-exa-chat",
   "output": [

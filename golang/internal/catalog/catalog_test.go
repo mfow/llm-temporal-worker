@@ -114,7 +114,7 @@ entries:
 	if err != nil {
 		t.Fatalf("LoadPricing() error = %v", err)
 	}
-	if catalog.ID != "catalog-2026-07-13" || catalog.Catalog.Currency != "USD" {
+	if catalog.ID != "catalog-2026-07-13" {
 		t.Fatalf("catalog identity = %#v", catalog)
 	}
 	if len(catalog.Catalog.Entries) != 1 {
@@ -126,6 +126,25 @@ entries:
 	}
 	if entry.Prices.InputPerMillion.String() != "1.250000" || entry.Prices.OutputPerMillion.String() != "10.000000" {
 		t.Fatalf("entry prices = %#v", entry.Prices)
+	}
+}
+
+func TestLoadPricingRejectsNonUSDSource(t *testing.T) {
+	ref := writeCatalog(t, `version: llmtw-prices/v1
+id: catalog-non-usd
+currency: EUR
+entries:
+  - provider: openai
+    endpoint_id: openai-production
+    endpoint_family: openai_responses
+    region: global
+    model: gpt-example
+    provider_tier: standard
+    input_per_million: "1.250000"
+    output_per_million: "10.000000"
+`)
+	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "currency must be USD") {
+		t.Fatalf("LoadPricing() error = %v, want a non-USD rejection", err)
 	}
 }
 

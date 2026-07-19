@@ -268,9 +268,8 @@ URL, timeout, retry count, or budget fields.
     "provider_raw": {}
   },
   "cost": {
-    "currency": "USD",
-    "reserved_microusd": 41300,
-    "actual_microusd": 7920,
+    "reserved_cost_usd": "0.041300000000000000",
+    "actual_cost_usd": "0.007920000000000000",
     "method": "catalog_usage",
     "catalog_version": "prices-2026-07-13"
   },

@@ -13,8 +13,8 @@ func TestEstimatePlanUsesMaximumAuthorizedCandidate(t *testing.T) {
 	request := llm.Request{OperationKey: "estimate", Model: "logical", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}, Output: &llm.OutputSpec{MaxTokens: intPointer(10)}}
 	plan := routing.Plan{Candidates: []routing.Candidate{{ID: "economy", AttemptedClass: llm.ServiceClassEconomy}, {ID: "priority", AttemptedClass: llm.ServiceClassPriority}}}
 	entries := map[string]pricing.Entry{
-		"economy":  {Version: "e", Currency: "USD", Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD("1")}},
-		"priority": {Version: "p", Currency: "USD", Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD("2")}},
+		"economy":  {Version: "e", Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD("1")}},
+		"priority": {Version: "p", Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD("2")}},
 	}
 	estimator := Estimator{SafetyRatio: big.NewRat(1, 1)}
 	got, err := estimator.EstimatePlan(request, plan, entries)

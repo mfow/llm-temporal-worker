@@ -61,9 +61,10 @@ provider + endpoint family + billing region/account class
 + resolved model + provider tier + effective interval
 ```
 
-It contains all applicable unit prices, currency, tax policy, provenance,
-effective timestamps, and a content digest/version. Logical aliases are resolved
-before pricing.
+It contains all applicable USD unit prices, provenance, effective timestamps,
+and a content digest/version. The source file's `currency: USD` declaration is
+validated as provenance and is not part of the runtime catalog. Logical aliases
+are resolved before pricing.
 
 Catalog precedence is explicit:
 
@@ -78,11 +79,12 @@ matches no monetary budget. `false` is strict: every candidate needs a current
 price. `budgets.require_match: true` excludes unmatched candidates before this
 decision, so that combination never dispatches an unpriced route.
 
-An allowed unpriced result reports `cost_status=unknown`; zero reserved and
-actual microUSD in that result mean “not priced”, not a zero-dollar claim.
-Currency, method, and catalog version are empty, no monetary reservation is
-created, and a provider-reported amount is not promoted to an auditable cost
-without a current catalog quote. Metrics make the condition visible.
+An allowed unpriced result reports `cost_status=unknown`; nullable exact USD
+fields remain NULL, which means “not priced”, not a zero-dollar claim. Method
+and catalog version are empty, no monetary reservation is created, and a
+provider-reported amount is not promoted to an auditable cost without a current
+catalog quote. Metrics make the condition visible. Integer microUSD exists only
+at the explicit Redis admission/materialization boundary.
 
 Unknown catalog components and actual costs are NULL with an explicit
 status/reason, while exact zero means known free. Known spend totals exclude

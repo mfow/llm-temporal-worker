@@ -52,10 +52,11 @@ transform. Family aliases used by config (`azure_openai_responses` and
 ## Price documents
 
 Price documents contain a version, immutable `id`, and USD-denominated entries.
-There is no generic currency field. The
-canonical entry identity is provider, endpoint ID, endpoint family, region,
+The source document must declare `currency: USD`; this provenance assertion is
+validated at load time and is not propagated into runtime or response contracts.
+The canonical entry identity is provider, endpoint ID, endpoint family, region,
 model, provider tier, and effective start time. Prices are quoted decimal
-strings and are compiled by `pricing.CompileCatalog`; floating-point values are
+strings and are compiled by `pricing.CompileUSD`; floating-point values are
 not accepted. The local fixture's `endpoint` and `service_class` aliases are
 accepted, but `service_class` is still exactly one of `economy`, `standard`, or
 `priority`. There is no `provider_default` class.
@@ -63,6 +64,7 @@ accepted, but `service_class` is still exactly one of `economy`, `standard`, or
 ```yaml
 version: llmtw-prices/v1
 id: catalog-2026-07-13
+currency: USD
 entries:
   - provider: openai
     endpoint_id: openai-production
@@ -81,9 +83,8 @@ match the profile, or if its price catalog has no entry for that endpoint and
 family. It also rejects duplicate profile IDs and duplicate price-catalog IDs
 across files. Model-specific price selection remains a routing concern.
 
-All decimal price properties are known by contract to be USD. There is no FX
-adapter or rate schema while supported provider catalogs are USD. A future
-non-USD catalog is rejected/classified unknown until a provider-specific ADR
-adds Go-owned conversion; that future implementation may persist/report only
-normalized USD. Neither configuration nor downstream Go/JSON/OCaml records
-carry `currency = USD`.
+All decimal price properties are known by contract to be USD. A non-USD source
+is rejected; there is no FX adapter or rate schema. Neither configuration nor
+downstream Go/JSON/OCaml records carry a currency discriminator. This is a
+pre-release replacement, so old integer-microUSD and generic-currency response
+fields are rejected rather than dual-read or converted.

@@ -1,7 +1,7 @@
 {
   "api_version": "llm.temporal/v1",
   "continuation": {"endpoint_id": "anthropic-prod", "handle": "anthropic-messages:msg-fixture", "model": "claude-resolved", "pinned": true},
-  "cost": {"actual_microusd": 0, "catalog_version": "", "currency": "", "method": "", "reserved_microusd": 0},
+  "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-op",
   "output": [{"actor": "model", "content": [{"kind": "text", "text": "hello"}], "kind": "message"}],

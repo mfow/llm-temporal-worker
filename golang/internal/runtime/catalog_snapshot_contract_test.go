@@ -25,9 +25,9 @@ func testPriceEntry(endpointID, model, tier string) pricing.Entry {
 	}
 }
 
-func compiledPriceCatalog(t *testing.T, id, version, currency string, entries []pricing.Entry) catalog.PricingCatalog {
+func compiledPriceCatalog(t *testing.T, id, version string, entries []pricing.Entry) catalog.PricingCatalog {
 	t.Helper()
-	compiled, err := pricing.CompileCatalog(version, currency, entries)
+	compiled, err := pricing.CompileUSD(version, entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,14 +110,14 @@ func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
 
 func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.T) {
 	bundle := catalog.Bundle{Pricing: map[string]catalog.PricingCatalog{
-		"z": compiledPriceCatalog(t, "z", "z-v1", "USD", []pricing.Entry{testPriceEntry("endpoint-z", "model-z", "standard")}),
-		"a": compiledPriceCatalog(t, "a", "a-v1", "USD", []pricing.Entry{testPriceEntry("endpoint-a", "model-a", "standard")}),
+		"z": compiledPriceCatalog(t, "z", "z-v1", []pricing.Entry{testPriceEntry("endpoint-z", "model-z", "standard")}),
+		"a": compiledPriceCatalog(t, "a", "a-v1", []pricing.Entry{testPriceEntry("endpoint-a", "model-a", "standard")}),
 	}}
 	merged, err := mergePricingCatalogs(bundle, "config-v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.Version != "runtime-prices/config-v1" || merged.Currency != "USD" || len(merged.Entries) != 2 {
+	if merged.Version != "runtime-prices/config-v1" || len(merged.Entries) != 2 {
 		t.Fatalf("merged catalog = %#v", merged)
 	}
 	if merged.Entries[0].EndpointID != "endpoint-a" || merged.Entries[1].EndpointID != "endpoint-z" {
@@ -132,12 +132,11 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 	}
 	for name, invalid := range map[string]catalog.Bundle{
 		"empty": {Pricing: map[string]catalog.PricingCatalog{}},
-		"mixed currencies": {Pricing: map[string]catalog.PricingCatalog{
-			"usd": compiledPriceCatalog(t, "usd", "usd-v1", "USD", []pricing.Entry{testPriceEntry("usd", "model", "standard")}),
-			"eur": compiledPriceCatalog(t, "eur", "eur-v1", "EUR", []pricing.Entry{testPriceEntry("eur", "model", "standard")}),
+		"missing catalog entries": {Pricing: map[string]catalog.PricingCatalog{
+			"prices": compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{}),
 		}},
 		"invalid entry": {Pricing: map[string]catalog.PricingCatalog{
-			"broken": {Catalog: pricing.Catalog{Currency: "USD", Entries: []pricing.Entry{{Provider: "missing-rest-of-identity"}}}},
+			"broken": {Catalog: pricing.Catalog{Entries: []pricing.Entry{{Provider: "missing-rest-of-identity"}}}},
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -173,7 +172,7 @@ func testRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
 	}
 	return value, catalog.Bundle{
 		Capabilities: map[string]catalog.CapabilityProfile{"profile-a": profile},
-		Pricing:      map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{testPriceEntry("endpoint-a", "gpt-test", "standard")})},
+		Pricing:      map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{testPriceEntry("endpoint-a", "gpt-test", "standard")})},
 	}
 }
 
@@ -291,7 +290,7 @@ func TestCompileRoutesKeepsAnthropicAWSAndBedrockCatalogStateSeparate(t *testing
 	value, bundle = anthropicAWSRouteInputs(t)
 	entry := bundle.Pricing["prices"].Catalog.Entries[0]
 	entry.Family = string(provider.FamilyBedrockMessages)
-	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{entry})
+	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{entry})
 	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "no price entry") {
 		t.Fatalf("Bedrock price entry accepted for Anthropic AWS route: %v", err)
 	}
@@ -319,7 +318,7 @@ func anthropicAWSRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
 	}
 	return value, catalog.Bundle{
 		Capabilities: map[string]catalog.CapabilityProfile{"anthropic-aws-v1": profile},
-		Pricing:      map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{entry})},
+		Pricing:      map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{entry})},
 	}
 }
 
@@ -347,7 +346,7 @@ func TestCompileRoutesAllowsUnpricedRouteWithVerifiedEndpointIdentity(t *testing
 	when := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
 	stale := testPriceEntry("endpoint-a", "gpt-test", "standard")
 	stale.EffectiveUntil = when.Add(-time.Second)
-	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", "USD", []pricing.Entry{stale})
+	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{stale})
 
 	routes, err := compileRoutes(value, bundle, when)
 	if err != nil {
@@ -385,7 +384,7 @@ func TestCompileRoutesRejectsBrokenReferencesAndIdentity(t *testing.T) {
 			value.Models["logical-model"] = config.ModelConfig{Routes: routes}
 		}, want: "does not match capability profile"},
 		{name: "missing price", mutate: func(_ config.Config, bundle catalog.Bundle) {
-			bundle.Pricing["prices"] = catalog.PricingCatalog{Catalog: pricing.Catalog{Currency: "USD"}}
+			bundle.Pricing["prices"] = catalog.PricingCatalog{Catalog: pricing.Catalog{}}
 		}, want: "no price entry"},
 	}
 	for _, test := range tests {

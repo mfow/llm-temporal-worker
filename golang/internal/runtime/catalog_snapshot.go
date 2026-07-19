@@ -92,14 +92,11 @@ func mergePricingCatalogs(bundle catalog.Bundle, configVersion string) (pricing.
 	if len(ids) == 0 {
 		return pricing.Catalog{}, fmt.Errorf("verified pricing catalogs are required")
 	}
-	currency := ""
 	entries := make([]pricing.Entry, 0)
 	for _, id := range ids {
 		catalogValue := bundle.Pricing[id].Catalog
-		if currency == "" {
-			currency = catalogValue.Currency
-		} else if currency != catalogValue.Currency {
-			return pricing.Catalog{}, fmt.Errorf("pricing catalogs use multiple currencies")
+		if len(catalogValue.Entries) == 0 {
+			return pricing.Catalog{}, fmt.Errorf("pricing catalog %q has no entries", id)
 		}
 		entries = append(entries, catalogValue.Entries...)
 	}
@@ -107,7 +104,7 @@ func mergePricingCatalogs(bundle catalog.Bundle, configVersion string) (pricing.
 	if strings.TrimSpace(configVersion) != "" {
 		version += "/" + configVersion
 	}
-	merged, err := pricing.CompileCatalog(version, currency, entries)
+	merged, err := pricing.CompileUSD(version, entries)
 	if err != nil {
 		return pricing.Catalog{}, fmt.Errorf("merge pricing catalogs: %w", err)
 	}

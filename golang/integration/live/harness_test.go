@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 func TestProfilesDeclareTheGuardedLiveContract(t *testing.T) {
@@ -145,10 +146,9 @@ func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 		},
 		Usage: llm.Usage{InputTokens: 3, OutputTokens: 2},
 		Cost: llm.Cost{
-			Status:         llm.CostStatusKnown,
-			Currency:       "USD",
-			ActualMicroUSD: 123,
-			Method:         "provider_reported",
+			Status:        llm.CostStatusKnown,
+			ActualCostUSD: func() *pricing.USD { value := pricing.MustUSD("0.000123"); return &value }(),
+			Method:        "provider_reported",
 		},
 		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
 		Continuation: &llm.Continuation{
@@ -169,7 +169,7 @@ func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 	if evidence.RequestID != response.Provider.RequestID || evidence.ActualServiceClass != actual {
 		t.Fatalf("evidence provider facts = %#v", evidence)
 	}
-	if !evidence.ActualSpendKnown || evidence.ActualMicroUSD != response.Cost.ActualMicroUSD || evidence.CostMethod != response.Cost.Method {
+	if !evidence.ActualSpendKnown || evidence.ActualMicroUSD != 123 || evidence.CostMethod != response.Cost.Method {
 		t.Fatalf("evidence cost = %#v", evidence)
 	}
 	if evidence.CeilingMicroUSD != profile.MaxMicroUSD {
@@ -204,7 +204,8 @@ func TestValidateResponseRecordsUnreportedAndImplicitProviderCost(t *testing.T) 
 
 		t.Run(profileID+"/implicit-known", func(t *testing.T) {
 			response := response
-			response.Cost = llm.Cost{Currency: "USD", ActualMicroUSD: 17, Method: "provider_reported"}
+			value := pricing.MustUSD("0.000017")
+			response.Cost = llm.Cost{ActualCostUSD: &value, Method: "provider_reported"}
 			evidence, err := validateResponse(profile, response)
 			if err != nil {
 				t.Fatalf("validate implicit known cost: %v", err)
@@ -243,7 +244,8 @@ func TestValidateResponseFailsClosedOnMissingOrOverCeilingFacts(t *testing.T) {
 		{name: "missing usage", profile: pinned, mutate: func(response *llm.Response) { response.Usage.OutputTokens = 0 }, want: "usage"},
 		{name: "unpinned continuation", profile: pinned, mutate: func(response *llm.Response) { response.Continuation.Pinned = false }, want: "pinned continuation"},
 		{name: "reported cost over ceiling", profile: pinned, mutate: func(response *llm.Response) {
-			response.Cost = llm.Cost{Status: llm.CostStatusKnown, Currency: "USD", ActualMicroUSD: pinned.MaxMicroUSD + 1, Method: "provider_reported"}
+			value := pricing.MustUSD("0.025001")
+			response.Cost = llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &value, Method: "provider_reported"}
 		}, want: "ceiling"},
 		{name: "unsupported continuation", profile: unsupported, mutate: func(response *llm.Response) { response.Continuation = &llm.Continuation{Handle: "unexpected"} }, want: "must not return a continuation"},
 	}

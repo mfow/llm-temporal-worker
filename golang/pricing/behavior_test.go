@@ -18,7 +18,6 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 		Region:         "global",
 		Model:          "gpt-test",
 		ProviderTier:   "standard",
-		Currency:       "legacy-value-is-cleared",
 		EffectiveFrom:  from,
 		EffectiveUntil: from.Add(time.Hour),
 		Prices: UnitPrices{
@@ -34,9 +33,6 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 	catalog, err := CompileUSD("catalog-v1", []Entry{entry})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if catalog.Currency != "" || catalog.Entries[0].Currency != "" {
-		t.Fatalf("USD catalog retained a currency discriminator: %#v", catalog)
 	}
 
 	resolver := NewResolver(catalog)
@@ -66,7 +62,7 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cost.USD.String() != "0.100015000000000000" || cost.MicroUSD != 100015 || cost.Currency != "" || cost.Method != CostCatalogUsage || cost.CatalogVersion != "entry-v1" {
+	if cost.USD.String() != "0.100015000000000000" || cost.MicroUSD != 100015 || cost.Method != CostCatalogUsage || cost.CatalogVersion != "entry-v1" {
 		t.Fatalf("cost = %#v", cost)
 	}
 
@@ -149,16 +145,6 @@ func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
 				invalid := valid
 				invalid.Prices.InputPerMillion = DecimalUSD{numerator: *big.NewInt(-1)}
 				return CompileUSD("v1", []Entry{invalid})
-			},
-		},
-		"legacy catalog requires currency": {
-			compile: func() (Catalog, error) { return CompileCatalog("v1", "", []Entry{valid}) },
-		},
-		"legacy catalog rejects mixed currency": {
-			compile: func() (Catalog, error) {
-				mixed := valid
-				mixed.Currency = "EUR"
-				return CompileCatalog("v1", "USD", []Entry{mixed})
 			},
 		},
 	} {
@@ -246,7 +232,7 @@ func TestUSDBoundariesValidateYAMLAndUnderflow(t *testing.T) {
 }
 
 func TestCostFromUsageRejectsNegativeUsage(t *testing.T) {
-	entry := Entry{Currency: "USD", Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	entry := Entry{Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
 	if _, err := CostFromUsage(entry, Usage{InputTokens: -1}); err == nil {
 		t.Fatal("negative usage unexpectedly charged")
 	}

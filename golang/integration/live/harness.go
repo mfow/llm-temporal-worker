@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 const (
@@ -219,11 +220,15 @@ func validateResponse(profile Profile, response llm.Response) (Evidence, error) 
 		evidence.CostMethod = "not_reported"
 		return evidence, nil
 	}
-	if response.Cost.ActualMicroUSD > profile.MaxMicroUSD {
-		return Evidence{}, fmt.Errorf("profile %s actual cost %d microUSD exceeds ceiling %d", profile.ID, response.Cost.ActualMicroUSD, profile.MaxMicroUSD)
+	micro, err := costMicroUSD(response.Cost)
+	if err != nil {
+		return Evidence{}, fmt.Errorf("profile %s cost materialization: %w", profile.ID, err)
+	}
+	if micro > profile.MaxMicroUSD {
+		return Evidence{}, fmt.Errorf("profile %s actual cost %d microUSD exceeds ceiling %d", profile.ID, micro, profile.MaxMicroUSD)
 	}
 	evidence.ActualSpendKnown = true
-	evidence.ActualMicroUSD = response.Cost.ActualMicroUSD
+	evidence.ActualMicroUSD = micro
 	evidence.CostMethod = response.Cost.Method
 	return evidence, nil
 }
@@ -251,24 +256,35 @@ func reportedCost(cost llm.Cost) (bool, error) {
 	if cost.Status != "" && !cost.Status.Valid() {
 		return false, fmt.Errorf("status %q is invalid", cost.Status)
 	}
-	if cost.ReservedMicroUSD < 0 || cost.ActualMicroUSD < 0 {
-		return false, fmt.Errorf("contains a negative microUSD value")
-	}
 	if cost.Status == llm.CostStatusUnknown {
-		if cost.Currency != "" || cost.Method != "" || cost.ActualMicroUSD != 0 {
+		if cost.Method != "" || cost.ActualCostUSD != nil {
 			return false, fmt.Errorf("unknown status contains reported cost fields")
 		}
 		return false, nil
 	}
-	known := cost.Status == llm.CostStatusKnown || cost.Currency != "" || cost.Method != "" || cost.ActualMicroUSD != 0
+	known := cost.Status == llm.CostStatusKnown || cost.Method != "" || cost.ActualCostUSD != nil
 	if !known {
 		return false, nil
 	}
-	if cost.Currency != "USD" {
-		return false, fmt.Errorf("reported currency %q is not USD", cost.Currency)
+	if cost.ActualCostUSD == nil {
+		return false, fmt.Errorf("reported cost has no exact USD amount")
 	}
 	if cost.Method == "" {
 		return false, fmt.Errorf("reported cost has no method")
 	}
 	return true, nil
+}
+
+func costMicroUSD(cost llm.Cost) (int64, error) {
+	if cost.ActualCostUSD == nil {
+		return 0, fmt.Errorf("actual cost is unknown")
+	}
+	micro, err := pricing.MicroFromUSD(*cost.ActualCostUSD)
+	if err != nil {
+		return 0, err
+	}
+	if micro == 0 && !cost.ActualCostUSD.IsZero() {
+		return 1, nil
+	}
+	return int64(micro), nil
 }

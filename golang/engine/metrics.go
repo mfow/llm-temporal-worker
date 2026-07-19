@@ -54,6 +54,10 @@ func recordCompletion(ctx context.Context, response llm.Response) {
 		if response.Cost.ActualCostUSD != nil {
 			metrics.RecordExactCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method)
 		}
-		metrics.RecordCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method, float64(response.Cost.ActualMicroUSD))
+		if response.Cost.ActualCostUSD != nil {
+			if materialized, err := compatibilityActualMicroUSD(*response.Cost.ActualCostUSD); err == nil {
+				metrics.RecordCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method, float64(materialized))
+			}
+		}
 	}
 }

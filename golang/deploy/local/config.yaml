@@ -121,7 +121,6 @@ pricing:
     - file: /etc/llmtw/prices.yaml
       sha256: 1bc0a367993efa2f1af43646d8020a9079dbdd9820d2cf5dab7713fa34521c80
   require_price_when_budgeted: true
-  currency: USD
 
 budgets:
   require_match: true

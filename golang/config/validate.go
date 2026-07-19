@@ -487,9 +487,6 @@ func (catalogs CapabilityConfig) validate() error {
 }
 
 func (pricing PricingConfig) validate() error {
-	if pricing.Currency != "USD" {
-		return fmt.Errorf("pricing.currency %q is unsupported", pricing.Currency)
-	}
 	return validateCatalogs(pricing.Catalogs, "pricing.catalogs")
 }
 
