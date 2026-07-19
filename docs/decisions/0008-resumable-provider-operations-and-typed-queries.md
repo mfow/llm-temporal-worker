@@ -1,6 +1,7 @@
 # ADR 0008: Resumable Provider Operations and Typed Queries
 
-- Status: Accepted design; implementation pending
+- Status: Accepted design; adapter contract foundation implemented; durable
+  Activity integration pending
 - Date: 2026-07-18
 
 ## Context
@@ -67,6 +68,22 @@ type. A mismatched response tag is a decoding error, not an open JSON value.
   status; PostgreSQL owns the durable journal and historical operation cost.
 - Adding a query kind requires coordinated Go, JSON fixture, OCaml codec, GADT,
   authorization, and compatibility work.
+
+## Implementation boundary
+
+The Go provider package now exposes an optional `ResumableAdapter` contract
+with typed pending, completed, failed, and not-found outcomes, plus a separate
+`IdempotencyRecovery` extension for providers that document key lookup. The engine's
+bounded polling helper accepts only a previously persisted provider operation
+ID, honors provider delay guidance subject to a worker cap, and reports retryable
+poll limits without submitting again. It emits heartbeat progress containing
+only phase/count fields; provider IDs remain durable state.
+
+This foundation does not claim the full Phase A delivery: the production
+Activity path still needs to connect the contract to the durable operation
+repository, persist the encrypted ID before the first poll, and add provider
+idempotency-key recovery where documented. Until that integration lands,
+existing one-shot adapters remain the only runtime dispatch path.
 
 ## Rejected alternatives
 
