@@ -58,6 +58,41 @@ let definition =
 (* Register [definition] with the OCaml workflow worker. *)
 ```
 
+## Immutable conversations
+
+For a multi-turn workflow, `Llm_temporal.Conversation` keeps the branch head
+as an immutable value.  `fork` is a cheap persistent branch operation: it does
+not schedule an Activity or mutate the parent.  A successful `respond` returns
+the provider response together with a child conversation carrying the returned
+continuation.  Callers therefore choose explicitly which child to retain.
+
+```ocaml
+let settings =
+  Llm_temporal.Conversation.Settings.make
+    ~service_class:Llm_temporal.Priority ()
+in
+let root =
+  Llm_temporal.Conversation.root ~context ~model ~settings ()
+in
+let branch = Llm_temporal.Conversation.fork root in
+match Llm_temporal.Conversation.respond
+        ~operation_key:(Llm_temporal.Operation_key.of_string "turn-1")
+        ~append:[ Message { actor = Human; content = [ Text question ] } ]
+        branch with
+| Ok { response; conversation } ->
+    (* [conversation] is the next immutable branch head. *)
+    ignore (response, conversation)
+| Error error -> handle_temporal_error error
+```
+
+`Conversation.to_request` is available when a workflow needs to inspect or
+inject the exact low-level request.  `respond_with` accepts an injectable
+typed dispatcher for deterministic tests; production code normally uses
+`respond` or `start_respond`.  The conversation wrapper currently covers the
+Generate activity only.  Compact and typed control-query builders remain
+separate protocol work, so this API does not invent a checkpoint or query
+fallback representation.
+
 Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
 enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
 `Provider_request_id.t` cannot be interchanged, while `of_string` and
