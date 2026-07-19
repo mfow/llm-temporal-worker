@@ -16,6 +16,11 @@ transitions performed inside a read-committed transaction. Dispatch tokens are
 deterministic HMACs of the operation UUID, so a worker restart can safely
 reconstruct the token without persisting a bearer secret.
 
+Each retry derives its attempt number from the durable attempt rows while the
+operation row is locked. Provider-accepted or ambiguous failures persist an
+unknown cost with a null exact amount; only rejected/not-dispatched failures
+use the exact zero-cost cache method.
+
 The engine's `tenant\x00operation-key` scope format is split only for keyed
 scope lookup; the original scope key is retained in an authenticated encrypted
 column. Reads hydrate the scope, lease/operation expiry, request digest, and
