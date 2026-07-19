@@ -153,16 +153,13 @@ func (engine *Engine) loadContinuation(ctx context.Context, request llm.Request,
 	if request.Context.Tenant == "" {
 		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation tenant is required", state.ErrTenantMismatch)
 	}
-	continuation, err := engine.dependencies.Continuations.Get(ctx, handle)
+	continuation, err := engine.dependencies.Continuations.GetForTenant(ctx, request.Context.Tenant, handle)
 	if err != nil {
 		code := provider.CodeStateUnavailable
 		if errors.Is(err, state.ErrInvalidHandle) || errors.Is(err, state.ErrNotFound) || errors.Is(err, state.ErrTenantMismatch) || errors.Is(err, state.ErrExpired) {
 			code = provider.CodeInvalidArgument
 		}
 		return llm.Request{}, state.Constraints{}, nil, engineError(code, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation could not be loaded", err)
-	}
-	if request.Context.Tenant != "" && continuation.Tenant != request.Context.Tenant {
-		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation tenant does not match request tenant", state.ErrTenantMismatch)
 	}
 	if err := continuation.Validate(now); err != nil {
 		return llm.Request{}, state.Constraints{}, nil, engineError(provider.CodeStateCorrupt, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "continuation is invalid", err)
