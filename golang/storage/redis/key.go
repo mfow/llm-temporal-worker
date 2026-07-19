@@ -104,6 +104,10 @@ func (space keySpace) continuationKey(tenant, handle string) string {
 	return space.admissionPrefix() + "continuation:" + space.digest("tenant", tenant) + ":" + space.digest("continuation", handle)
 }
 
+func (space keySpace) continuationOperationKey(tenant, parent, operation string) string {
+	return space.admissionKey("continuation-operation", tenant, parent, operation)
+}
+
 // HashSlotKey is useful to readiness checks and tests: every admission key
 // must retain the same literal hash tag so one Function can update all of its
 // budget buckets atomically in Redis Cluster.

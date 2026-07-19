@@ -197,9 +197,10 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 	if child.Depth > store.maxDepth {
 		return "", fmt.Errorf("continuation depth exceeds limit")
 	}
+	operationIndexKey := ""
 	if request.OperationKey != "" {
-		indexKey := store.space.admissionKey("continuation-operation", request.OperationKey)
-		if value, err := store.reader.Get(ctx, indexKey); err == nil && value != "" {
+		operationIndexKey = store.space.continuationOperationKey(parent.Tenant, request.Parent.String(), request.OperationKey)
+		if value, err := store.reader.Get(ctx, operationIndexKey); err == nil && value != "" {
 			return state.Handle(value), nil
 		} else if err != nil && !errors.Is(err, redis.Nil) {
 			return "", resolveStateError(ctx, err)
@@ -210,7 +211,7 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 		return "", err
 	}
 	child.ID = handle
-	return store.put(ctx, state.Handle(handle), child, request.OperationKey)
+	return store.put(ctx, state.Handle(handle), child, operationIndexKey)
 }
 
 // Sweep is retained for parity with the memory implementation. Redis expires
@@ -218,7 +219,7 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 // scan is required here; the timestamp is intentionally unused.
 func (store *ContinuationStore) Sweep(_ time.Time) int { return 0 }
 
-func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, continuation state.Continuation, operationKey string) (state.Handle, error) {
+func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, continuation state.Continuation, operationIndexKey string) (state.Handle, error) {
 	if err := continuation.Validate(store.clock()); err != nil {
 		return "", err
 	}
@@ -232,8 +233,8 @@ func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, co
 	recordKey := store.space.continuationKey(continuation.Tenant, handle.String())
 	handleIndex := store.space.continuationIndexKey(handle.String())
 	keys := []string{handleIndex, recordKey}
-	if operationKey != "" {
-		keys = append(keys, store.space.admissionKey("continuation-operation", operationKey))
+	if operationIndexKey != "" {
+		keys = append(keys, operationIndexKey)
 	}
 	ttl := ttlSeconds(store.clock(), continuation.ExpiresAt)
 	result, err := store.invoke.Put(ctx, keys, string(data), handle.String(), strconv.FormatInt(ttl, 10))

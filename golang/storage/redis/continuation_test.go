@@ -168,6 +168,49 @@ func TestContinuationChildIsImmutableAndOperationIdempotent(t *testing.T) {
 	}
 }
 
+func TestContinuationOperationKeyIsScopedToTenantAndParent(t *testing.T) {
+	now := time.Unix(100, 0)
+	harness := newContinuationHarness()
+	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentA, err := store.CreateRoot(context.Background(), testContinuation(t, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootB := testContinuation(t, now)
+	rootB.Tenant = "tenant-b"
+	parentB, err := store.CreateRoot(context.Background(), rootB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	childA := testContinuation(t, now)
+	childA.ParentID = parentA.String()
+	childA.Depth = 1
+	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parentA, Child: childA, OperationKey: "shared-op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	childB := testContinuation(t, now)
+	childB.Tenant = "tenant-b"
+	childB.ParentID = parentB.String()
+	childB.Depth = 1
+	second, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parentB, Child: childB, OperationKey: "shared-op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Fatalf("operation key was shared across tenants/parents: %q", first)
+	}
+	got, err := store.Get(context.Background(), second)
+	if err != nil || got.Tenant != "tenant-b" || got.ParentID != parentB.String() {
+		t.Fatalf("scoped child = %#v, %v", got, err)
+	}
+}
+
 func TestContinuationExpiryAndBounds(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()

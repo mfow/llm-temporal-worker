@@ -94,7 +94,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 	childKeys := []string{
 		space.continuationIndexKey(first.String()),
 		space.continuationKey(child.Tenant, first.String()),
-		space.admissionKey("continuation-operation", "live-operation"),
+		space.continuationOperationKey(child.Tenant, parent.String(), "live-operation"),
 	}
 	cleanup = append(cleanup, childKeys...)
 	for _, key := range childKeys {
