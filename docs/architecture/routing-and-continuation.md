@@ -1,11 +1,10 @@
 # Routing and Continuation
 
-> This chapter describes current pre-release routing. The accepted
-> initial-release design keeps
-> these authorization and pinning invariants, then adds immutable materialized
-> checkpoint graphs, certified cross-provider model equivalence, and soft
-> provider-cache affinity. See
-> [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md).
+> This chapter describes current routing behavior. Target phase status and
+> authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
+> Phase A preserves these eligibility/pinning invariants; Phase B adds soft
+> provider prompt-cache affinity, and Phase C keeps worker response-cache keys
+> route-isolated.
 
 ## Routing model
 

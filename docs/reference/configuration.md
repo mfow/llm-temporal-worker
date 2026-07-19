@@ -50,6 +50,7 @@ temporal:
     heartbeat_keepalive_interval: 1s
 
 state:
+  kind: durable
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
@@ -73,6 +74,7 @@ state:
     budget_version: budget_v1
     budget_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b
     worker_lease_ttl: 30s
+    coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
     dial_timeout: 2s
@@ -379,10 +381,34 @@ resolved credentials.
 
 ## State namespace selection
 
-The initial-release composite state configuration requires both **state.redis**
-and **state.postgres**; there is no mutually exclusive **state.kind** selector.
-Redis owns the live active budget/throttle working set, while PostgreSQL owns
-the durable operation/budget journal and other durable features.
+**state.kind** is **durable** or **memory**. Durable is the production default
+and requires both **state.redis** and **state.postgres**: PostgreSQL is the
+system of record, while Redis provides the active budget/throttle materialization
+and cross-worker coordination optimization.
+
+Memory mode is an explicitly non-durable single-process development mode:
+
+~~~yaml
+environment: development
+state:
+  kind: memory
+  operation_terminal_retention: 45d
+  ambiguous_retention: 90d
+  continuation_retention: 30d
+  reservation_lease: 2m
+blob_store:
+  kind: memory
+~~~
+
+It uses bounded process memory for operations, checkpoints, query audit,
+budget/throttle state, and blobs. Restart loses everything; provider-pending
+jobs cannot be recovered after process loss. Validation rejects **memory** when
+`environment` is production, configured worker replicas exceed one, a durable
+continuation/recovery guarantee is required, or an external blob-store kind is
+mixed with the memory state. Redis/PostgreSQL addresses and credentials are
+omitted and are not dialled. The mode shares semantic conformance tests with
+durable implementations but is never evidence for crash recovery, multi-replica
+admission, backups, or production readiness.
 
 **state.redis.key_prefix** has a
 default of **llmtw**. The optional **LLMTW_REDIS_KEY_PREFIX** environment
@@ -432,7 +458,8 @@ not secret and are not hot-reloaded. Database and schema match
 unambiguous and the 24-byte maximum leaves room for the longest specified index
 name under PostgreSQL's 63-byte identifier limit. Schema-contract tests reject
 any generated name that would be truncated. Constraints use the architecture's
-short deterministic `<prefix>c_<kind>_<digest12>` names rather than relying on
+readable deterministic
+`<prefix>c_<kind>_<table_abbrev>_<invariant_slug>` names rather than hashes or
 PostgreSQL-generated names.
 
 The recommended production layout is a dedicated database and schema with an
@@ -460,7 +487,7 @@ fields to `true` requires every dispatched candidate to match a budget and to
 have a current price. An intentionally allowed unpriced result has
 `cost_status: unknown`; its zero cost fields are unknown accounting facts, not
 a free-use assertion. This describes the current pre-release implementation
-only. The accepted initial PostgreSQL contract replaces the zero sentinel with
+only. The accepted Phase A PostgreSQL contract replaces the zero sentinel with
 nullable price/actual-cost fields plus an explicit unknown reason; exact zero
 then means confirmed free.
 
@@ -514,7 +541,7 @@ starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
 `noeviction` policy, configured budget code identity, active generation,
-complete manifest, coverage, and Stream health. It also checks a bounded
+complete manifest, coverage, and the enabled Stream's structural health. It also checks a bounded
 PostgreSQL transaction, physical namespace/schema contract/index identities,
 UTC, and runtime grants. It checks
 the configured S3 bucket with bucket metadata only; it never reads or writes a
@@ -534,6 +561,13 @@ falls back from a missing Lua script to `EVAL` or `SCRIPT LOAD`.
 `required_persistence` selects the deployment policy: `aof_and_rdb` requires
 both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only
 their named mechanism. Any mismatch fails readiness closed.
+
+`coordination_stream_enabled` defaults to `true` in durable deployments and
+keeps cross-replica invalidation/generation-switch wake-ups fast. It does not
+change authority: a Stream gap or an explicitly disabled tailer discards local
+hints and reloads the manifest/policy state directly from Redis. Readiness
+validates the Stream key/type/retention policy when enabled, but a recoverable
+cursor gap does not invalidate an otherwise complete budget generation.
 
 Workers keep leases and broadcast cursors in the configured Redis budget
 namespace. Joining an existing live lease set, restarting one worker, handling

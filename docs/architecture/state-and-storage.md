@@ -1,11 +1,9 @@
 # State and Storage
 
-> This chapter describes the current pre-release Redis-backed implementation.
-> The accepted initial-release design in ADR 0007 keeps Redis as the required
-> low-latency throttle/admission accelerator and makes worker-owned PostgreSQL
-> authoritative for durable operations, exact monetary accounting,
-> checkpoints, response cache, and the control plane. The exact schema,
-> cross-store boundary, constraints, indexes, and transaction protocols are in
+> This chapter describes current storage behavior. Target phase status and
+> authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
+> The exact PostgreSQL system-of-record/Redis materialization boundary, schema,
+> constraints, indexes, and transaction protocols are in
 > [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
 > Temporal's own PostgreSQL schema is never modified.
 
@@ -24,14 +22,16 @@ handles payloads that exceed safe Redis or Temporal inline limits; filesystem is
 development-only and object storage is the production example.
 
 This is the current pre-release layout, not the accepted final division of
-responsibility. In the initial release Redis keeps the complete active-window
-monetary budget state plus request, token, and concurrency throttles, and makes
-each reservation/reconciliation atomically. PostgreSQL stores the durable
-operation replay and budget journal, conversation graph, response cache, and
-queryable historical facts. Normal budget admission reads Redis only. Every
-accepted Redis reservation must be journaled to PostgreSQL before paid
-dispatch; a failed write releases Redis best-effort and never dispatches. Both
-dependencies fail closed for new paid work.
+responsibility. In the target design PostgreSQL is the durable system of record,
+while Redis is the required production optimization that materializes the
+complete active-window budget working set plus request, token, and concurrency
+throttles. Redis makes each reservation/reconciliation atomic and coordinates
+replicas; it does not become the durable financial record. Normal budget
+admission reads Redis only. Every accepted Redis reservation must be journaled
+to PostgreSQL before paid dispatch; a failed write releases Redis best-effort
+and never dispatches. Both dependencies fail closed for new paid work. Exact
+PostgreSQL decimals are conservatively represented as safe-integer nano-USD in
+Redis as specified by the target schema chapter.
 
 The `storage/redis` implementation uses the official go-redis v9 client and
 one embedded, versioned Redis Function library for each admission mutation.

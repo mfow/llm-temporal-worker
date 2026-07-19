@@ -81,8 +81,9 @@ match the profile, or if its price catalog has no entry for that endpoint and
 family. It also rejects duplicate profile IDs and duplicate price-catalog IDs
 across files. Model-specific price selection remains a routing concern.
 
-All decimal price properties are known by contract to be USD. If a provider
-later publishes non-USD pricing, the Go worker's configured FX adapter obtains
-and versions the rate internally, then this loader publishes/persists only the
-normalized USD price. Neither configuration nor downstream Go/JSON/OCaml
-records carry `currency = USD`.
+All decimal price properties are known by contract to be USD. There is no FX
+adapter or rate schema while supported provider catalogs are USD. A future
+non-USD catalog is rejected/classified unknown until a provider-specific ADR
+adds Go-owned conversion; that future implementation may persist/report only
+normalized USD. Neither configuration nor downstream Go/JSON/OCaml records
+carry `currency = USD`.

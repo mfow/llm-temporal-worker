@@ -12,7 +12,7 @@ state lookup. Additive fields may be introduced within v1 only when old readers
 ignore them safely; enum additions require a new version because generated Go
 clients must not silently accept unknown behavior.
 
-> This chapter describes the current pre-release v1 shape. The accepted,
+> This chapter describes the current pre-release v1 shape. The staged target,
 > unimplemented delta, cache, exact USD, Compact, and Query contracts replace
 > it in place before the first release and are defined in
 > [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md)

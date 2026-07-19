@@ -2,10 +2,13 @@
 
 ## Status and database boundary
 
-This document specifies the initial-release worker schema and transactional
-behavior. It is design-only until the execution plan is implemented. The
-unreleased Generate v1 contract changes in place; no compatibility-only v2 is
-created.
+This document is the normative home for the PostgreSQL/Redis responsibility
+split, budget-read rules, workload envelope, and physical schema. It is
+design-only until the applicable delivery phase is implemented. The unreleased
+Generate v1 contract changes in place; no compatibility-only v2 is created.
+The staged delivery and document-authority rules are defined in
+[scope](../scope.md#staged-delivery-and-document-authority); summaries elsewhere
+link here instead of restating these invariants.
 
 The worker receives its own credentials, schema version, backup policy, and
 connection pool. The configured database, schema, and table prefix select its
@@ -16,14 +19,17 @@ avoid collisions in an explicitly shared schema, though it is not a security
 boundary. The worker must never create, query, or modify a relation owned by
 Temporal.
 
-PostgreSQL owns durable and queryable facts. Redis remains the required
-low-latency budget/throttle engine; it is not retired by this design. The
-responsibility split is:
+PostgreSQL is the system of record for durable and queryable facts. Redis
+remains a required production optimization: it is a provably-current
+materialization of the active budget horizon, the cross-replica decision
+serializer, and the low-latency throttle/coordination layer. Redis never becomes
+the durable financial authority, and PostgreSQL is never queried to calculate a
+normal live admission decision. The responsibility split is:
 
 | Responsibility | Live decision/read path | Durable record |
 | --- | --- | --- |
 | Operation idempotency and ambiguous-dispatch ledger | PostgreSQL | PostgreSQL operations and attempts |
-| Active sliding-window monetary budget | Redis atomic Function | PostgreSQL append-only budget journal and current operation facts |
+| Active sliding-window monetary budget | Redis atomic Function over a conservative materialization | PostgreSQL append-only exact budget journal and current operation facts |
 | Request/token/concurrency throttles | Redis atomic Function | Redis persistence; no financial record implied |
 | Immutable continuation state | PostgreSQL | checkpoints and blob references |
 | Completed-result replay | PostgreSQL | operation result blob |
@@ -31,7 +37,7 @@ responsibility split is:
 | Provider continuation/poll IDs | PostgreSQL | encrypted operation/attempt fields |
 | Provider health and credit observations | PostgreSQL | event log and current projection |
 | Provider model listing | PostgreSQL | inventory snapshots and normalized model rows |
-| Price catalogs and future FX conversion | in-memory immutable snapshot | PostgreSQL USD catalog and FX snapshots |
+| USD price catalogs | in-memory immutable snapshot | PostgreSQL USD catalog |
 | Current budget-status query | Redis only | response cites Redis generation and stream high-water mark |
 | Historical spend query | PostgreSQL operation/cost rows | no Redis budget read |
 
@@ -45,7 +51,7 @@ reads. The state machines make every cross-store failure conservative:
    operation-ledger read, not a budget-state read; a replay creates no new Redis
    reservation.
 2. For new work, call one Redis Function with the scoped operation identity,
-   matching policy/window set, exact worst-case amounts, request/token bounds,
+   matching policy/window set, conservative nano-USD worst-case amounts, request/token bounds,
    and expected budget generation. It validates complete coverage, compares
    every limit, creates an idempotent reservation, updates all buckets, and
    appends one event to the shared budget Stream atomically.
@@ -70,7 +76,8 @@ Redis namespace and one Redis Cluster hash slot. It includes:
   immutable random generation ID;
 - `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:manifest`, containing schema/config/price versions,
   `rebuild_complete`, coverage bounds, policy/window/bucket counts, the budget
-  Stream high-water mark, and a digest of the expected member catalog;
+  Stream high-water mark, the nano-USD rounding version, and a digest of the
+  expected member catalog;
 - `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:window:<window-hmac>`
   for each policy/window, containing its limit, complete zero-or-value bucket
   fields for the entire active horizon, retained reservations, and version;
@@ -99,14 +106,19 @@ admission. Redis uses `noeviction`; persistence errors, a missing sentinel,
 partial key loss, wrong generation, or incomplete coverage make readiness and
 admission fail closed.
 
-Every worker tails `budget:events` independently with `XREAD` from the cursor in
-its lease; a shared consumer group is not used because the feed is broadcast
-invalidation, not work distribution. The Stream lets workers discard local
-planning/negative-result hints immediately. Those hints can reject early but
-can never authorize a request; the atomic Redis Function remains the decision.
-A worker that falls behind the retained Stream discards its hints and reloads
-the current manifest/policy state from Redis only. Stream trimming uses the
-minimum cursor of non-expired worker leases plus a safety margin.
+Every worker may tail `budget:events` independently with `XREAD` from the cursor
+in its lease; a shared consumer group is not used because the feed is broadcast
+coordination, not work distribution. This is an optimization, not a correctness
+dependency. It lets workers invalidate expensive route/budget planning and
+negative-result hints immediately, wakes waiters after a generation switch, and
+avoids independent polling during large batch drains. Those hints can reject
+early but can never authorize a request; every authorization still comes from
+the atomic Redis Function, which also returns the current generation. A worker
+with Stream consumption disabled, or one that falls behind retention, discards
+its hints and reloads the current manifest/policy state from Redis only. Stream
+trimming uses the minimum cursor of non-expired worker leases plus a safety
+margin. Losing or disabling the Stream can increase Redis calls and latency but
+cannot create budget capacity or require a PostgreSQL budget read.
 
 Each Go process generates one random session ID and retains it in memory across
 Redis reconnects. The roster entry is persisted with the budget generation,
@@ -118,16 +130,29 @@ outage from a full Go-fleet restart without treating hostnames or pod names as
 stable identity. Stale roster entries are bounded by generation replacement and
 maintenance only after no active lease/cursor references them.
 
-### Exact decimals in Redis
+### Conservative nano-USD materialization in Redis
 
-Redis stores each **NUMERIC(38,18)** amount as a canonical zero-padded 38-digit
-unsigned integer string scaled by `10^18`. The Function compares fixed-width
-strings lexicographically and implements checked digit-wise addition and
-subtraction. It never passes a full amount to Lua `tonumber`, performs floating-
-point arithmetic, or rounds to a coarser throttle unit. Results round-trip
-exactly to PostgreSQL/Go/JSON/OCaml decimals; overflow above 38 digits fails
-closed. Golden/property tests cover all carries/borrows, sub-micro-dollar
-amounts, $1, $10, the maximum value, and overflow.
+PostgreSQL and public Go/JSON/OCaml contracts retain exact **NUMERIC(38,18)**
+USD values. Redis is only the admission materialization, so it uses non-negative
+integer nano-USD values. Go converts without floating point: every positive
+journal increase is rounded up to `ceil(usd * 10^9)`, every configured limit is
+rounded down to `floor(usd * 10^9)`, and each operation record stores the exact
+integer applied to every Redis window. Finalize/release subtracts that stored
+identity-keyed integer rather than recomputing it, then adds the rounded-up
+actual charge when required. Rebuild applies the same versioned conversion to
+the exact journal, producing the identical materialization.
+
+Redis Functions use only checked integers no greater than `2^53 - 1`; a
+monetary window limit above **9007199.254740991 USD** is rejected at config
+compile time until a different representation receives its own ADR. The
+materialization can over-throttle by less than one nano-dollar per positive
+event plus the discarded fractional remainder of the limit, but it can never
+under-throttle relative to the exact PostgreSQL record. `budget_status` exposes
+decimal USD fields derived from these integers and marks them
+**nano_usd_conservative**; exact historical spend continues to come from
+PostgreSQL. Property tests cover rounding boundaries, safe-integer bounds,
+identity-keyed subtraction, rebuild determinism, and non-negative sums. No
+hand-written arbitrary-precision Lua arithmetic is introduced.
 
 ### The only PostgreSQL budget-read conditions
 
@@ -137,7 +162,8 @@ read. Routine admission, completion, budget-status queries, policy refresh,
 stream-gap recovery, health checks, maintenance, and single-worker restarts
 also perform no PostgreSQL budget read.
 
-PostgreSQL budget reads are allowed only in these two conditions:
+PostgreSQL budget reads are allowed only after Redis adoption fails and one of
+these two conditions holds:
 
 1. Redis worker leases prove there are zero live Go workers and no reconnecting
    process presents a rostered session ID, so the fleet is performing a cold
@@ -146,8 +172,15 @@ PostgreSQL budget reads are allowed only in these two conditions:
    failover and the persisted generation is missing/incomplete, proving that
    the replacement did not retain the required data.
 
-One worker acquires the namespaced bootstrap fence; all others wait and keep
-admission closed. The coordinator reads only the active horizon plus required
+Before either rebuild path, a cold worker validates the existing manifest,
+member catalog, generation/incarnation binding, high-water mark, and all active
+horizon sentinels. An intact same-incarnation generation is adopted in place,
+even when the live-lease set is empty; a fleet that scaled to zero does not
+rebuild merely because it restarted. This adoption reads Redis only.
+
+When adoption is impossible and one allowed condition is proven, one worker
+acquires the namespaced bootstrap fence; all others wait and keep admission
+closed. The coordinator reads only the active horizon plus required
 open reservations and ordered journal tail, constructs a new generation under
 new keys, verifies every count/digest/bucket, and atomically switches
 `budget:active-generation` while appending the generation-switch Stream event.
@@ -162,9 +195,33 @@ the generation. A changed server run ID alone does not authorize PostgreSQL:
 an intact, verified generation resumes entirely from Redis. A missing member or
 digest mismatch under the same incarnation is unexplained corruption and fails
 closed without a PostgreSQL read. Recovery then requires operators to restore
-Redis or deliberately restart/replace it under a new observed incarnation. A
-new Go process that has no prior Redis observation can rebuild only through the
-zero-live-worker full-fleet condition.
+Redis or deliberately replace the dataset under the documented fenced
+procedure. A new Go process that has no prior Redis observation can rebuild only
+through the zero-live-worker full-fleet condition.
+
+### Availability trade and operator recovery
+
+New paid work deliberately fails closed when Temporal, PostgreSQL, Redis, the
+encrypted blob store, or KMS cannot satisfy its part of the protocol. The
+same-incarnation corruption rule can therefore turn a bounded risk of budget
+overspend into a full paid-work outage requiring an operator decision. This is
+intentional: the worker cannot prove which Redis members disappeared, and
+silently rebuilding while another writer might still rely on that generation
+could create budget capacity. Read-only health endpoints may remain available;
+Generate, Compact, cache fills, and provider-refresh queries do not bypass the
+failed dependency.
+
+The design-time
+[Redis budget generation recovery runbook](../runbooks/redis-budget-generation-recovery.md)
+distinguishes
+an intact generation to adopt, persistent restart, verified new empty
+incarnation, same-incarnation partial loss, and an operator-authorized dataset
+replacement. It requires evidence capture, freezes paid dispatch, identifies
+the active journal high-water mark, uses the bootstrap fence, verifies the new
+generation before the atomic flip, and defines rollback/escalation. Readiness
+must name the failed proof and link the runbook; it must not suggest `FLUSHDB`
+or an unfenced manual key edit. Implementation must replace its placeholders
+with tested deployment-specific commands before production paid work is enabled.
 
 There is no periodic PostgreSQL-to-Redis reconciliation, no per-worker startup
 query, and no PostgreSQL fallback on a Redis miss. Historical spend queries use
@@ -201,11 +258,11 @@ separate migration design then.
 - Sensitive lookup values use keyed HMAC columns. Reversible provider IDs and
   object locators use envelope-encrypted bytea plus a key ID. Secrets and raw
   prompt text do not enter indexed columns.
-- Each operation stores its bounded canonical Generate Activity request as
-  JSONB.
-  Cache entries store a canonical request manifest JSONB. Neither column has a
-  GIN index or serves hot lookup; access is restricted because the operation
-  request can contain model content.
+- Each Generate/Compact operation stores a bounded, content-free request
+  manifest as JSONB plus exactly one envelope-encrypted inline payload or
+  encrypted blob reference. Cache entries likewise store only a canonical
+  manifest of digests and references as JSONB. Raw prompt/tool/output text is
+  never stored as ordinary JSONB, and no manifest receives a broad GIN index.
 - SHA-256 and HMAC columns are exactly 32 bytes. No raw tenant, prompt, API key,
   provider poll token, or provider error body is stored.
 - Every monetary column is **NUMERIC(38,18)**, non-negative, and denominated in
@@ -224,7 +281,7 @@ separate migration design then.
 
 PostgreSQL supports substantially more decimal precision than this design uses.
 **NUMERIC(38,18)** gives 20 whole-dollar digits and 18 fractional digits while
-keeping one uniform type across price, FX, budget, reservation, and actual-cost
+keeping one uniform type across price, budget, reservation, and actual-cost
 arithmetic.
 
 This deliberately replaces the current integer micro-USD authority. It can
@@ -294,14 +351,14 @@ quote_identifier(configured_schema)
 The same substitution applies to explicitly named indexes, sequences, and
 constraints. The readable DDL below omits repetitive constraint names. The
 installer must emit every constraint explicitly as
-`<table-prefix>c_<kind>_<digest12>`, where `kind` is `pk`, `uq`, `fk`, or `ck`
-and `digest12` is the first 12 lowercase hexadecimal characters of SHA-256 over
-the stable logical table name, a NUL separator, and a documented invariant
-slug. This keeps names deterministic and below 63 bytes even at the maximum
-prefix; the schema-contract fixture owns the complete `(table, slug, name)`
-catalog and rejects a digest collision. Index and identity-sequence names use
-the prefixed logical names shown in this document and are also enumerated by
-that fixture. PostgreSQL-generated/truncated object names are not accepted.
+`<table-prefix>c_<kind>_<table_abbrev>_<invariant_slug>`, where `kind` is `pk`,
+`uq`, `fk`, or `ck`. The schema-contract fixture owns the reviewed logical
+table abbreviations and semantic invariant slugs, enumerates the complete
+`(table, invariant, rendered name)` catalog, and rejects any name over 63 bytes
+or any collision. Names must make a production violation understandable without
+a fixture lookup, for example `c_ck_ops_completed_result` and
+`c_fk_cache_origin_operation`. Hash-only suffixes and PostgreSQL-generated or
+truncated names are not accepted.
 
 **CREATE SCHEMA** and schema-level **REVOKE** are executed only
 when the configured schema is dedicated and owned by the worker schema-owner
@@ -386,7 +443,7 @@ CREATE TABLE llm_worker.operations (
     scope_id uuid NOT NULL
         REFERENCES llm_worker.scopes(scope_id) ON DELETE RESTRICT,
     operation_kind text NOT NULL
-        CHECK (operation_kind IN ('generate', 'compact', 'query')),
+        CHECK (operation_kind IN ('generate', 'compact')),
     api_version text NOT NULL,
     operation_key_hmac bytea NOT NULL
         CHECK (octet_length(operation_key_hmac) = 32),
@@ -394,8 +451,12 @@ CREATE TABLE llm_worker.operations (
         CHECK (octet_length(request_fingerprint_hmac) = 32),
     request_schema_version integer NOT NULL
         CHECK (request_schema_version > 0),
-    request_jsonb jsonb NOT NULL
-        CHECK (jsonb_typeof(request_jsonb) = 'object'),
+    request_manifest_jsonb jsonb NOT NULL
+        CHECK (jsonb_typeof(request_manifest_jsonb) = 'object'),
+    request_inline_ciphertext bytea,
+    request_blob_id uuid
+        REFERENCES llm_worker.blobs(blob_id) ON DELETE RESTRICT,
+    request_key_id text,
     config_digest bytea NOT NULL
         REFERENCES llm_worker.configuration_snapshots(config_digest)
         ON DELETE RESTRICT,
@@ -413,8 +474,10 @@ CREATE TABLE llm_worker.operations (
     parent_operation_id uuid
         REFERENCES llm_worker.operations(operation_id) ON DELETE RESTRICT,
     parent_checkpoint_id uuid,
+    result_inline_ciphertext bytea,
     result_blob_id uuid
         REFERENCES llm_worker.blobs(blob_id) ON DELETE RESTRICT,
+    result_key_id text,
     result_digest bytea CHECK (
         result_digest IS NULL OR octet_length(result_digest) = 32
     ),
@@ -424,7 +487,7 @@ CREATE TABLE llm_worker.operations (
     provider text,
     endpoint_family text,
     resolved_model text,
-    model_equivalence_id text,
+    route_model_revision text,
     requested_service_class text CHECK (
         requested_service_class IS NULL OR
         requested_service_class IN ('economy', 'standard', 'priority')
@@ -471,8 +534,7 @@ CREATE TABLE llm_worker.operations (
             'provider_reported',
             'catalog_usage',
             'reconstructed_usage',
-            'worker_cache_zero',
-            'control_query_zero'
+            'worker_cache_zero'
         )
     ),
     cost_unknown_reason_code text CHECK (
@@ -480,11 +542,10 @@ CREATE TABLE llm_worker.operations (
         cost_unknown_reason_code ~ '^[a-z0-9_]{1,64}$'
     ),
     cost_catalog_version text,
-    fx_rate_snapshot_id uuid,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at timestamptz,
-    expires_at timestamptz NOT NULL,
+    retention_expires_at timestamptz,
     UNIQUE (scope_id, operation_kind, operation_key_hmac),
     CHECK (
         state <> 'provider_pending' OR (
@@ -497,10 +558,21 @@ CREATE TABLE llm_worker.operations (
     CHECK (
         state <> 'completed' OR (
             completed_at IS NOT NULL AND
-            result_blob_id IS NOT NULL AND
+            ((result_inline_ciphertext IS NOT NULL)::integer +
+             (result_blob_id IS NOT NULL)::integer = 1) AND
             result_digest IS NOT NULL AND
             cost_status IN ('exact', 'unknown')
         )
+    ),
+    CHECK (
+        (request_inline_ciphertext IS NOT NULL)::integer +
+        (request_blob_id IS NOT NULL)::integer = 1
+    ),
+    CHECK (
+        request_inline_ciphertext IS NULL = (request_key_id IS NULL)
+    ),
+    CHECK (
+        result_inline_ciphertext IS NULL = (result_key_id IS NULL)
     ),
     CHECK (
         (cost_status = 'pending' AND
@@ -533,14 +605,20 @@ CREATE TABLE llm_worker.operations (
         endpoint_id IS NOT NULL
     ),
     CHECK (
-        cost_method NOT IN ('worker_cache_zero', 'control_query_zero') OR
+        cost_method <> 'worker_cache_zero' OR
         actual_cost_usd = 0
     ),
     CHECK (
         cost_method NOT IN ('catalog_usage', 'reconstructed_usage') OR
         cost_catalog_version IS NOT NULL
     ),
-    CHECK (completed_at IS NULL OR completed_at >= created_at)
+    CHECK (completed_at IS NULL OR completed_at >= created_at),
+    CHECK (
+        (state IN ('completed', 'definite_failed', 'canceled') AND
+            retention_expires_at IS NOT NULL) OR
+        (state IN ('reserved', 'dispatching', 'provider_pending', 'ambiguous') AND
+            retention_expires_at IS NULL)
+    )
 );
 
 CREATE TABLE llm_worker.operation_attempts (
@@ -555,7 +633,7 @@ CREATE TABLE llm_worker.operation_attempts (
     provider text NOT NULL,
     endpoint_family text NOT NULL,
     resolved_model text NOT NULL,
-    model_equivalence_id text NOT NULL,
+    route_model_revision text NOT NULL,
     state text NOT NULL CHECK (
         state IN (
             'planned',
@@ -666,6 +744,10 @@ CREATE INDEX operations_result_blob_idx
     ON llm_worker.operations (result_blob_id)
     WHERE result_blob_id IS NOT NULL;
 
+CREATE INDEX operations_request_blob_idx
+    ON llm_worker.operations (request_blob_id)
+    WHERE request_blob_id IS NOT NULL;
+
 CREATE INDEX operations_lease_recovery_idx
     ON llm_worker.operations (lease_expires_at, operation_id)
     WHERE state IN ('reserved', 'dispatching');
@@ -684,7 +766,7 @@ CREATE INDEX operations_scope_spend_idx
         cost_method,
         endpoint_id,
         resolved_model,
-        model_equivalence_id
+        route_model_revision
     )
     WHERE state = 'completed';
 
@@ -694,10 +776,8 @@ CREATE INDEX operations_unknown_cost_idx
     WHERE state = 'completed' AND cost_status = 'unknown';
 
 CREATE INDEX operations_terminal_expiry_idx
-    ON llm_worker.operations (expires_at, operation_id)
-    WHERE state IN (
-        'completed', 'definite_failed', 'ambiguous', 'canceled'
-    );
+    ON llm_worker.operations (retention_expires_at, operation_id)
+    WHERE state IN ('completed', 'definite_failed', 'canceled');
 
 CREATE INDEX operations_completed_brin_idx
     ON llm_worker.operations USING brin (completed_at)
@@ -714,8 +794,8 @@ CREATE INDEX operation_attempts_route_time_idx
     INCLUDE (state, safe_error_code, actual_cost_usd, cost_status);
 ~~~
 
-The completed-operation check is intentionally explicit: a successful Generate,
-Compact, or Query settles to either **exact** or **unknown** cost. Exact requires
+The completed-operation check is intentionally explicit: a successful Generate
+or Compact settles to either **exact** or **unknown** cost. Exact requires
 a decimal USD amount and method. Unknown requires a safe reason and a NULL
 amount/method; it is never rewritten to zero or to the reservation. A
 provider-reported price is used when trustworthy; otherwise exact catalog
@@ -728,6 +808,22 @@ generic trigger creates extra writes. State transitions use a compare-and-set
 predicate on current state and lease owner. **operation_attempts** preserves
 each route/fallback cost and classified outcome instead of overwriting the
 operation with only its last attempt.
+
+`retention_expires_at` is not an execution deadline. It is NULL for every live
+state and for **ambiguous**, so crossing a caller timeout never makes a pending
+provider job replayable or reclaimable. Lease/poll recovery continues until a
+classified transition. Terminal completion/failure/cancellation sets the
+retention timestamp. Ambiguous work retains its budget bound and row without an
+automatic expiry until an operator or trusted billing reconciliation resolves
+it; that resolution then sets the normal terminal retention timestamp.
+
+The request and result manifests contain schema versions, settings/content
+digests, and encrypted-object references only. Payloads below a strict operator
+cap may use the inline ciphertext columns; larger payloads use **blobs**. Both
+forms use per-scope envelope encryption and authenticated context binding the
+scope, operation, payload kind, and digest. The database never contains raw
+prompt/output bytes in JSONB or plaintext bytea, while small calls avoid a
+mandatory object-store round trip.
 
 ### Immutable checkpoints and provider state
 
@@ -815,7 +911,7 @@ CREATE TABLE llm_worker.checkpoint_provider_affinities (
     region text NOT NULL,
     endpoint_family text NOT NULL,
     model_lineage text NOT NULL,
-    model_equivalence_id text NOT NULL,
+    route_model_revision text NOT NULL,
     provider_cache_key_hmac bytea CHECK (
         provider_cache_key_hmac IS NULL OR
         octet_length(provider_cache_key_hmac) = 32
@@ -874,7 +970,7 @@ CREATE INDEX checkpoint_provider_state_route_idx
 CREATE INDEX checkpoint_affinity_route_idx
     ON llm_worker.checkpoint_provider_affinities
         (checkpoint_id, hard_pinned DESC, affinity_rank)
-    INCLUDE (route_id, endpoint_id, model_equivalence_id, expires_at);
+    INCLUDE (route_id, endpoint_id, route_model_revision, expires_at);
 
 ALTER TABLE llm_worker.operations
     ADD CONSTRAINT operations_parent_checkpoint_fk
@@ -893,70 +989,24 @@ The runtime role receives SELECT and INSERT on checkpoint tables but no UPDATE
 or DELETE. Retention uses a separate maintenance role and procedures. This
 database permission makes immutability stronger than a repository convention.
 
-### Certified model equivalence
+### Route-isolated cache identity
 
-Cross-provider exact-cache reuse depends on an explicit model artifact and
-semantic equivalence catalog:
+The first cache phase does not share entries across providers or routes. Public
+provider documentation does not reliably expose weights revision, quantization,
+chat template, or hidden safety-transform identity, so a database certification
+catalog would create ceremony without evidence. The cache key includes a keyed
+route identity derived from configuration digest, provider, endpoint/account,
+region, resolved model/revision, and compiler profile. An OpenAI, Azure OpenAI,
+OpenRouter, or third-party route therefore remains isolated even when their
+display model names match.
 
-~~~sql
-CREATE TABLE llm_worker.model_equivalence_classes (
-    model_equivalence_id text PRIMARY KEY,
-    status text NOT NULL CHECK (status IN ('certified', 'isolated', 'retired')),
-    model_artifact_revision text NOT NULL,
-    weights_revision text NOT NULL,
-    quantization_profile text NOT NULL,
-    tokenizer_revision text NOT NULL,
-    prompt_template_revision text NOT NULL,
-    safety_profile_revision text NOT NULL,
-    semantic_profile_version text NOT NULL,
-    compiler_epoch text NOT NULL,
-    evidence_digest bytea NOT NULL CHECK (octet_length(evidence_digest) = 32),
-    certified_at timestamptz NOT NULL,
-    retired_at timestamptz
-);
-
-CREATE TABLE llm_worker.model_equivalence_members (
-    model_equivalence_id text NOT NULL
-        REFERENCES llm_worker.model_equivalence_classes(model_equivalence_id)
-        ON DELETE RESTRICT,
-    config_digest bytea NOT NULL
-        REFERENCES llm_worker.configuration_snapshots(config_digest)
-        ON DELETE RESTRICT,
-    route_id text NOT NULL,
-    provider text NOT NULL,
-    endpoint_id text NOT NULL,
-    endpoint_family text NOT NULL,
-    resolved_model text NOT NULL,
-    provider_revision text NOT NULL,
-    verified_semantic_lowering boolean NOT NULL,
-    enabled boolean NOT NULL,
-    PRIMARY KEY (model_equivalence_id, config_digest, route_id),
-    UNIQUE (config_digest, route_id)
-);
-
-CREATE INDEX model_equivalence_member_lookup_idx
-    ON llm_worker.model_equivalence_members
-        (config_digest, resolved_model, enabled, route_id)
-    INCLUDE (
-        model_equivalence_id,
-        endpoint_id,
-        endpoint_family,
-        verified_semantic_lowering
-    );
-~~~
-
-Provider, route, account, and region are provenance, not cache-key inputs, when
-members share a **certified** model-equivalence class and the semantic compiler
-profile is equal. This permits one GPT model artifact to share exact responses
-across OpenAI, Azure OpenAI, and an OpenRouter pass-through route.
-
-Never infer equivalence from a model display name. A third-party open-source
-route joins a shared class only when weights revision, quantization, tokenizer,
-chat template, hidden prompt/safety transforms, and compiler semantics are
-known equal. Unknown quantization or undisclosed transformations get an
-**isolated** class unique to that route. Operators can later certify and merge
-classes through a new catalog version; existing entries are not silently
-re-keyed.
+Cross-provider reuse remains a deliberate future optimization because a caller
+may know that two endpoints host the same artifact. It is not implemented until
+at least one concrete pair has independently verifiable artifact and lowering
+evidence. A superseding ADR must define that evidence, negative quantization and
+hidden-transform tests, invalidation, schema/index changes, and a new cache
+epoch. Existing entries are never silently re-keyed. This deferral preserves the
+requested extension point without encouraging operators to certify on guesswork.
 
 ### Exact-response cache
 
@@ -973,12 +1023,12 @@ CREATE TABLE llm_worker.response_cache_entries (
     canonical_request_jsonb jsonb NOT NULL
         CHECK (jsonb_typeof(canonical_request_jsonb) = 'object'),
     variant integer NOT NULL CHECK (variant >= 0),
-    model_equivalence_id text NOT NULL
-        REFERENCES llm_worker.model_equivalence_classes(model_equivalence_id)
-        ON DELETE RESTRICT,
+    cache_route_identity_hmac bytea NOT NULL
+        CHECK (octet_length(cache_route_identity_hmac) = 32),
     semantic_profile_version text NOT NULL,
     cache_epoch text NOT NULL,
-    response_inline bytea,
+    response_inline_ciphertext bytea,
+    response_key_id text,
     response_blob_id uuid
         REFERENCES llm_worker.blobs(blob_id) ON DELETE RESTRICT,
     response_digest bytea NOT NULL CHECK (octet_length(response_digest) = 32),
@@ -997,19 +1047,25 @@ CREATE TABLE llm_worker.response_cache_entries (
         CHECK (use_count BETWEEN 1 AND 2147483647),
     state text NOT NULL DEFAULT 'ready'
         CHECK (state IN ('ready', 'tombstoned')),
-    UNIQUE (
-        scope_id,
-        fingerprint_version,
-        semantic_fingerprint_hmac,
-        variant
+    CHECK (
+        (response_inline_ciphertext IS NOT NULL)::integer +
+        (response_blob_id IS NOT NULL)::integer = 1
     ),
     CHECK (
-        (response_inline IS NOT NULL)::integer +
-        (response_blob_id IS NOT NULL)::integer = 1
+        response_inline_ciphertext IS NULL = (response_key_id IS NULL)
     ),
     CHECK (completed_at >= created_at),
     CHECK (last_used_at >= completed_at)
 );
+
+CREATE UNIQUE INDEX response_cache_reusable_key_uidx
+    ON llm_worker.response_cache_entries (
+        scope_id,
+        fingerprint_version,
+        semantic_fingerprint_hmac,
+        variant
+    )
+    WHERE state = 'ready';
 
 CREATE TABLE llm_worker.response_cache_uses (
     cache_entry_id uuid NOT NULL
@@ -1049,9 +1105,9 @@ CREATE INDEX response_cache_gc_idx
     ON llm_worker.response_cache_entries (last_used_at, cache_entry_id)
     WHERE state = 'ready';
 
-CREATE INDEX response_cache_model_invalidation_idx
+CREATE INDEX response_cache_route_invalidation_idx
     ON llm_worker.response_cache_entries
-        (model_equivalence_id, completed_at DESC, cache_entry_id)
+        (cache_route_identity_hmac, completed_at DESC, cache_entry_id)
     WHERE state = 'ready';
 
 CREATE INDEX response_cache_origin_checkpoint_idx
@@ -1098,10 +1154,10 @@ cache table column.
 
 The semantic fingerprint includes an explicit Generate-versus-Compact domain
 separator. It excludes provider/endpoint/account/region, requested
-service class/fallbacks, operation identity, maximum cache age, price/FX
+service class/fallbacks, operation identity, maximum cache age, price
 versions, health, deadlines, budgets, tracing, timestamps, and actor-only tags.
 It includes conversation content, every output-affecting setting/extension,
-model-equivalence identity, semantic/compiler/cache epochs, required opaque
+route-cache identity, semantic/compiler/cache epochs, required opaque
 state identity, and compaction versions/artifact identity. The database key adds
 variant as its own int32 column, and Compact permits only variant zero. A
 supposedly neutral provider extension may be excluded only when its catalog
@@ -1114,18 +1170,23 @@ worker verifies **canonical_request_digest** and the canonical manifest before
 reuse so a canonicalizer/version defect fails closed rather than serving the
 wrong response.
 
-The operation **request_jsonb** is the complete normalized request for its
-Generate, Compact, or Query Activity. For Generate it includes scope, parent
-handle, delta, sparse patch, and cache policy. Its size is already
-bounded by the Activity contract and large parts are BlobRefs. The cache
+The operation **request_manifest_jsonb** is a content-free normalized manifest
+for its Generate or Compact Activity. It includes scope digests, parent-handle
+digest, payload references, sparse-patch digest, and cache policy; the actual
+delta/patch is envelope-encrypted inline or stored as an encrypted blob. The cache
 **canonical_request_jsonb** is a materialized Generate-or-Compact cache-key
 manifest: operation-kind domain, semantic settings and ordered content
-references/digests, model-equivalence identity, compiler/compaction epochs, and
+references/digests, route-cache identity, compiler/compaction epochs, and
 variant. It does not duplicate ancestor blob
 bytes or the full transcript. The JSONB rows support audit, safe debugging, and
 hash verification; all equality and freshness lookups use fixed-size columns.
 Application canonical bytes, not PostgreSQL's JSONB text serialization, are
 hashed.
+
+An inline cached response is envelope-encrypted and authenticated to its scope,
+cache entry, response digest, and payload kind; `response_key_id` identifies
+the wrapping key. Larger responses reference an encrypted blob. Cache rows
+never retain a plaintext model output merely because it is small.
 
 On a hit, this statement pattern increments usage exactly once per logical
 operation and saturates instead of overflowing:
@@ -1141,7 +1202,10 @@ WITH inserted AS (
 )
 UPDATE llm_worker.response_cache_entries
 SET last_used_at = clock_timestamp(),
-    use_count = LEAST(2147483647, use_count + 1)
+    use_count = CASE
+        WHEN use_count < 2147483647 THEN use_count + 1
+        ELSE 2147483647
+    END
 WHERE cache_entry_id = $1
   AND EXISTS (SELECT 1 FROM inserted);
 ~~~
@@ -1150,6 +1214,16 @@ The origin operation inserts both the entry with **use_count = 1** and its use
 row in the same transaction. A Temporal retry cannot increment again because
 **operation_id** is unique in uses. **last_used_at** changes only on a newly
 inserted logical use, not on polling or replay of the same operation.
+
+Cleanup first changes a ready entry to **tombstoned** and commits the outbox
+intent. The partial unique index then permits a new ready entry for the same
+fingerprint without rewriting the old origin/use provenance. Fill publication
+still serializes on **response_cache_fills** and tombstones any reusable
+predecessor before inserting the replacement in one transaction; physical blob
+deletion remains asynchronous. Fill acquisition locks the existing key row and,
+only when it is terminal and no reusable ready entry exists, replaces its owner,
+lease, and state in place. The fill row is the reusable per-key mutex; a prior
+`completed` row therefore cannot block a later refill.
 
 ### Budgets and reservations
 
@@ -1498,28 +1572,22 @@ cost and reservation state in the same PostgreSQL transaction, and only then
 idempotently reconciles Redis. Until that succeeds, the larger retained bound
 continues to protect admission.
 
-### USD prices and worker-owned FX
+### USD prices and deferred FX boundary
 
 The current generic catalog **currency** field and external runtime currency
-input are removed. All price columns are USD-specific by name and type. The Go
-worker owns price loading, any future FX retrieval, validation, conversion,
-versioning, and refresh. Downstream Go/JSON/OCaml contracts expose USD decimal
-properties and never report **currency = USD**.
+input are removed. All price columns are USD-specific by name and type.
+Downstream Go/JSON/OCaml contracts expose USD decimal properties and never
+report **currency = USD**.
 
-Providers are currently priced in USD, so price rows normally have no FX
-reference. If a provider later publishes a non-USD price, the Go worker:
-
-1. obtains an allow-listed rate from its configured FX adapter;
-2. validates source, observation time, target USD, age, and decimal bounds;
-3. stores the internal rate snapshot;
-4. converts with exact rational/decimal arithmetic and conservative budget
-   rounding;
-5. persists only normalized USD unit prices plus rate/source digests; and
-6. fails closed when a current trustworthy rate is unavailable.
-
-The source foreign price is not persisted as an operation price and is never
-returned. An FX snapshot is internal audit evidence, not a downstream currency
-choice.
+All currently supported provider catalogs are USD, so this phase has no FX
+adapter, rate-refresh policy, snapshot table, configuration, or maintenance
+job. A non-USD provider price is classified as unknown and cannot support
+catalog-derived actual cost or monetary admission unless the explicit unpriced
+policy allows it. When a concrete non-USD provider is added, a separate ADR
+must design the Go-owned rate source, staleness/failure policy, exact conversion,
+audit evidence, and schema against that real provider contract. The Go worker
+will remain responsible for conversion and will persist/report only normalized
+USD; foreign amounts and a downstream currency discriminator remain forbidden.
 
 Catalog component amounts are nullable because a provider's real price can be
 unknown or only partly verified. **price_status=exact** means every normalized
@@ -1539,29 +1607,6 @@ provider-reported cost; otherwise it completes with NULL actual cost and an
 unknown reason while retaining its conservative budget bound where one exists.
 
 ~~~sql
-CREATE TABLE llm_worker.fx_rate_snapshots (
-    fx_rate_snapshot_id uuid PRIMARY KEY,
-    source_currency_code character(3) NOT NULL,
-    usd_per_source_unit numeric(38,18) NOT NULL
-        CHECK (usd_per_source_unit > 0),
-    source_id text NOT NULL,
-    source_observation_id_hmac bytea NOT NULL
-        CHECK (octet_length(source_observation_id_hmac) = 32),
-    source_digest bytea NOT NULL CHECK (octet_length(source_digest) = 32),
-    observed_at timestamptz NOT NULL,
-    valid_from timestamptz NOT NULL,
-    valid_until timestamptz NOT NULL,
-    fetched_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    status text NOT NULL CHECK (status IN ('active', 'superseded', 'rejected')),
-    CHECK (source_currency_code ~ '^[A-Z]{3}$'),
-    CHECK (valid_until > valid_from),
-    UNIQUE (
-        source_id,
-        source_currency_code,
-        source_observation_id_hmac
-    )
-);
-
 CREATE TABLE llm_worker.price_catalogs (
     price_catalog_id uuid PRIMARY KEY,
     catalog_version text NOT NULL UNIQUE,
@@ -1625,9 +1670,6 @@ CREATE TABLE llm_worker.price_entries (
         price_unknown_reason_code IS NULL OR
         price_unknown_reason_code ~ '^[a-z0-9_]{1,64}$'
     ),
-    fx_rate_snapshot_id uuid
-        REFERENCES llm_worker.fx_rate_snapshots(fx_rate_snapshot_id)
-        ON DELETE RESTRICT,
     source_price_digest bytea NOT NULL CHECK (octet_length(source_price_digest) = 32),
     effective_from timestamptz NOT NULL,
     effective_until timestamptz,
@@ -1679,12 +1721,6 @@ CREATE TABLE llm_worker.price_entries (
     )
 );
 
-CREATE INDEX fx_rates_active_lookup_idx
-    ON llm_worker.fx_rate_snapshots
-        (source_currency_code, valid_from DESC, fx_rate_snapshot_id)
-    INCLUDE (usd_per_source_unit, valid_until, source_id)
-    WHERE status = 'active';
-
 CREATE INDEX price_entries_resolution_idx
     ON llm_worker.price_entries (
         endpoint_id,
@@ -1704,13 +1740,8 @@ CREATE INDEX price_entries_resolution_idx
         cache_write_per_million_usd,
         reasoning_per_million_usd,
         per_request_usd,
-        price_catalog_id,
-        fx_rate_snapshot_id
+        price_catalog_id
     );
-
-CREATE INDEX price_entries_fx_idx
-    ON llm_worker.price_entries (fx_rate_snapshot_id)
-    WHERE fx_rate_snapshot_id IS NOT NULL;
 
 CREATE INDEX price_entries_unresolved_idx
     ON llm_worker.price_entries
@@ -1724,15 +1755,6 @@ CREATE INDEX price_entries_unresolved_idx
     )
     WHERE price_status IN ('partial', 'unknown');
 
-ALTER TABLE llm_worker.operations
-    ADD CONSTRAINT operations_fx_snapshot_fk
-    FOREIGN KEY (fx_rate_snapshot_id)
-    REFERENCES llm_worker.fx_rate_snapshots(fx_rate_snapshot_id)
-    ON DELETE RESTRICT;
-
-CREATE INDEX operations_fx_snapshot_idx
-    ON llm_worker.operations (fx_rate_snapshot_id)
-    WHERE fx_rate_snapshot_id IS NOT NULL;
 ~~~
 
 The public schema names amounts **reserved_cost_usd** and
@@ -1741,7 +1763,7 @@ The public schema names amounts **reserved_cost_usd** and
 unknown-cost constructor, never to zero and never to **float** or a
 currency-tagged record. The current v1 **currency** response field and
 configuration **pricing.currency** are removed during the breaking contract
-initial-release change; one-shot OCaml helpers are rebuilt on the v1
+replacement in Phase A; one-shot OCaml helpers are rebuilt on the v1
 root-request path.
 
 ### Provider status, credit state, and inventory
@@ -1954,8 +1976,7 @@ CREATE TABLE llm_worker.maintenance_outbox (
         event_kind IN (
             'delete_blob',
             'delete_provider_state',
-            'refresh_inventory',
-            'refresh_fx'
+            'refresh_inventory'
         )
     ),
     aggregate_type text NOT NULL,
@@ -2005,13 +2026,94 @@ in the initial DDL.
 ## Query Activity contract
 
 The Activity name is **llm.query.v1**. Request and response are tagged unions,
-not an untyped envelope. Each query is scoped/authorized, bounded, and recorded
-as an operation with **actual_cost_usd**. A stored-state query normally records
+not an untyped envelope. Queries do not use the paid LLM operation state machine
+or external result blobs. Each query is scoped/authorized, bounded, and recorded
+in a dedicated inline audit ledger with **actual_cost_usd**. A stored-state query normally records
 **0.000000000000000000**, **cost_status=exact**, and
 **control_query_zero**. If a future management API is billable but the worker
 cannot establish its real charge, the query still completes with
 **actual_cost_usd=NULL**, **cost_status=unknown**, and a safe reason; it must not
 report the estimate or reservation as actual.
+
+~~~sql
+CREATE TABLE llm_worker.query_executions (
+    query_execution_id uuid PRIMARY KEY,
+    scope_id uuid NOT NULL
+        REFERENCES llm_worker.scopes(scope_id) ON DELETE RESTRICT,
+    api_version text NOT NULL,
+    operation_key_hmac bytea NOT NULL
+        CHECK (octet_length(operation_key_hmac) = 32),
+    request_fingerprint_hmac bytea NOT NULL
+        CHECK (octet_length(request_fingerprint_hmac) = 32),
+    query_kind text NOT NULL CHECK (
+        query_kind IN (
+            'provider_status', 'model_inventory', 'credit_status',
+            'budget_status', 'spend_summary'
+        )
+    ),
+    request_jsonb jsonb NOT NULL
+        CHECK (jsonb_typeof(request_jsonb) = 'object'),
+    response_jsonb jsonb NOT NULL
+        CHECK (jsonb_typeof(response_jsonb) = 'object'),
+    response_digest bytea NOT NULL CHECK (octet_length(response_digest) = 32),
+    source text NOT NULL,
+    actual_cost_usd numeric(38,18)
+        CHECK (actual_cost_usd IS NULL OR actual_cost_usd >= 0),
+    cost_status text NOT NULL CHECK (cost_status IN ('exact', 'unknown')),
+    cost_method text CHECK (
+        cost_method IS NULL OR
+        cost_method IN (
+            'control_query_zero', 'provider_reported', 'catalog_usage'
+        )
+    ),
+    cost_unknown_reason_code text CHECK (
+        cost_unknown_reason_code IS NULL OR
+        cost_unknown_reason_code ~ '^[a-z0-9_]{1,64}$'
+    ),
+    started_at timestamptz NOT NULL,
+    completed_at timestamptz NOT NULL,
+    retention_expires_at timestamptz NOT NULL,
+    UNIQUE (scope_id, operation_key_hmac),
+    CHECK (completed_at >= started_at),
+    CHECK (
+        (cost_status = 'exact' AND actual_cost_usd IS NOT NULL AND
+            cost_method IS NOT NULL AND cost_unknown_reason_code IS NULL) OR
+        (cost_status = 'unknown' AND actual_cost_usd IS NULL AND
+            cost_method IS NULL AND cost_unknown_reason_code IS NOT NULL)
+    ),
+    CHECK (cost_method <> 'control_query_zero' OR actual_cost_usd = 0)
+);
+
+CREATE INDEX query_executions_scope_time_idx
+    ON llm_worker.query_executions
+        (scope_id, completed_at DESC, query_execution_id)
+    INCLUDE (query_kind, actual_cost_usd, cost_status, source);
+
+CREATE INDEX query_executions_retention_idx
+    ON llm_worker.query_executions
+        (retention_expires_at, query_execution_id);
+
+CREATE INDEX query_executions_unknown_cost_idx
+    ON llm_worker.query_executions
+        (scope_id, completed_at DESC, query_execution_id)
+    INCLUDE (query_kind, cost_unknown_reason_code)
+    WHERE cost_status = 'unknown';
+~~~
+
+The request and response JSON are bounded control data; they cannot contain
+prompt, tool, model-output, credential, or raw provider-error content. An
+operation-key replay returns the recorded response after matching the request
+fingerprint. `budget_status` reads its live values from Redis and performs no
+PostgreSQL budget SELECT, but it commits this small PostgreSQL INSERT before the
+Activity completes because the product requirement is that every completed
+query records its exact-or-unknown charge. PostgreSQL unavailability therefore
+makes the Activity retry; it does not move the budget calculation to SQL or put
+the blob store on the query path.
+
+`query_execution_id` is deliberately distinct from the paid inference
+`operation_id`. Historical spend aggregation unions completed Generate/Compact
+costs with this ledger and may expose `Query` as an aggregation kind without
+pretending Query rows use the inference operation state machine.
 
 Common request fields are:
 
@@ -2041,7 +2143,7 @@ The response repeats **kind** and uses exactly one associated result:
 {
   "api_version": "llm.temporal/query/v1",
   "operation_key": "daily-provider-status-2026-07-18",
-  "operation_id": "op_01J...",
+  "query_execution_id": "qry_01J...",
   "kind": "provider_status",
   "observed_at": "2026-07-18T03:14:15.926535Z",
   "source": "persisted_and_refreshed",
@@ -2077,7 +2179,7 @@ Supported tag/result pairs are:
 | **provider_status** | provider, endpoint, availability, include healthy, freshness | page of typed route-status rows |
 | **model_inventory** | provider, endpoint, model prefix, lifecycle, freshness | page of typed model rows plus inventory support/completeness |
 | **credit_status** | provider, endpoint, include ok, freshness | page of typed credit/billing rows and confirmed-at evidence |
-| **budget_status** | policy key, current instant within Redis coverage, include windows | Redis-only matching policies/windows with exact limit, reserved, accounted charge, available USD, generation ID, and Stream high-water mark |
+| **budget_status** | policy key, current instant within Redis coverage, include windows | Redis-only matching policies/windows with conservative nano-USD-derived limit, reserved, accounted charge, available USD, generation ID, and Stream high-water mark |
 | **spend_summary** | half-open UTC interval, group-by dimensions, operation kinds | typed buckets with known actual-cost USD, exact/unknown operation counts, and completeness |
 
 The common response has **observed_at**, **source**, **freshness**, **complete**,
@@ -2101,11 +2203,12 @@ manifest digest, and Stream high-water mark so callers can compare pages from
 one snapshot. `spend_summary` reads completed operation/cost rows in PostgreSQL;
 it does not read budget policy/window/bucket/reservation/journal rows.
 
-Spend aggregation filters **operations.state = 'completed'** and sums only rows
-with **cost_status=exact**. It returns **known_actual_cost_usd** plus exact and
-unknown operation counts; any unknown row makes the bucket's cost completeness
-**partial**. SQL must not **COALESCE(actual_cost_usd, 0)**. Cache hits and free
-queries remain visible exact-zero operations rather than absent records.
+Spend aggregation combines completed **operations** with **query_executions**
+and sums only rows with **cost_status=exact**. It returns
+**known_actual_cost_usd** plus exact and unknown counts by kind; any unknown row
+makes the bucket's cost completeness **partial**. SQL must not
+**COALESCE(actual_cost_usd, 0)**. Cache hits remain exact-zero operations and
+free queries remain exact-zero query executions rather than absent records.
 Half-open intervals and database UTC time prevent boundary double counting.
 
 ## Transaction protocols
@@ -2115,7 +2218,8 @@ Half-open intervals and database UTC time prevent boundary double counting.
 1. Derive tenant/project HMACs and upsert scope.
 2. Insert operation using the unique scoped key.
 3. On conflict, lock the existing row and compare kind, API version,
-   request-fingerprint HMAC, schema version, and canonical request JSONB.
+   request-fingerprint HMAC, schema version, content-free request manifest, and
+   encrypted payload digest/reference.
 4. Return stored result for **completed**; resume **provider_pending** by poll
    ID; resume only a provably pre-write expired lease; return typed conflict or
    ambiguous state for every unsafe case.
@@ -2126,8 +2230,8 @@ Half-open intervals and database UTC time prevent boundary double counting.
 
 1. After operation replay/cache checks and route pricing, invoke the versioned
    Redis Function once for all matching monetary windows and operational
-   throttles. The Function is the only active-window read and reservation
-   authority.
+   throttles. The Function is the only active-window read and decision
+   serializer over the validated Redis materialization.
 2. On acceptance, insert the operation/reservation journal events and update
    PostgreSQL bucket/reservation projections through the insert-guarded CTE.
    Do not select budget state before or after the write.
@@ -2142,11 +2246,12 @@ Half-open intervals and database UTC time prevent boundary double counting.
 
 ### Exact cache lookup and fill
 
-1. Plan authorized model-equivalence classes from the configuration snapshot.
+1. Plan authorized route-cache identities from the configuration snapshot.
    Provider health and budget do not block reuse of an otherwise authorized
    cached result.
-2. Build one fingerprint per distinct equivalence class in deterministic route
-   order. Unknown/isolated quantizations remain separate.
+2. Build one fingerprint per eligible route identity in deterministic route
+   order. Providers/endpoints/accounts/regions and model revisions remain
+   isolated in this phase.
 3. Lock a ready entry and compare **completed_at** with one database timestamp
    minus caller **max_age**.
 4. On a hit, insert use, saturating-update last use/count, create the
@@ -2161,10 +2266,10 @@ Half-open intervals and database UTC time prevent boundary double counting.
    origin use, exact-or-unknown cost state, releases the fill, and completes the
    operation.
 
-The cache may serve an entry produced on a different provider only through a
-currently authorized certified model-equivalence class. Response provenance
-reports **served_by = worker_cache** and the origin model/route; it never
-pretends a current provider was invoked.
+The initial cache never serves an entry across route identities. Response
+provenance reports **served_by = worker_cache** and the origin model/route; it
+never pretends a current provider was invoked. Cross-provider reuse requires a
+future superseding ADR and cache epoch.
 
 ### Resumable provider submission
 
@@ -2185,7 +2290,7 @@ for provider IDs, poll count, status, and cost.
 
 ### Completion and cache-use accounting
 
-Operation, attempt, budget journal/projection, result blob reference,
+Operation, attempt, budget journal/projection, encrypted inline/blob result,
 checkpoint, cache use/fill, provider status event/projection, and
 exact-or-unknown USD cost status finalize in one serializable or explicitly
 locked PostgreSQL transaction. Redis budget reconciliation follows that commit
@@ -2298,55 +2403,60 @@ emergency maintenance step.
 - Metrics/traces contain safe IDs and durations, never SQL parameters with
   tenant/content/provider IDs.
 
-## Pre-release schema initialization sequence
+## Staged schema initialization sequence
 
-This sequence moves durable journaling/conversation/cache/control state to
-PostgreSQL while retaining Redis for its low-latency active-budget/throttling
-role:
+This sequence implements the phases in [scope](../scope.md#staged-delivery-and-document-authority)
+without treating every optional subsystem as one release gate:
 
 1. Freeze the accepted DDL in schema-installer and schema-contract fixtures.
 2. Provision the configured worker database/schema/prefix and roles, then apply
    the clean initial schema in an ephemeral environment.
 3. Implement exact decimal USD and remove public/config currency plus integer
    microUSD assumptions from the authoritative store.
-4. Add PostgreSQL repositories for configuration, blobs, operations/attempts,
-   the write-only budget journal/projections, continuations, prices, and
-   results. Add exact Redis active-budget/generation/Stream conformance rather
-   than treating the backends as interchangeable stores.
-5. Add checkpoints, cache, model equivalence, provider status/inventory, FX,
-   and outbox repositories.
-6. Run repository conformance tests from newly constructed fixtures; do not
+4. Phase A adds PostgreSQL repositories for configuration, encrypted payloads,
+   operations/attempts, continuations, USD prices, results, checkpoints, forks,
+   and resumable polling.
+5. Phase B adds compaction, the write-only exact budget journal/projections,
+   conservative nano-USD Redis generation/Stream conformance, prompt-cache
+   affinity, and the operator recovery runbook.
+6. Phase C adds the route-isolated exact-response cache only after its named
+   staging/incident-reproduction caller and measurements are recorded.
+7. Phase D adds provider status/inventory, dedicated query audit, and outbox
+   repositories. Cross-provider cache equivalence and FX remain future ADRs.
+8. Run repository conformance tests from newly constructed fixtures; do not
    import or copy Redis data.
-7. Switch the pre-release engine so PostgreSQL owns durable replay/journal/
+9. Switch each phase only after its focused gates pass so PostgreSQL owns the
+   newly introduced durable replay/journal/
    accounting/conversation/cache/control state and Redis owns active budgets
    and throttles. Readiness requires both dependencies for new paid dispatches.
-8. Remove only the superseded Redis durable-operation, continuation, and result
-   representations. Replace the old microUSD budget Function with the exact
+10. Remove only the superseded Redis durable-operation, continuation, and result
+   representations. Replace the old microUSD budget Function with the conservative nano-USD
    generation/Stream Function. Keep Redis client, budget/throttle Functions,
    configured prefix, deployment, health checks, and focused persistence tests.
-9. Run cross-store crash-boundary tests at every Redis-reserve, PostgreSQL-
+11. Run cross-store crash-boundary tests at every Redis-reserve, PostgreSQL-
    journal-write, dispatch, finalize, and Redis-reconcile boundary, plus concurrent
    budget/cache/fork, query-plan, retention, and restore tests with at least two
    worker replicas.
-10. Record clean-namespace initialization evidence. Before the first release,
+12. Record clean-namespace initialization evidence. Before the first release,
     rollback means rebuilding the disposable test environment from the earlier
     application revision, not preserving or translating stored data.
 
-Because there is no released dataset, this change has no data migration,
-backfill, compatibility, or dual-read period. The sequence still isolates
-schema installation, repository composition, and Redis responsibility-split
-commits so a cheaper implementation agent can test and review each boundary.
-Redis remains in production after the split. Any
-post-release schema or namespace move gets a new design based on the deployed
-version and real data at that time.
+Because there is no released dataset, implementation initializes clean
+namespaces and does not add compatibility/data-movement work for these phases.
+The sequence still isolates schema installation, repository composition, and
+Redis responsibility-split commits so a cheaper implementation agent can test
+and review each boundary. Redis remains in production after the split. After a
+release, any incompatible schema or namespace change gets a separate design
+based on the deployed version and real data at that time.
 
 ## Database acceptance gates
 
 - Exact decimal arithmetic round-trips values with 18 fractional digits through
   PostgreSQL, Go, JSON, and OCaml without float conversion.
-- Operation requests and cache manifests are retained as bounded JSONB, while
-  indexed lookup uses HMAC-SHA-256 fingerprints and never a JSONB scan.
-- Every completed operation, including every Query and cache hit, has a valid
+- Operation/cache JSONB contains only bounded content-free manifests; raw
+  payloads use authenticated envelope-encrypted inline bytes or encrypted blobs.
+  Indexed lookup uses HMAC-SHA-256 and never a JSONB scan.
+- Every completed Generate/Compact operation, cache hit, and query execution has a valid
   exact-or-unknown cost state. Exact has non-null **actual_cost_usd** and a
   method; unknown has NULL amount/method and a safe reason. Cache hits and local
   queries are exact zero.
@@ -2357,32 +2467,37 @@ version and real data at that time.
 - All foreign keys have a named supporting index or a documented parent-side
   access path.
 - Concurrent operation-key reuse produces one operation or a digest conflict.
-- Concurrent identical cache misses produce one provider submission.
-- A Temporal retry increments cache **use_count** at most once.
+- Phase C concurrent identical cache misses produce one provider submission.
+- A Temporal retry increments cache **use_count** at most once; max-int
+  saturation does not overflow, and a tombstone cannot block a replacement
+  ready entry with the same fingerprint.
 - An old entry used yesterday survives a 180-day unused-entry sweep.
 - A worker restart polls a persisted provider operation ID without submission.
-- Redis budget admission never exceeds any window under concurrent Functions;
-  fixed-width decimal strings remain exact through all mutations.
+- Redis budget admission never exceeds any exact window under concurrent
+  Functions; conservative nano-USD rounding, identity-keyed subtraction, and
+  rebuild conversion are deterministic and never under-throttle.
 - The steady-state budget hot path performs zero PostgreSQL budget SELECTs;
   statement instrumentation proves only insert/update journal/projection writes.
 - Joining/restarting one worker and recovering a Redis Stream gap read budget
-  state only from Redis. PostgreSQL budget reads occur only for a proven
-  zero-live-worker cold bootstrap or verified new Redis incarnation whose
-  required generation did not persist.
+  state only from Redis. A zero-live-worker cold start adopts an intact
+  same-incarnation generation before considering a PostgreSQL rebuild. The
+  exact exceptional read proof follows the normative section above.
 - An allowed cold/new-incarnation bootstrap reconstructs one verified generation from the PostgreSQL
   active horizon/journal tail and fences concurrent journal writers at the
   final high-water mark; unexplained same-incarnation partial Redis loss neither
   admits work nor reads PostgreSQL.
-- One bounded sizing test drives up to 100 new logical LLM requests per second
-  through the atomic budget path, and a separate large Temporal batch drains
-  safely under configured concurrency. This is deliberately above expected
-  normal throughput; neither test adds or asserts a runtime 100-RPS limit or
-  requires headroom beyond that envelope.
+- Bounded sizing and queued-batch tests implement the normative workload
+  envelope above without turning it into a runtime limit.
 - Credit exhaustion is not inferred from an unclassified 429.
-- Certified cross-provider model routes share a cache entry; unknown
-  quantization does not.
+- Phase C cache entries never cross route identities; a future equivalence ADR
+  has no acceptance gate in these phases.
 - Checkpoint tables reject runtime UPDATE and retention cannot delete a needed
   ancestor/blob.
 - Named hot queries use the intended indexes at representative volume.
 - Backup restore plus blob integrity verification reconstructs completed replay
   and pending polling state.
+- Query executions use bounded inline JSON and never require an external result
+  blob; a budget query performs no PostgreSQL budget SELECT even though its
+  required audit INSERT must commit before Activity completion.
+- Same-incarnation corruption exercises the documented operator runbook and
+  never recommends an unfenced manual key mutation.

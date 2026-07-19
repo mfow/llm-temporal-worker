@@ -20,6 +20,13 @@ Implementation starts from the landed OCaml validation baseline, including PR
 109. Preserve those validation improvements and regenerate fixtures from the
 final Go contract.
 
+Delivery follows the shared phase order: the rebuilt Generate facade is Phase
+A, Compact and Redis budget materialization are Phase B, the opt-in exact cache
+is Phase C, and typed Query clients are Phase D. These are implementation
+checkpoints inside one unreleased API, not public protocol versions. See
+[scope](../scope.md#staged-delivery-and-document-authority) for the normative
+phase gates.
+
 ## Two public layers, one package
 
 The package has two conceptual layers:
@@ -65,7 +72,7 @@ module Query_cursor : sig
   val to_string : t -> string
 end
 
-module Model_equivalence_id : Identifier
+module Query_execution_id : Identifier
 module Budget_policy_key : Identifier
 module Budget_generation_id : Identifier
 
@@ -233,7 +240,7 @@ type query_result =
 
 type query_response = {
   operation_key : Operation_key.t;
-  operation_id : Operation_id.t;
+  query_execution_id : Query_execution_id.t;
   observed_at : Ptime.t;
   source : query_source;
   freshness : freshness;
@@ -372,6 +379,11 @@ type spend_summary = {
   buckets : spend_bucket list;
 }
 ~~~
+
+The `Query` member of `operation_kind` is a spend-reporting dimension across
+the dedicated query audit ledger; it does not imply that Query uses the paid
+inference operation state machine. Accordingly, Query responses expose
+`Query_execution_id.t`, while Generate and Compact expose `Operation_id.t`.
 
 `Safe_metadata.t` is the package's bounded, redacted open-metadata wrapper; it
 is not a general escape hatch for the surrounding records. Page bounds and
@@ -602,7 +614,7 @@ module Query : sig
 
   type 'a response = {
     value : 'a;
-    operation_id : Operation_id.t;
+    query_execution_id : Query_execution_id.t;
     observed_at : Ptime.t;
     source : query_source;
     freshness : freshness;
@@ -960,9 +972,11 @@ provider from Workflow code. A Go Activity retry sees **provider_pending** and
 continues polling the persisted provider ID.
 
 Every builder is pure. Current time, randomness, environment variables, model
-discovery, status refresh, FX retrieval, and cache selection occur in the Go
-Activity, not OCaml Workflow code. Callers supply stable operation keys and
-explicit variants. Decoding a response is deterministic for its payload.
+discovery, status refresh, and cache selection occur in the Go Activity, not
+OCaml Workflow code. Callers supply stable operation keys and explicit
+variants. Decoding a response is deterministic for its payload. A future
+non-USD provider would require the separately approved worker-owned FX design;
+no FX input or currency value is exposed to Workflow code now.
 
 ## Error surface
 
@@ -989,7 +1003,7 @@ fingerprint, or database value.
 1. Regenerate/freeze Generate v1, Compact v1, Query v1, and decimal JSON
    fixtures from
    Go before changing public OCaml types.
-2. Add nominal checkpoint/cursor/equivalence IDs and exact **Usd_decimal** with
+2. Add nominal checkpoint/cursor/query-execution IDs and exact **Usd_decimal** with
    property tests.
 3. Replace generic currency/microUSD response fields with USD decimal fields in
    protocol models, codecs, README, and fixtures.

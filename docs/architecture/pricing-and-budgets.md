@@ -1,14 +1,10 @@
 # Pricing and Budgets
 
-> This chapter first describes the current pre-release Redis implementation.
-> The accepted initial-release storage split keeps the complete active budget
-> working set and atomic admission in Redis while PostgreSQL stores the durable
-> budget journal and exact
-> **NUMERIC(38,18)** USD, removes downstream/config currency fields, and makes
-> the Go worker responsible for future FX retrieval and USD normalization.
-> Initial-release catalog prices and actual costs are nullable when genuinely unknown; zero
-> is reserved for a known zero charge. See
-> [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
+> Implementation status and phase authority are centralized in
+> [scope](../scope.md#staged-delivery-and-document-authority). This chapter
+> labels current behavior; the target storage split, budget-read rules, money
+> materialization, and workload envelope are normative only in the
+> [PostgreSQL/control-plane design](postgresql-state-cache-and-control-plane.md).
 
 ## Goals
 
@@ -87,7 +83,7 @@ Currency, method, and catalog version are empty, no monetary reservation is
 created, and a provider-reported amount is not promoted to an auditable cost
 without a current catalog quote. Metrics make the condition visible.
 
-The initial-release v1 replacement removes that zero sentinel. Unknown catalog components and actual costs are
+The Phase A contract replacement removes that zero sentinel. Unknown catalog components and actual costs are
 NULL with an explicit status/reason, while exact zero means known free. Known
 spend totals exclude NULLs and separately report unknown operation counts.
 
@@ -247,24 +243,24 @@ union windows, and either creates the next `reserved` attempt or terminally
 records denial. Complete performs the same matching reconciliation for the
 successful final attempt and releases reservations held only for unused routes.
 
-## Initial-release throttle and monetary-budget split
+## Target throttle and monetary-budget split
 
-The initial release does not retire Redis. It splits the current combined
+Target Phase B does not retire Redis. It splits the current combined
 `AdmissionStore` responsibility into two explicitly sequenced ports:
 
 - `BudgetStore` in Redis holds every bucket/reservation needed for the complete
-  active horizon and atomically enforces exact monetary windows alongside
+  active horizon and atomically enforces a conservative monetary materialization alongside
   request, token, and concurrency throttles.
-- `BudgetJournal` in PostgreSQL records each accepted reservation,
+- `BudgetJournal` in PostgreSQL is the system of record and records each accepted reservation,
   reconciliation, release, and exact/unknown actual cost before the associated
   provider side effect. It is the rebuild/audit source, not a steady-state
   budget-read path.
 
-Redis encodes each `NUMERIC(38,18)` amount as one fixed-width 38-digit unsigned
-integer string scaled by `10^18`. Its Function uses string comparison and
-checked digit-wise addition/subtraction; it never converts a full amount to a
-Lua number and never rounds. PostgreSQL, Go, JSON, and OCaml use the same exact
-value semantics.
+Redis uses checked safe-integer nano-USD derived without floating point: charges
+round up, limits round down, and transitions subtract the exact
+identity-keyed integer previously applied. PostgreSQL, Go, JSON, and OCaml keep
+exact `NUMERIC(38,18)` semantics. The Redis Stream provides optional
+cross-worker invalidation/wake-up coordination; it never authorizes a request.
 
 For new work the engine reserves Redis first, appends the PostgreSQL journal,
 then dispatches. PostgreSQL write failure triggers a best-effort Redis release; an
@@ -295,7 +291,7 @@ provider.
 | Mode | Use | Guarantee |
 | --- | --- | --- |
 | Memory | unit tests and explicitly single-process development | process-local only; restart loses state |
-| Redis plus PostgreSQL | production and multi-replica development | Redis owns live atomic budgets/throttles; PostgreSQL owns durable replay, budget journal, and cost facts |
+| Redis plus PostgreSQL | production and multi-replica development | PostgreSQL is the durable system of record; Redis is the live conservative decision/coordination materialization |
 
 Production Redis remains required and uses authentication/TLS, `noeviction`, AOF plus RDB, monitored
 persistence errors, and backups. `appendfsync always` provides the strongest
@@ -305,8 +301,8 @@ PostgreSQL failure causes new paid admission to fail closed.
 
 ## Conformance properties
 
-The current memory/Redis stores retain their existing conformance. The
-initial-release split adds exact Redis budget-state and PostgreSQL journal
+The current memory/Redis stores retain their existing conformance. The staged
+split adds conservative nano-USD Redis budget-state and PostgreSQL journal
 contracts plus end-to-end tests proving:
 
 - no accepted schedule exceeds a limit under concurrent Begin calls;

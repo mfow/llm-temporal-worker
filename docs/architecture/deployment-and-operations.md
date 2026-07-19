@@ -1,15 +1,11 @@
 # Deployment and Operations
 
-> This chapter describes the current pre-release deployment. The accepted
-> initial-release change keeps Redis as the required low-latency exact budget/
-> throttle engine and
-> adds worker-owned PostgreSQL for durable state, exact accounting, response
-> cache, and control-plane queries. PostgreSQL roles, initial schema
-> installation, backup/restore, and readiness checks are explicit. Both the
-> Redis prefix and PostgreSQL database/schema/relation prefix are configurable;
-> Temporal-owned relations remain out of scope. See
+> This chapter describes current deployment behavior. Target phase status and
+> authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
+> The PostgreSQL system-of-record/Redis coordination composition, recovery,
+> and namespace rules are defined in
 > [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md)
-> and its ordered storage composition.
+> rather than duplicated here.
 
 ## Process modes
 
@@ -93,7 +89,9 @@ The runtime's required state checks are bounded by the configured readiness
 timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
 configured AOF/RDB policy, and expose the exact configured budget Function
 library/version/digest plus a complete active budget generation/manifest and
-healthy change Stream. The default Function path is provisioned by deployment
+its optional coordination Stream when Stream tailing is enabled. A missing or
+gapped Stream invalidates local hints and increases direct Redis reads; it does
+not invalidate an otherwise complete generation or authorize work. The default Function path is provisioned by deployment
 automation before the worker starts; the runtime only verifies and calls it.
 The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. PostgreSQL must complete a
@@ -212,7 +210,7 @@ attempting to parse logs for configuration content.
 Money counters use microUSD integer semantics; exporters may expose them as
 floating-point observations only after the accounting decision.
 
-The accepted initial PostgreSQL change removes the two **micro_usd** metrics as
+The target Phase A PostgreSQL change removes the two **micro_usd** metrics as
 authoritative money. Prometheus floating-point samples cannot faithfully carry
 **NUMERIC(38,18)**. Exact totals come from the typed PostgreSQL query Activity;
 telemetry exposes bounded counts such as

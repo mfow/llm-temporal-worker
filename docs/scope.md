@@ -157,16 +157,48 @@ latency:
 The implementation must benchmark these targets rather than treating them as
 guaranteed properties of the design.
 
-## Accepted initial-release scope
+## Staged delivery and document authority
 
-The current v1 in-scope/out-of-scope lists remain implementation truth. The
-accepted next phase is specified, but not shipped, in the
-[forkable conversation design](architecture/conversation-checkpoints-and-compaction.md),
-[PostgreSQL/control-plane design](architecture/postgresql-state-cache-and-control-plane.md),
-and [OCaml client design](architecture/ocaml-conversation-and-query-client.md).
-That phase adds delta-only immutable conversation branches, explicit/automatic
-compaction, exact-response caching, provider cache affinity, resumable provider
-polling, typed control queries, exact decimal USD accounting, worker-owned FX
-normalization, Redis authority for the active budget working set, and
-PostgreSQL durable journaling/state. It deliberately keeps tool execution
-and agent-loop decisions in caller Workflows.
+The current v1 in-scope/out-of-scope lists describe shipped behavior. The new
+design is delivered in independently releasable phases; it is not one enlarged
+“initial release” gate:
+
+1. **Phase A — durable conversation core:** worker-owned PostgreSQL namespace,
+   encrypted inline/blob payloads, operation/attempt ledger, immutable
+   checkpoints and forks, exact USD accounting, restart-safe provider polling,
+   and the natural two-layer OCaml Generate client. Existing Redis throttling
+   remains operational while these foundations land.
+2. **Phase B — compaction and budget materialization:** explicit/automatic
+   compaction, provider prompt-cache affinity, PostgreSQL budget journal, and
+   the self-validating Redis materialization/coordination optimization using
+   conservative nano-USD admission. This phase includes the loss/rebuild
+   runbook and restore proof.
+3. **Phase C — opt-in exact-response cache:** route-isolated cache identity,
+   variants, retention/usage accounting, and concurrent fill collapse for a
+   named staging workflow or incident-reproduction caller. It is not a
+   prerequisite for checkpoints or compaction.
+4. **Phase D — typed control queries:** the five typed query families, bounded
+   dedicated query audit rows, provider status/inventory projections, and the
+   OCaml GADT. Queries do not share the paid LLM operation/blob state machine.
+5. **Future ADRs only:** cross-provider cache equivalence and FX. Neither has
+   schema, runtime tasks, or a release gate until a concrete verifiable provider
+   pair or non-USD price sheet exists.
+
+Each phase runs its own focused acceptance gates and can ship before the next.
+The [implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+owns phase ordering and file lists. The
+[PostgreSQL/control-plane design](architecture/postgresql-state-cache-and-control-plane.md)
+is the single normative home for storage ownership, budget-read conditions,
+workload envelope, and DDL. The
+[conversation design](architecture/conversation-checkpoints-and-compaction.md)
+owns Generate/Compact/cache semantics, and the
+[OCaml design](architecture/ocaml-conversation-and-query-client.md) owns the
+client API. Other chapters summarize current behavior or link to these owners;
+they must not restate competing normative rules.
+
+These design documents constrain implementation but are revisable. A latent
+specification defect or measured implementation evidence may be addressed by a
+short superseding ADR amendment that states the changed invariant, alternatives,
+schema/API impact, test updates, and why existing documents are being amended.
+The implementer must not silently diverge, but also must not knowingly implement
+a defect merely because the original prose said “do not redesign.”

@@ -42,8 +42,12 @@ Current budget status is the deliberate exception: it reads the verified Redis
 budget generation only and returns its generation, manifest digest, and Stream
 high-water mark. It never falls back to PostgreSQL. Spend summary reads
 completed PostgreSQL operation/cost rows, not budget journal/working-set rows.
-Every Query is itself an idempotent operation and records an exact-or-unknown
-**actual_cost_usd**; confirmed local stored-state queries record exact zero.
+Every Query has an idempotent key but is recorded in a dedicated bounded inline
+**query_executions** audit ledger rather than the paid inference operation/blob
+state machine. It records exact-or-unknown **actual_cost_usd**; confirmed local
+stored-state queries record exact zero. A Query response carries a distinct
+query-execution ID. Historical spend may union these rows with inference costs
+without pretending they share lifecycle semantics.
 
 The OCaml package exposes exact wire variants at its protocol layer and a GADT
 at its ergonomic layer, associating each request constructor with its result
@@ -56,6 +60,8 @@ type. A mismatched response tag is a decoding error, not an open JSON value.
 - The unavoidable acceptance/persistence gap is visible and conservative.
 - One Activity name avoids an unbounded set of tiny Activities while closed
   tags retain type safety.
+- Cheap stored-state queries avoid an unnecessary blob put and provider-operation
+  row while still meeting durable cost-audit and replay requirements.
 - Provider health, inventory, credit state, budgets, and spend must be shared,
   scoped state rather than per-process observations. Redis owns live budget
   status; PostgreSQL owns the durable journal and historical operation cost.

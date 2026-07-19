@@ -11,11 +11,12 @@ in alongside the architecture and active v1 completion plans. The plans
 identify remaining hardening and release evidence; the current code and its
 tests are the source of truth for behavior that has already been implemented.
 
-The accepted initial-release design is documentation-only and not yet
-implemented. It replaces the unreleased v1 contract in place and adds
-delta-only forkable conversations, compaction, exact-response caching,
-provider affinity, resumable polling, worker-owned PostgreSQL, typed queries,
-exact USD accounting, and a unified OCaml client:
+The staged target design is documentation-only and not yet implemented. It
+replaces the unreleased v1 contract in place through independently releasable
+durable-conversation, compaction/budget, optional route-isolated cache, and
+typed-query phases. Cross-provider cache equivalence and FX are future ADRs,
+not current schema or release gates. [Scope](scope.md#staged-delivery-and-document-authority)
+is the single status/authority index:
 
 - [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
 - [PostgreSQL state, cache, accounting, and control plane](architecture/postgresql-state-cache-and-control-plane.md)
@@ -33,7 +34,7 @@ exact USD accounting, and a unified OCaml client:
 | Ambiguous dispatch | Never resend automatically when a provider may have accepted a billable request |
 | Continuation | Immutable opaque handles backed by a state store and pinned to an endpoint when provider state requires it |
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
-| Shared state | Redis is required for exact active budgets/throttles; worker PostgreSQL is required for durable operation, journal, conversation, cache, and control state; memory is a test reference only |
+| Shared state | PostgreSQL is the durable record; Redis is the required production optimization for conservative active-budget admission, throttles, and replica coordination; memory is single-process development/test only |
 | Activity scope | Generate, Compact, and typed Query only; tool execution and agent-loop orchestration stay in caller workflows |
 | Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported. Compact and Query are separate final-response Activities |
 | Deployment | One stateless worker image, horizontally scalable only when replicas share both configured Redis and worker-PostgreSQL namespaces |
@@ -54,10 +55,10 @@ exact USD accounting, and a unified OCaml client:
 11. [Testing strategy](testing/strategy.md)
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
 13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
-14. [Initial-release conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
-15. [Initial-release Redis-budget/PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
-16. [Initial-release OCaml client design](architecture/ocaml-conversation-and-query-client.md)
-17. [Initial-release implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+14. [Target conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
+15. [Target Redis-budget/PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
+16. [Target OCaml client design](architecture/ocaml-conversation-and-query-client.md)
+17. [Staged target implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 
 ## Reference material
 
@@ -70,6 +71,7 @@ exact USD accounting, and a unified OCaml client:
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
+- [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
 
 ## v1 completion gate
 

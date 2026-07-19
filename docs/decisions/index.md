@@ -1,11 +1,11 @@
 # Architecture Decision Records
 
-The first five decisions describe the current pre-release implementation.
-Decisions 0006 through 0008 define the accepted initial-release design; their
-status does not claim that the implementation has shipped. Because there has
-been no release, these decisions replace the unreleased v1 contract in place.
-A later post-release change adds a superseding ADR and an explicit compatibility
-plan when required.
+The first five decisions describe current implementation. Decisions 0006
+through 0008 define staged target designs; acceptance does not claim that any
+phase has shipped. [Scope](../scope.md#staged-delivery-and-document-authority)
+owns phase and document authority. A specification defect or measured evidence
+may change an accepted design through a short superseding ADR amendment rather
+than silent divergence or knowingly faithful implementation of a defect.
 
 1. [Semantic IR and official SDKs](0001-semantic-ir-and-official-sdks.md)
 2. [Public service classes](0002-service-classes.md)

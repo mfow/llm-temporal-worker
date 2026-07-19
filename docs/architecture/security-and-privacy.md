@@ -1,10 +1,10 @@
 # Security and Privacy
 
-> The accepted initial-release cache stores a bounded canonical Generate
-> request JSONB per
-> operation and a digest/reference-only canonical cache manifest JSONB. Access
-> is restricted and neither is broadly indexed; lookup uses tenant-scoped
-> HMAC-SHA-256. See
+> Target phase status and authority are centralized in
+> [scope](../scope.md#staged-delivery-and-document-authority). Operation JSONB
+> contains content-free manifests only; prompt/tool/output payloads use
+> authenticated envelope-encrypted inline bytes or encrypted blobs. Cache
+> lookup uses tenant-scoped HMAC-SHA-256. See
 > [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md).
 
 ## Trust boundaries
@@ -111,11 +111,15 @@ provider state are sensitive by default. The worker:
 - records provider storage/retention choices in endpoint profiles;
 - provides content-free audit events for access and deletion.
 
-The initial-release Generate contract deliberately stores the bounded delta Activity request as JSONB for
-audit and cache-key verification. This is encrypted at rest/in transit, limited
-to runtime security principals, retention-governed, and excluded from
-observability and indexes. Large/ancestor content remains in immutable encrypted
-blobs referenced by digest rather than duplicated into every cache row.
+The target Generate contract stores only a bounded, content-free request
+manifest as JSONB for audit and cache-key verification. Prompt, tool, output,
+and provider-state payloads use envelope-encrypted inline ciphertext or an
+immutable encrypted blob, with digest and key provenance in PostgreSQL. The
+runtime security principal can decrypt only through the configured key
+provider; database access alone does not reveal plaintext. Payloads are
+retention-governed and excluded from observability and indexes. Large or
+ancestral content remains in encrypted blobs referenced by digest rather than
+being duplicated into every cache row.
 
 Provider-hosted continuation is enabled only when the operator accepts that
 provider's retention behavior. A local canonical transcript can be disabled for

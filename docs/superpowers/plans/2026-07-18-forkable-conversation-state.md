@@ -1,16 +1,20 @@
 # Forkable Conversation State and Control Plane Implementation Plan
 
 > **For the implementing agent:** Execute tasks in order on a clean HTTPS-backed
-> branch. This document is the production contract. Do not redesign the schema,
-> cache key, currency boundary, or OCaml query typing while implementing.
+> branch. This document is a production contract, not an instruction to
+> implement a known defect. Do not silently redesign it; when implementation
+> evidence requires a deviation, first add a short superseding ADR amendment
+> describing the changed invariant, alternatives, schema/API/test impact, and
+> rationale, then update affected fixtures and this plan.
 
 **Goal:** Replace repeated full-history inference calls with immutable forkable
 checkpoints, exact-response caching, provider-cache affinity, isolated
 compaction, resumable provider polling, and typed status/model/credit/budget/
 spend queries in Go and the existing OCaml package.
 
-**Architecture:** Redis remains the atomic, low-latency authority for the
-complete active budget working set and operational throttles. PostgreSQL stores
+**Architecture:** PostgreSQL is the durable system of record. Redis remains the
+atomic, low-latency, provably-current materialization and coordination
+optimization for the complete active budget working set and operational throttles. PostgreSQL stores
 the durable operation/budget journal, exact-decimal USD cost facts, checkpoints,
 cache entries, provider state, health/inventory, and maintenance state. Normal
 budget decisions perform no PostgreSQL reads; Redis can be rebuilt from the
@@ -20,7 +24,8 @@ unreleased **llm.generate.v1** contract is replaced
 in place and appends a delta to an
 immutable parent. **llm.compact.v1** creates a lossily summarized child with
 application tools and structured output disabled. **llm.query.v1** is a closed
-tagged union mirrored by an OCaml GADT.
+tagged union mirrored by an OCaml GADT and uses a dedicated bounded inline audit
+ledger rather than the paid LLM operation/blob state machine.
 
 **Primary references:**
 
@@ -31,7 +36,37 @@ tagged union mirrored by an OCaml GADT.
 - [ADR 0007](../../decisions/0007-postgresql-authoritative-state-and-response-cache.md)
 - [ADR 0008](../../decisions/0008-resumable-provider-operations-and-typed-queries.md)
 
+## Delivery phases
+
+Execute and release phases independently; later phases may not hold an earlier
+one hostage:
+
+- **Phase A — durable conversation core:** Tasks 0-5, 7, 12, 15-17, and the
+  matching slices of 19-21. Exit with PostgreSQL operations/attempts, encrypted
+  payloads, forkable checkpoints, exact USD costs, restart-safe polling, and the
+  Generate OCaml facade. Preserve existing Redis throttling until Phase B.
+- **Phase B — compaction and Redis materialization:** Tasks 6, 10, 11 and their
+  integration/operations slices. Exit with the exact PostgreSQL budget journal,
+  conservative nano-USD Redis decision/coordination layer, adopt/rebuild proof,
+  runbook, prompt-cache affinity, and compaction.
+- **Phase C — opt-in exact-response cache:** Tasks 8-9 only after naming a
+  staging workflow or incident-reproduction caller and recording baseline spend
+  and expected reuse. The initial cache is route-isolated.
+- **Phase D — typed control queries:** Tasks 13-14 and 18 using the dedicated
+  bounded `query_executions` ledger, followed by the query slices of 19-21.
+- **Future ADRs:** cross-provider response-cache equivalence and FX. Do not add
+  their schema, configuration, packages, fixtures, or release gates in these
+  phases.
+
+At each exit, update release traceability only for that phase and leave later
+requirements explicitly pending. The phase owner may split commits further;
+task numbering is dependency guidance, not a mandate to publish one giant PR.
+
 ## Global constraints
+
+All Go source/test paths below are relative to the repository's current
+**golang/** module after rebasing onto `master`; run Go/Make commands from that
+directory unless a command explicitly says otherwise.
 
 - Do not modify or overlap any Temporal-owned PostgreSQL relation. Support a
   configurable worker database, schema, and relation-name prefix. Recommend a
@@ -41,41 +76,43 @@ tagged union mirrored by an OCaml GADT.
 - PostgreSQL and public v1/OCaml money are exact USD decimals with 18
   fractional digits. No float, generic currency field, or externally injected
   FX value is accepted.
-- Redis and PostgreSQL remain required and own different budget roles. Redis
-  atomically decides against active windows; PostgreSQL receives idempotent
+- Redis and PostgreSQL remain required in durable mode and own different budget
+  roles. PostgreSQL is the record; Redis atomically decides against its
+  conservative active-window materialization. PostgreSQL receives idempotent
   journal/projection writes before dispatch and is the exceptional rebuild
   source. Never claim a cross-store transaction.
-- A joining/single-restarted worker, budget status query, Stream gap, and normal
-  admission/finalization must perform zero PostgreSQL budget reads. Such reads
-  are allowed only after Redis proves zero live worker leases (full-service cold
-  bootstrap) or a verified new Redis process/dataset incarnation lacks a
-  complete persisted generation. Same-incarnation partial loss fails closed
-  without reading PostgreSQL.
-- Normal ongoing throughput is assumed to remain vastly below 100 new logical
-  LLM requests/second. This is a design/load-test envelope, not a runtime cap or
-  configuration field. Large occasional batches queue in Temporal and drain
-  under configured concurrency; do not shard Redis for hypothetical scale.
+- Budget-read exceptions, adopt-if-intact behavior, Stream optionality, outage
+  trade, and workload/test envelope are normative only in the
+  [control-plane design](../../architecture/postgresql-state-cache-and-control-plane.md#the-only-postgresql-budget-read-conditions).
+  Tests link to those rules rather than restating variants.
 - Operation replay, worker exact-response cache, and provider prompt cache
   remain three separate mechanisms.
 - Cache opt-in requires **max_age_seconds**. Omission means neither read nor
   populate.
 - Variant is non-negative int32. A positive variant requires materialized
   temperature explicitly greater than zero and is never sent as provider seed.
-- Provider identity is excluded from the exact-cache key only through a
-  certified model-equivalence class. Unknown quantization is isolated.
+- Phase C exact-cache keys include a keyed route identity. Cross-provider cache
+  equivalence is deferred until a concrete verifiable pair receives a
+  superseding ADR and new cache epoch.
 - The same checkpoint may have arbitrarily many immutable children.
 - Provider poll IDs are persisted before polling. Restart resumes the ID and
   never submits again.
 - A compaction request has no application tools, tool choice is none, and no
   application structured-output configuration. The subsequent Generate
   restores those settings.
-- Every completed Generate, Compact, Query, and cache hit has an explicit
+- Every completed Generate/Compact/cache hit and dedicated query execution has an explicit
   exact-or-unknown cost state. Exact uses **actual_cost_usd NUMERIC(38,18)**;
   unknown uses NULL plus a safe reason. Only confirmed free work is exact zero.
 - Provider SDK automatic retries remain zero. Never convert the external
   acceptance/persistence gap into an exactly-once claim.
 - Prompt, output, tool data, provider IDs, raw errors, cache fingerprints, and
   tenant identifiers stay out of logs/metrics/traces.
+- Durable operations store content-free JSONB manifests plus authenticated
+  envelope-encrypted inline/blob payloads; raw prompt/tool/output text is never
+  ordinary JSONB or plaintext bytea.
+- Keep **state.kind=memory** as an explicitly non-durable single-process
+  development mode. Reject it in production and multi-replica configurations;
+  it requires neither Redis, PostgreSQL, nor an external blob store.
 - Begin each behavior task with a failing test and finish with a focused commit.
 - This is a pre-release contract replacement. Do not add a `v2`, compatibility
   adapter, data import, backfill, table rename, dual-read, dual-write, legacy
@@ -93,10 +130,9 @@ tagged union mirrored by an OCaml GADT.
 - [ ] Confirm merged PR 109's OCaml continuation/expiry validation remains in
   the implementation base, and inspect any later OCaml validation PRs. Do not
   overwrite stronger codecs or nominal-ID invariants.
-- [ ] Inspect repository-layout PR 110 or its successor. If its Go-worker move
-  has landed, mechanically prefix the Go file paths in Tasks 1-16 and 19-21
-  with **golang/** and run Go/Make commands from that module as documented by
-  the landed layout. This path adjustment does not reopen any design decision.
+- [ ] Confirm the rebased tree still has the Go worker under **golang/**. Treat
+  every Go path in Tasks 0-21 as relative to that module and run Go/Make commands
+  there; repository-level docs/deploy paths remain relative to the repository.
 - [ ] Record current Go, OCaml, PostgreSQL, Temporal, Redis, and provider SDK
   baselines in the implementation PR.
 - [ ] Add only reviewed current security-patched PostgreSQL client and
@@ -345,7 +381,7 @@ tagged union mirrored by an OCaml GADT.
 - Modify: **storage/redis/function/**
 - Modify: **budget/policy.go**, **budget/window.go**
 - Modify: **admission/transition.go**
-- Test: **storage/redis/budget_exact_decimal_test.go**
+- Test: **storage/redis/budget_nano_usd_test.go**
 - Test: **storage/redis/budget_generation_integration_test.go**
 - Test: **storage/postgres/budget_journal_integration_test.go**
 - Test: **integration/budget_cross_store_recovery_test.go**
@@ -354,10 +390,12 @@ tagged union mirrored by an OCaml GADT.
 - [ ] Persist compiled policies/windows from the immutable configuration
   snapshot with exact **limit_usd** in PostgreSQL and materialize the complete
   active horizon in Redis, including explicit zero bucket fields.
-- [ ] Encode every Redis amount as a zero-padded 38-digit unsigned integer
-  scaled by `10^18`. Implement and property-test lexicographic compare and
-  checked digit-wise add/subtract inside the Redis Function. Forbid converting
-  a full money value through Lua/Go floating point or `tonumber`.
+- [ ] Keep exact **NUMERIC(38,18)** only in PostgreSQL/Go. Convert in Go without
+  float to safe-integer nano-USD: ceil every positive charge/reservation, floor
+  every limit, store each applied integer by operation/window, and subtract that
+  stored value during finalize/release. Reject limits above
+  **9007199.254740991 USD**. Prove the materialization can over-throttle but
+  never under-throttle, and rebuild derives identical integers.
 - [ ] Add the active-generation pointer, manifest, policy/window hashes,
   operation reservation index, **budget:events** Stream, and **budget:workers**
   leases under the configured prefix/hash tag. Validate generation, manifest,
@@ -367,10 +405,13 @@ tagged union mirrored by an OCaml GADT.
   concurrency windows, acquire the idempotent reservation, and XADD the change
   event. Reconcile/release through equally idempotent Functions. Use Redis
   `TIME`; do not hold a PostgreSQL transaction during a Redis call.
-- [ ] Have every worker tail the Stream independently with `XREAD`, storing its
-  cursor in its lease. Do not use one consumer group. A gap discards local hints
-  and reloads Redis only; local state may reject early but never authorize.
-  Trim behind the minimum non-expired worker cursor plus a safety margin.
+- [ ] Let every worker tail the Stream independently with `XREAD`, storing its
+  cursor in its lease. Do not use one consumer group. Make this an explicit
+  coordination optimization for hint invalidation, generation-switch wake-up,
+  and reduced batch-drain polling: local state may reject early but never
+  authorize. A disabled tailer or gap discards hints and reloads Redis only;
+  prove correctness is unchanged. Trim behind the minimum non-expired worker
+  cursor plus a safety margin.
 - [ ] Give each Go process a random in-memory session ID and persist a bounded
   roster entry in the Redis generation. A still-running process reconnecting
   after a persistent Redis outage presents the same session and never triggers
@@ -384,27 +425,28 @@ tagged union mirrored by an OCaml GADT.
 - [ ] Instrument SQL at the repository boundary and fail tests if normal
   admission, completion, budget status, a joining worker, a single-worker
   restart, or a Stream gap issues a SELECT against any PostgreSQL budget table.
-- [ ] Permit PostgreSQL budget reads only when worker leases plus the persistent
-  session roster prove zero live/reconnecting Go workers, or a verified new
-  Redis process/dataset incarnation lacks a complete persisted generation.
-  Track the last verified server run ID/incarnation in each live process and in
-  the generation manifest. Same-incarnation partial loss fails closed and
-  requires operator restore/restart; it does not read PostgreSQL. Fence one
-  bootstrap coordinator; load the active horizon/open
-  reservations/journal tail into new generation keys; verify counts/digests;
-  take the journal advisory fence for final catch-up; atomically flip the Redis
-  generation; let waiters resume from the Stream. Never fall back on one missing
-  Redis member during normal service.
+- [ ] Implement the normative adopt-if-intact, session/incarnation, exceptional
+  PostgreSQL-read, same-incarnation failure, and fenced-generation-rebuild state
+  machine exactly as specified in the
+  [control-plane design](../../architecture/postgresql-state-cache-and-control-plane.md#the-only-postgresql-budget-read-conditions).
+  Do not create a second description of the eligibility rules in Go comments or
+  operator configuration.
 - [ ] Test crash at Redis acquire, PostgreSQL journal commit, dispatch,
   PostgreSQL completion, and Redis reconcile; duplicate events; partial Redis
   key loss; FLUSHDB/non-persistent restart; persistent Redis restart; full fleet
   restart; rolling restart; worker lease expiry; Stream trimming/gaps; and
   racing completion during rebuild. Failures may over-reserve, never overspend.
 - [ ] Assert accepted accounted charges plus active reservations never exceed
-  any window under 100-way concurrency. Run one bounded test at up to 100 new
-  logical requests/second plus a separate much larger queued Temporal batch.
-  Treat 100/second as deliberately above expected normal throughput; do not
-  require headroom beyond it or implement/test a runtime 100-RPS ceiling.
+  any window under concurrency and run the bounded sizing plus queued-batch
+  tests defined by the normative workload envelope. Do not turn that envelope
+  into configuration or a runtime ceiling.
+- [ ] Finalize
+  **docs/runbooks/redis-budget-generation-recovery.md** by replacing every
+  design-time placeholder with tested deployment commands and metric names.
+  Preserve its dependency posture, evidence capture, adopt-if-intact,
+  persistent/new-incarnation/same-incarnation cases, fenced replacement,
+  verification, rollback, and escalation. Never recommend `FLUSHDB` or
+  unfenced key edits.
 - [ ] Capture indexed **EXPLAIN (ANALYZE, BUFFERS)** only for the exceptional
   active-horizon/journal rebuild queries; no SQL active-window-sum query exists.
 - [ ] Commit: **feat(budget): keep atomic redis budgets with durable postgres journal**.
@@ -442,30 +484,27 @@ tagged union mirrored by an OCaml GADT.
   'Checkpoint|Materialize|Fork'**.
 - [ ] Commit: **feat(state): add immutable forkable checkpoint graph**.
 
-### Task 8: Implement certified model equivalence and cache fingerprints
+### Task 8: Implement route-isolated cache fingerprints
 
 **Files:**
 
-- Create: **internal/catalog/model_equivalence.go**
 - Create: **cache/fingerprint.go**
 - Create: **cache/canonical.go**
-- Create: **storage/postgres/model_equivalence.go**
+- Create: **cache/route_identity.go**
 - Modify: **config/types.go**, **config/validate.go**, route catalog loaders
 - Test: **cache/fingerprint_test.go**
 - Test: **cache/fingerprint_property_test.go**
-- Test: **internal/catalog/model_equivalence_test.go**
+- Test: **cache/route_identity_test.go**
 
-- [ ] Add explicit equivalence class/member catalog schema with artifact,
-  weights, quantization, tokenizer, chat-template, safety, semantic compiler,
-  evidence, and status fields.
-- [ ] Require unique isolated identity when quantization or hidden transforms
-  are unknown. Never infer equivalence from a model name.
-- [ ] Add positive fixtures sharing one model across OpenAI, Azure OpenAI, and a
-  verified OpenRouter pass-through. Add negative fixtures for quantization,
-  prompt injection, different revision, compiler loss, and provider extensions.
+- [ ] Derive one HMAC route-cache identity from configuration digest, provider,
+  endpoint/account, region, resolved model/revision, and compiler profile. A
+  display model name never removes route isolation.
+- [ ] Add negative fixtures proving OpenAI, Azure OpenAI, OpenRouter, regions,
+  accounts, revisions, quantization uncertainty, hidden transforms, and
+  compiler differences cannot share an entry in this phase.
 - [ ] Define the fingerprint include/exclude matrix exactly as the architecture
-  document. Provider/route/account/region/service class are provenance, not key
-  data for a certified class.
+  document. Provider/route/account/region/model revision enter through the route
+  identity; service class remains non-semantic scheduling consent.
 - [ ] Domain-separate Generate and Compact fingerprints. Compact uses the same
   opt-in maximum-age contract but accepts only variant zero.
 - [ ] HMAC canonical semantic bytes; never store/log raw prompt hashes. Version
@@ -475,7 +514,9 @@ tagged union mirrored by an OCaml GADT.
   digests/BlobRefs; never query JSONB on the cache hot path.
 - [ ] Property-test map order, JSON spelling, operation key, cache age, route,
   and actor tags do not change the key; every output-affecting setting does.
-- [ ] Commit: **feat(cache): certify model equivalence and semantic keys**.
+- [ ] Do not add equivalence tables/configuration. Record cross-provider sharing
+  as a future ADR requiring one concrete verifiable pair and a new cache epoch.
+- [ ] Commit: **feat(cache): add route-isolated semantic keys**.
 
 ### Task 9: Implement exact-response cache and concurrent fill collapse
 
@@ -493,7 +534,7 @@ tagged union mirrored by an OCaml GADT.
   effective temperature rules after inheritance.
 - [ ] Keep the cache service operation-kind neutral and require a domain-
   separated result template; Task 11 wires Compact through the same service.
-- [ ] Lookup certified model-equivalence keys using completion time for
+- [ ] Lookup route-isolated semantic keys using completion time for
   freshness. PostgreSQL failure on opt-in fails before a paid call.
 - [ ] Implement fill owner/lease without a long transaction. Resolve expired
   owners through operation state before takeover; never assume dispatching safe.
@@ -503,8 +544,9 @@ tagged union mirrored by an OCaml GADT.
 - [ ] Rehydrate current operation/checkpoint/provenance; never return origin
   operation identity. Drop only provider state certified fork-safe.
 - [ ] Test old-but-recently-used retention, stale completion despite fresh last
-  use, Activity retry count idempotency, saturation, concurrent miss collapse,
-  owner crash at every boundary, variant samples, and cross-provider sharing.
+  use, Activity retry count idempotency, max-int saturation without arithmetic
+  overflow, tombstone-then-refill uniqueness, concurrent miss collapse, owner
+  crash at every boundary, variant samples, and cross-route isolation.
 - [ ] Capture cache lookup/fill/GC query plans at representative volume.
 - [ ] Commit: **feat(cache): add durable exact response reuse**.
 
@@ -651,13 +693,18 @@ tagged union mirrored by an OCaml GADT.
   freshness may call only supported provider management/list APIs, never
   inference.
 - [ ] Budget status reads exact current reservations/accounted charges/available
-  USD from Redis only and returns generation/manifest/Stream provenance. Reject
+  conservative nano-USD reservations/accounted charges/available USD from
+  Redis only and returns generation/manifest/Stream provenance. Reject
   an instant outside Redis coverage; never fall back to PostgreSQL budget
   tables. Spend summary uses completed operation/cost rows, a half-open UTC
   interval, allow-listed dimensions, known exact sum, unknown count, and
   partial/complete status; SQL never coalesces NULL cost to zero.
-- [ ] Record every query as an operation/result with exact-or-unknown actual USD
-  cost. Use exact zero only for confirmed free stored/control calls.
+- [ ] Insert every completed query in the dedicated bounded
+  **query_executions** audit ledger with its exact-or-unknown actual USD cost.
+  Do not create an inference operation or blob for a Query. Use exact zero only
+  for a confirmed-free stored/control call. Commit the audit row before the
+  Activity completes; a PostgreSQL outage therefore causes a Temporal retry,
+  even when **budget_status** obtained its answer entirely from Redis.
 - [ ] Add authorization tests, tag/result mismatch, cursor tamper/cross-kind/
   expiry, unknown enum, pagination stability, timeout, and refresh collapse.
 - [ ] Seed representative data and require intended indexes for the four
@@ -678,7 +725,7 @@ tagged union mirrored by an OCaml GADT.
 - [ ] Register exact three Activity names on the existing task queue.
 - [ ] Keep heartbeats/errors/payloads small and redacted. Set limits well below
   current Temporal limits and reverify official limits at implementation time.
-- [ ] Order Generate as replay, materialize/validate, authorized equivalence
+- [ ] Order Generate as replay, materialize/validate, route-isolated
   cache lookup, compaction decision, route/affinity, atomic Redis budget
   reservation, PostgreSQL journal write, provider state machine, PostgreSQL
   checkpoint/cache/cost finalization, then Redis budget reconciliation.
@@ -689,33 +736,35 @@ tagged union mirrored by an OCaml GADT.
   restoration after compaction.
 - [ ] Commit: **feat(activity): serve delta conversations and compaction**.
 
-### Task 16: Add worker-owned FX retrieval and normalized USD catalogs
+### Task 16: Enforce the USD-only catalog boundary and defer FX
 
 **Files:**
 
-- Create: **pricing/fx.go**
-- Create: **pricing/fx_refresh.go**
 - Create: **storage/postgres/pricing.go**
-- Create: **storage/postgres/fx.go**
 - Modify: **internal/runtime/catalog_snapshot.go**
 - Modify: **config/types.go**, **config/validate.go**, config schema/examples
-- Test: **pricing/fx_test.go**
-- Test: **internal/runtime/fx_reload_test.go**
+- Test: **pricing/catalog_currency_test.go**
+- Test: **internal/runtime/catalog_reload_test.go**
 
-- [ ] Remove externally supplied currency/rate values. Configuration selects an
-  allow-listed FX adapter/source, maximum age, refresh policy, and credential
-  reference only.
-- [ ] Implement exact conversion to USD, observation/source digest, validity,
-  staleness, retry, and fail-closed behavior.
-- [ ] Persist internal rate snapshots and only normalized USD price entries.
-  Never store/report a provider operation price in foreign currency.
+- [ ] Remove externally supplied currency/rate values and all downstream
+  currency fields. Public Go/JSON/OCaml money values are exact decimal USD by
+  contract, so they do not redundantly carry **currency = USD**.
+- [ ] Validate that every initially configured provider price source is USD.
+  Reject a non-USD catalog entry rather than accepting a caller-supplied rate,
+  silently treating it as USD, or adding an incomplete FX subsystem.
+- [ ] Persist only exact USD price entries. Do not add an FX adapter, rate table,
+  refresh job, configuration surface, or foreign-currency operation field in
+  this release.
 - [ ] Preserve unresolved catalog components as NULL with partial/unknown
-  status. Do not make a route look free when FX or source pricing is uncertain.
-- [ ] Make price/config reload atomic; a failed FX refresh keeps the last still-
-  valid snapshot and rejects after expiry.
-- [ ] Add fixtures for current USD (no FX), non-USD future input, stale/malformed
-  rate, excessive precision, source outage, rotation, and audit linkage.
-- [ ] Commit: **feat(pricing): own fx normalization inside worker**.
+  status. Do not make a route look free when source pricing is uncertain.
+- [ ] Make price/config reload atomic and preserve the last still-valid USD
+  catalog snapshot if a replacement fails validation.
+- [ ] Add fixtures for valid USD, rejected non-USD input, missing/unknown price,
+  excessive precision, source outage, rotation, and audit linkage.
+- [ ] Record that the first concrete non-USD provider requires a superseding ADR
+  defining worker-owned rate retrieval, exact conversion, staleness, and audit
+  behavior. The worker will still persist and report only USD after that ADR.
+- [ ] Commit: **refactor(pricing): enforce usd-only catalog contracts**.
 
 ### Task 17: Extend the OCaml protocol layer
 
@@ -730,7 +779,7 @@ tagged union mirrored by an OCaml GADT.
 
 - [ ] Retain landed PR 109 validation and its nominal ID/error conventions.
 - [ ] Implement exact **Usd_decimal.t**, exact/unknown settled-cost variants,
-  checkpoint/cursor/equivalence IDs,
+  checkpoint, cursor, and query-execution IDs,
   patch/cache/Generate/Compact records, and every Query wire variant/result.
 - [ ] Remove public currency/microUSD fields. Prohibit float in money API.
 - [ ] Encode Keep by omission, Set/Clear distinctly, decimal as string, variant
@@ -849,7 +898,7 @@ tagged union mirrored by an OCaml GADT.
   and journal revision; then idempotently reconcile Redis. Retain the prior
   conservative bound on any failure.
 - [ ] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool/lock/
-  query latency, cache hit/use/fill, pending polls, exact/unknown cost, and FX age.
+  query latency, cache hit/use/fill, pending polls, and exact/unknown cost.
 - [ ] Load test autovacuum/fillfactor and record table-specific production
   settings instead of guessing.
 - [ ] Commit: **feat(maintenance): add safe state and cache retention**.
@@ -880,8 +929,8 @@ tagged union mirrored by an OCaml GADT.
   Redis non-persistent loss performs one fenced rebuild; all other workers wait.
   Persistent Redis restart preserves generation, partial loss fails closed, and
   a racing journal writer is applied exactly once across the generation flip.
-- [ ] Verify cross-provider certified cache reuse and separate unknown-quantized
-  caches.
+- [ ] Verify route-isolated cache reuse and prove that two provider routes never
+  share an entry, even when their public model names match.
 - [ ] Verify cache zero cost, count once, freshness versus last use, and 180-day
   unused cleanup.
 - [ ] Verify all five Go/OCaml queries, pagination, authorization, fresh/stale/
@@ -899,31 +948,64 @@ tagged union mirrored by an OCaml GADT.
   ADR.
 - [ ] Commit: **test(v1): prove durable conversation and control plane recovery**.
 
-## Phase exit
+## Phase exits
+
+These gates are cumulative only within the phase being released. A later
+phase's unimplemented gate does not block an earlier release.
+
+### Every phase
 
 - [ ] **make verify**
-- [ ] **make postgres-integration**
-- [ ] **make redis-integration**
-- [ ] **make integration**
 - [ ] **make compose-smoke**
-- [ ] **make compose-live-integration** with content-free provider fixtures
 - [ ] **make kustomize-verify**
-- [ ] OCaml Dune build/test plus external package compile
-- [ ] Race tests for state/cache/budget/control/provider packages
+- [ ] Focused race tests for packages changed in the phase
 - [ ] Focused fuzz/property tests for canonical JSON, patches, decimals,
   checkpoints, cache fingerprints, cursors, and provider state
-- [ ] Database schema/index contract and representative EXPLAIN gates
+- [ ] Relevant database schema/index contract and representative EXPLAIN gates
+- [ ] **git diff --exit-code** after generated fixtures/checks
+
+### Phase A — durable conversation core
+
+- [ ] **make postgres-integration** and Temporal recovery integration
+- [ ] Encrypted inline/blob payload, one-submit/resumed-poll, immutable fork,
+  exact-or-unknown cost, and delta-size-independence proofs
+- [ ] OCaml Generate facade Dune build/test plus external package compile
 - [ ] Physical-namespace matrix: dedicated database/schema, shared database,
   and prefixed shared schema, with exact object names and no truncation/collision
-- [ ] Redis prefix isolation, exact-decimal Function, broadcast Stream,
+- [ ] Backup/restore and pending-provider-poll continuation proof
+
+### Phase B — compaction and Redis materialization
+
+- [ ] **make redis-integration** and compaction integration
+- [ ] Redis prefix isolation, conservative nano-USD Function, optional
+  coordination Stream,
   generation-loss detection, and cold-rebuild gates
 - [ ] SQL instrumentation proves zero PostgreSQL budget reads outside the two
   explicitly allowed cold-recovery conditions
-- [ ] Bounded up-to-100-new-logical-request/second sizing run plus a separate
-  large queued batch drain; verify the figure is not enforced as a runtime
-  limit or treated as expected ongoing throughput
-- [ ] Backup/restore proof
-- [ ] **git diff --exit-code** after generated fixtures/checks
+- [ ] Run the bounded sizing workload and separate queued-batch drain defined by
+  the normative workload envelope; verify it remains a test assumption rather
+  than a configuration field or runtime limit
+- [ ] Runbook commands/metrics are deployment-specific and the persistent,
+  new-incarnation, and same-incarnation recovery drills pass
+- [ ] Compact disables tools/structured output and the next Generate restores
+  both; provider prompt-cache affinity remains a preference, not eligibility
+
+### Phase C — opt-in exact-response cache
+
+- [ ] Named staging/incident-reproduction caller and baseline cost/reuse record
+- [ ] Concurrent fill collapse, route isolation, saturated use count, tombstone
+  refill, max-age/last-use behavior, and 180-day unused cleanup proof
+- [ ] Cache hit records exact zero provider cost and no provider dispatch
+
+### Phase D — typed control queries
+
+- [ ] All five Go/OCaml query pairs, GADT tag matching, pagination, authorization,
+  and external OCaml package compile
+- [ ] Dedicated bounded query-ledger replay/audit tests with exact-or-unknown
+  cost; Query never requires an inference operation or blob
+- [ ] Budget status executes zero PostgreSQL budget SELECTs; spend summary unions
+  operation and query-ledger costs without treating NULL as zero
+- [ ] Provider management refresh collapse and content-free live fixtures
 
 ## Final acceptance traceability
 
@@ -933,7 +1015,7 @@ tagged union mirrored by an OCaml GADT.
 | Immutable forks | 7, 18, 21 | three concurrent children from one parent |
 | Sparse settings | 1, 7, 17 | omitted/Set/Clear cross-language fixtures |
 | Exact response cache | 8, 9 | freshness, variants, one fill, count/last use |
-| Cross-provider equivalence | 8, 9 | certified shared hit; quantization isolation |
+| Route-isolated cache identity | 8, 9 | matching route hit and cross-route miss |
 | Provider cache affinity | 10 | preference only after eligibility |
 | Explicit/automatic compaction | 11, 15 | durable reuse and isolation/restoration |
 | Restart-safe provider polling | 5, 12, 21 | one submit and persisted ID polling |
@@ -941,8 +1023,8 @@ tagged union mirrored by an OCaml GADT.
 | Budget/spend queries | 6, 14, 18 | Redis current budget plus PostgreSQL operation-cost summary |
 | All completed costs | 2, 5, 14 | valid exact-or-unknown state; zero only if known |
 | Price precision and uncertainty | 2, 3, 14, 17 | sub-micro through $10+, NULL preserved end to end |
-| Worker-owned FX to USD | 2, 16 | no downstream currency; versioned rate proof |
-| Redis active budget engine | 0, 6, 14, 19, 21 | exact atomic windows, Stream, loss detection, rebuild fencing |
+| USD-only pricing boundary | 2, 16 | no downstream currency; non-USD input rejected pending a future ADR |
+| Redis budget optimization | 0, 6, 14, 19, 21 | conservative atomic windows, optional coordination Stream, loss detection, adoption, rebuild fencing |
 | Near-zero PostgreSQL budget reads | 6, 14, 19, 21 | SQL classifier; cold fleet or verified non-persistent new Redis incarnation are the only exceptions |
 | Production PostgreSQL | 3-6, 19-21 | durable journal/state, constraints/indexes, roles, restore |
 | Unified OCaml package | 17, 18 | same facade/package and downstream compile |

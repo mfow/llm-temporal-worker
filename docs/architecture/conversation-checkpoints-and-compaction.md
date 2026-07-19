@@ -166,10 +166,13 @@ temperature:
 - an absent/provider-default temperature permits only variant zero; and
 - negative values or overflow are invalid.
 
-This gives callers deterministic cache slots for stochastic smoke tests. They
+This gives callers deterministic cache slots for repeated staging workflow
+verification, incident reproduction, and expensive end-to-end smoke runs. They
 may request variants 0, 1, and 2 to retain three observed samples, while a
 repeat of one slot is virtually free. It does not promise provider-level seeded
-reproducibility.
+reproducibility. This is a deliberately deferred, opt-in phase rather than a
+dependency of checkpoints or compaction; ordinary unit/integration tests should
+still prefer record/replay fixtures.
 
 If authoritative cache state is unavailable for an opted-in operation, the
 Activity fails before provider dispatch. Silently bypassing the cache could
@@ -216,10 +219,12 @@ through binary floating point. There is no downstream currency field or
 currency enum: names such as **actual_cost_usd** make the denomination part of
 the type contract.
 
-If the real charge cannot be established, the response instead has
-**status=unknown**, **actual_cost_usd=null**, and a safe reason, with no method.
+If the real charge cannot be established, the top-level Generate
+**status** remains **completed** while **cost.status=unknown**,
+**cost.actual_cost_usd=null**, and a safe cost reason is present with no method.
 The worker never substitutes a catalog guess, reservation, or zero. This shape
-maps to a closed exact/unknown OCaml variant.
+maps to a closed exact/unknown OCaml cost variant without inventing an invalid
+Generate lifecycle state.
 
 A Generate cache hit still creates a distinct completed operation and immutable
 **cache_replay** child. A Compact cache hit creates a distinct compaction child
@@ -244,8 +249,9 @@ A checkpoint row contains immutable metadata and content-addressed references:
 Large canonical item arrays, output, binary parts, and provider artifacts stay
 in the configured encrypted blob store. PostgreSQL stores digests, bounded
 metadata, and immutable locators. Small response cache templates may use
-bounded **bytea** and PostgreSQL TOAST, but an operator cap moves larger objects
-to the blob store.
+bounded envelope-encrypted ciphertext in **bytea** with a wrapping-key ID and
+PostgreSQL TOAST, but an operator cap moves larger objects to the encrypted blob
+store. Neither path stores plaintext model output in PostgreSQL.
 
 Materialization walks parent links only until the newest compaction base or
 materialized snapshot. It then:
@@ -279,27 +285,28 @@ matrix is normative:
 | Tenant/project cache namespace | Include | Prevent cross-scope disclosure |
 | Operation kind (`generate` or `compact`) | Include as a domain separator | A summary artifact and a normal model answer are different result contracts even when they share input lineage |
 | Materialized canonical conversation, instructions, tool definitions/policy, structured output, sampling/temperature, reasoning controls, and output-affecting extensions | Include | May change provider-visible input or output |
-| Certified model-equivalence ID, semantic compiler/profile version, capability lowering version, and cache epoch | Include | Bind reuse to one verified artifact and lowering |
+| Route-cache identity, semantic compiler/profile version, capability lowering version, and cache epoch | Include | Initial cache reuse is isolated to one configured provider/endpoint/account/region/model lowering |
 | Required opaque provider-state/pinning digest | Include; otherwise caching is ineligible | Required state may change the result and cannot be fabricated on replay |
 | Compaction policy, summarizer equivalence ID, prompt version, and compacted artifact digest | Include when the lineage contains compaction | A lossy context representation is semantic input |
 | Non-negative int32 variant | Separate indexed key component, included exactly once | Selects an explicitly retained stochastic sample |
-| Provider, route, endpoint, account, region, and origin provider request ID | Exclude | Provenance only after certified equivalence; unknown equivalence gets an isolated ID |
+| Provider, route, endpoint, account, region, and resolved provider model revision | Include through the keyed route-cache identity; origin provider request ID is excluded | Public metadata is insufficient to certify cross-provider identity, while a per-call request ID is provenance only |
 | Requested/attempted service class and fallbacks | Exclude | Scheduling/cost consent, not model semantics; eligibility is still checked before reuse |
-| Price/catalog/FX versions, budgets, health/circuit state, deadlines, retry policy, and Temporal identifiers | Exclude | Admission/operations facts that do not change the cached answer |
+| Price/catalog versions, budgets, health/circuit state, deadlines, retry policy, and Temporal identifiers | Exclude | Admission/operations facts that do not change the cached answer |
 | Operation key/ID, maximum cache age, timestamps, tracing IDs, pagination, and actor-only observability tags | Exclude | Per-call control or telemetry |
 | Credentials and configuration secrets | Never hash into this key or persist in the manifest | Secret rotation must not reveal or silently redefine semantic identity |
 
 Every extension leaf is included unless its versioned capability/compiler
 profile explicitly certifies it as transport-only. Adapters cannot dynamically
-declare a request field ignorable. Authorization, residency, model-equivalence
-membership, required provider-state availability, and current cache policy are
-checked before lookup; excluding them from the digest where shown does not
-allow a cache hit to authorize work.
+declare a request field ignorable. Authorization, residency, route identity,
+required provider-state availability, and current cache policy are checked
+before lookup; excluding a per-call control field does not allow a cache hit to
+authorize work. Cross-provider equivalence is deferred until a concrete pair
+can meet a superseding ADR's evidence and negative-test requirements.
 
 An HMAC, rather than a raw content hash, prevents offline confirmation of
 sensitive prompt content from leaked database keys. The canonical encoder is
 shared with request-conflict hashing and has golden fixtures in Go and OCaml.
-Changing semantic normalization, equivalence evidence, or a provider compiler
+Changing semantic normalization, route identity, or a provider compiler
 requires a cache epoch bump. Old entries may coexist until retention removes
 them.
 
