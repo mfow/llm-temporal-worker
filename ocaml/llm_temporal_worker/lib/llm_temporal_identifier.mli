@@ -31,3 +31,36 @@ module Blob_digest : S
 module Diagnostic_code : S
 module Cost_catalog_version : S
 module Temporal_task_queue : S
+
+(** Identifiers introduced by the checkpoint and query protocols.  These are
+    deliberately separate nominal types even though each is represented by a
+    string on the wire. *)
+module Query_execution_id : S
+module Budget_policy_key : S
+module Budget_generation_id : S
+module Provider_model_id : S
+module Window_key : S
+
+module Checkpoint : sig
+  type t = private string
+  val of_string : string -> t
+  val to_string : t -> string
+end
+
+module Query_cursor : sig
+  type t = private string
+  val of_string : string -> t
+  val to_string : t -> string
+end
+
+module Budget_stream_id : sig
+  type t = private string
+  val of_string : string -> t
+  val to_string : t -> string
+end
+
+module Sha256_digest : sig
+  type t = private string
+  val of_hex : string -> t
+  val to_hex : t -> string
+end

@@ -8,3 +8,4 @@ include module type of Llm_temporal_models
 include module type of Llm_temporal_invocation
 
 module Conversation : module type of Llm_temporal_conversation
+module V1_codec : module type of Llm_temporal_v1_codec

@@ -1,5 +1,5 @@
 (library
  (name llm_temporal)
  (public_name llm-temporal-ocaml)
- (private_modules llm_temporal_identifier llm_temporal_models llm_temporal_codec llm_temporal_invocation llm_temporal_conversation)
- (libraries temporal-sdk yojson base64))
+ (private_modules llm_temporal_identifier llm_temporal_models llm_temporal_codec llm_temporal_usd_decimal llm_temporal_v1_codec llm_temporal_invocation llm_temporal_conversation)
+ (libraries temporal-sdk yojson base64 ptime))

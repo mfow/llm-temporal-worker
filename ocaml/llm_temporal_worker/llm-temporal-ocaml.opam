@@ -11,6 +11,7 @@ depends: [
   "dune" {>= "3.18"}
   "temporal-sdk"
   "base64"
+  "ptime"
   "yojson" {>= "3.0"}
 ]
 pin-depends: [

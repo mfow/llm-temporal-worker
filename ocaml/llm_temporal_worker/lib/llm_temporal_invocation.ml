@@ -42,3 +42,27 @@ let execute ?task_queue input = invoke_once ?task_queue ~dispatch:activity_dispa
 let workflow ?task_queue () =
   Temporal.Workflow.define ~name:workflow_name ~input:request_codec ~output:response_codec
     (fun input -> execute ?task_queue input)
+
+let generate_v1_request_codec =
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_generate_request ~decode:Llm_temporal_v1_codec.decode_generate_request
+let generate_v1_response_codec =
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_generate_response ~decode:Llm_temporal_v1_codec.decode_generate_response
+let compact_v1_request_codec =
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_compact_request ~decode:Llm_temporal_v1_codec.decode_compact_request
+let compact_v1_response_codec =
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_compaction_response ~decode:Llm_temporal_v1_codec.decode_compaction_response
+let query_v1_request_codec =
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_query_envelope ~decode:Llm_temporal_v1_codec.decode_query_envelope
+let query_v1_response_codec =
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_query_response ~decode:Llm_temporal_v1_codec.decode_query_response
+
+let generate_v1_activity = Temporal.Activity.remote ~name:"llm.generate.v1" ~input:generate_v1_request_codec ~output:generate_v1_response_codec
+let compact_v1_activity = Temporal.Activity.remote ~name:"llm.compact.v1" ~input:compact_v1_request_codec ~output:compact_v1_response_codec
+let query_v1_activity = Temporal.Activity.remote ~name:"llm.query.v1" ~input:query_v1_request_codec ~output:query_v1_response_codec
+
+let invoke_generate_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Activity.t -> generate_request -> (generate_response, Temporal.Error.t) result) input =
+  dispatch ?task_queue generate_v1_activity input
+let invoke_compact_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (compact_request, compaction_response) Temporal.Activity.t -> compact_request -> (compaction_response, Temporal.Error.t) result) input =
+  dispatch ?task_queue compact_v1_activity input
+let invoke_query_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Activity.t -> query_envelope -> (query_response, Temporal.Error.t) result) input =
+  dispatch ?task_queue query_v1_activity input

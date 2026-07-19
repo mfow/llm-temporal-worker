@@ -5,3 +5,7 @@
 (test
  (name test_conversation)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_v1_protocol)
+ (libraries llm_temporal temporal-sdk yojson ptime))

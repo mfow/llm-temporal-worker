@@ -19,3 +19,26 @@ val invoke_once :
 
 val execute : ?task_queue:Temporal_task_queue.t -> request -> (response, Temporal.Error.t) result
 val workflow : ?task_queue:Temporal_task_queue.t -> unit -> (request, response) Temporal.Workflow.t
+
+val generate_v1_request_codec : generate_request Temporal.Codec.t
+val generate_v1_response_codec : generate_response Temporal.Codec.t
+val compact_v1_request_codec : compact_request Temporal.Codec.t
+val compact_v1_response_codec : compaction_response Temporal.Codec.t
+val query_v1_request_codec : query_envelope Temporal.Codec.t
+val query_v1_response_codec : query_response Temporal.Codec.t
+val generate_v1_activity : (generate_request, generate_response) Temporal.Activity.t
+val compact_v1_activity : (compact_request, compaction_response) Temporal.Activity.t
+val query_v1_activity : (query_envelope, query_response) Temporal.Activity.t
+
+val invoke_generate_once :
+  ?task_queue:Temporal_task_queue.t ->
+  dispatch:(?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Activity.t -> generate_request -> (generate_response, Temporal.Error.t) result) ->
+  generate_request -> (generate_response, Temporal.Error.t) result
+val invoke_compact_once :
+  ?task_queue:Temporal_task_queue.t ->
+  dispatch:(?task_queue:Temporal_task_queue.t -> (compact_request, compaction_response) Temporal.Activity.t -> compact_request -> (compaction_response, Temporal.Error.t) result) ->
+  compact_request -> (compaction_response, Temporal.Error.t) result
+val invoke_query_once :
+  ?task_queue:Temporal_task_queue.t ->
+  dispatch:(?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Activity.t -> query_envelope -> (query_response, Temporal.Error.t) result) ->
+  query_envelope -> (query_response, Temporal.Error.t) result
