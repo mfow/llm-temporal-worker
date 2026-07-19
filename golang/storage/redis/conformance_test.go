@@ -56,7 +56,7 @@ func TestRedisKeyNamespacesDoNotAliasDerivedState(t *testing.T) {
 				{name: "operation index", base: primary.operationIndexKey("operation-private-99"), other: variant.operationIndexKey("operation-private-99")},
 				{name: "continuation", base: primary.continuationKey("tenant-private-42", "handle-private-99"), other: variant.continuationKey("tenant-private-42", "handle-private-99")},
 				{name: "continuation index", base: primary.continuationIndexKey("handle-private-99"), other: variant.continuationIndexKey("handle-private-99")},
-				{name: "continuation operation index", base: primary.admissionKey("continuation-operation", "operation-private-99"), other: variant.admissionKey("continuation-operation", "operation-private-99")},
+				{name: "continuation operation index", base: primary.continuationOperationKey("tenant-private-42", "parent-private-99", "operation-private-99"), other: variant.continuationOperationKey("tenant-private-42", "parent-private-99", "operation-private-99")},
 			} {
 				if pair.base == pair.other {
 					t.Fatalf("%s key aliases across namespaces: %q", pair.name, pair.base)
@@ -101,7 +101,7 @@ func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 	keys := []string{
 		space.continuationIndexKey(first.String()),
 		space.continuationKey(child.Tenant, first.String()),
-		space.admissionKey("continuation-operation", "operation-private-99"),
+		space.continuationOperationKey(child.Tenant, parent.String(), "operation-private-99"),
 	}
 	for _, key := range keys {
 		expiresAt, ok := fixture.expiry(key)
