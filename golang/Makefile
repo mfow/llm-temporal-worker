@@ -67,7 +67,7 @@ integration:
 	$(GO) test -race ./integration/...
 
 # Runs the readiness recovery gate against exactly one fresh, digest-pinned
-# Redis daemon. The test itself explicitly provisions the immutable Function;
+# Redis daemon. The test itself explicitly provisions the immutable Functions;
 # the worker only verifies it and never writes shared Redis code.
 readiness-integration:
 	@command -v docker >/dev/null 2>&1 || { \
@@ -86,7 +86,7 @@ readiness-integration:
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi; \
-	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; then \
+	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; then \
 		docker logs "$$container" >&2 || true; \
 		exit 1; \
 	fi

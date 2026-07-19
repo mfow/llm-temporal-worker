@@ -340,7 +340,7 @@ KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
 The readiness integration target starts digest-pinned Redis and PostgreSQL
-instances and provisions the Redis Function and initial worker schema. It stops
+instances and provisions the Redis Functions and initial worker schema. It stops
 and restores each dependency independently while a worker is running. It
 proves liveness remains `200`, readiness transitions `200` to `503` to `200`,
 polling resumes only after recovery, and no provider call is made. The Compose
