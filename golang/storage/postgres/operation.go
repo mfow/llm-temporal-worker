@@ -272,6 +272,18 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 	if err != nil {
 		return admission.BeginResult{}, err
 	}
+	// The idempotent lookup above locks only the operation row while checking
+	// the request fingerprint. Hydrate the durable row after the transaction so
+	// replay callers receive the same expiry, lease, digest, and cost metadata
+	// as a restart recovery read instead of the partial lookup projection used
+	// for conflict detection.
+	if result.Existing {
+		hydrated, getErr := r.Get(ctx, request.ID)
+		if getErr != nil {
+			return admission.BeginResult{}, getErr
+		}
+		result.Operation = hydrated
+	}
 	return result, nil
 }
 

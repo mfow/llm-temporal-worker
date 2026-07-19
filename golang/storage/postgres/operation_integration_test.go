@@ -50,6 +50,12 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	if err != nil || !replay.Existing {
 		t.Fatalf("replay=%#v err=%v", replay, err)
 	}
+	// PostgreSQL timestamptz stores microsecond precision, so compare against
+	// the exact durable representation rather than the caller's nanoseconds.
+	expectedExpiry := request.ExpiresAt.UTC().Truncate(time.Microsecond)
+	if replay.Operation.RequestDigest != request.RequestDigest || replay.Operation.ExpiresAt.IsZero() || !replay.Operation.ExpiresAt.Equal(expectedExpiry) || replay.Operation.LeaseUntil.IsZero() || replay.Operation.ReservedCostUSD == nil || replay.Operation.ReservedCostUSD.Cmp(request.ReservationUSD) != 0 {
+		t.Fatalf("replay metadata = %#v, want durable expiry, lease, digest, and reservation", replay.Operation)
+	}
 	request.RequestDigest = admission.Digest([]byte("different"))
 	if _, err := repository.Begin(ctx, request); !errors.Is(err, admission.ErrOperationConflict) {
 		t.Fatalf("conflict=%v", err)
