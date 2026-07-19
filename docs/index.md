@@ -11,6 +11,18 @@ in alongside the architecture and active v1 completion plans. The plans
 identify remaining hardening and release evidence; the current code and its
 tests are the source of truth for behavior that has already been implemented.
 
+The staged target design is documentation-only and not yet implemented. It
+replaces the unreleased v1 contract in place through independently releasable
+durable-conversation, compaction/budget, optional route-isolated cache, and
+typed-query phases. Cross-provider cache equivalence and FX are future ADRs,
+not current schema or release gates. [Scope](scope.md#staged-delivery-and-document-authority)
+is the single status/authority index:
+
+- [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
+- [PostgreSQL state, cache, accounting, and control plane](architecture/postgresql-state-cache-and-control-plane.md)
+- [OCaml conversation and typed query client](architecture/ocaml-conversation-and-query-client.md)
+- [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+
 ## Non-negotiable v1 decisions
 
 | Area | Decision |
@@ -22,10 +34,10 @@ tests are the source of truth for behavior that has already been implemented.
 | Ambiguous dispatch | Never resend automatically when a provider may have accepted a billable request |
 | Continuation | Immutable opaque handles backed by a state store and pinned to an endpoint when provider state requires it |
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
-| Shared state | Redis is the v1 production backend; memory is for tests and single-process development only |
-| Activity scope | Inference only; tool execution and agent-loop orchestration stay in caller workflows |
-| Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported |
-| Deployment | One stateless worker image, horizontally scalable when Redis is enabled |
+| Shared state | PostgreSQL is the durable record; Redis is the required production optimization for conservative active-budget admission, throttles, and replica coordination; memory is single-process development/test only |
+| Activity scope | Generate, Compact, and typed Query only; tool execution and agent-loop orchestration stay in caller workflows |
+| Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported. Compact and Query are separate final-response Activities |
+| Deployment | One stateless worker image, horizontally scalable only when replicas share both configured Redis and worker-PostgreSQL namespaces |
 | Go baseline | Go 1.26, using the latest security patch in that release line |
 
 ## Read in this order
@@ -43,6 +55,10 @@ tests are the source of truth for behavior that has already been implemented.
 11. [Testing strategy](testing/strategy.md)
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
 13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
+14. [Target conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
+15. [Target Redis-budget/PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
+16. [Target OCaml client design](architecture/ocaml-conversation-and-query-client.md)
+17. [Staged target implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 
 ## Reference material
 
@@ -55,6 +71,7 @@ tests are the source of truth for behavior that has already been implemented.
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
+- [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
 
 ## v1 completion gate
 
@@ -70,12 +87,15 @@ The first release is complete only when all of these statements are true:
   changes service class without an explicit request fallback.
 - The operation ledger returns a cached completed result on an Activity retry
   and refuses to replay an ambiguous provider dispatch.
-- Memory and Redis budget backends pass the same conformance suite, including
-  concurrent overlapping-window admission tests.
+- The in-memory exact-budget reference model and production Redis Function pass
+  the same atomic-window transition suite, including concurrent
+  overlapping-window admission tests; PostgreSQL journal writes/rebuilds pass
+  their separate contract.
 - The worker passes Temporal Activity tests for retry, heartbeat, cancellation,
   graceful shutdown, and non-retryable error typing.
 - The container runs as a non-root user, Kubernetes probes exercise real
-  readiness dependencies, and two-replica Redis-backed smoke tests pass.
+  Redis and worker-PostgreSQL readiness dependencies, and two-replica smoke
+  tests pass.
 - Pull-request and master GitHub Actions are green; master also builds daily at
   05:00 in `Australia/Sydney`.
 

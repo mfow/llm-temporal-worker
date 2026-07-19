@@ -1,10 +1,17 @@
 # Architecture Decision Records
 
-These decisions are binding for v1. A later change adds a superseding ADR and
-updates every affected contract and implementation plan.
+The first five decisions describe current implementation. Decisions 0006
+through 0008 define staged target designs; acceptance does not claim that any
+phase has shipped. [Scope](../scope.md#staged-delivery-and-document-authority)
+owns phase and document authority. A specification defect or measured evidence
+may change an accepted design through a short superseding ADR amendment rather
+than silent divergence or knowingly faithful implementation of a defect.
 
 1. [Semantic IR and official SDKs](0001-semantic-ir-and-official-sdks.md)
 2. [Public service classes](0002-service-classes.md)
 3. [Durable ledger and retry boundary](0003-durable-ledger-and-retry-boundary.md)
 4. [Redis shared state](0004-redis-shared-state.md)
 5. [Streaming boundary](0005-streaming-boundary.md)
+6. [Forkable conversation checkpoints](0006-forkable-conversation-checkpoints.md)
+7. [PostgreSQL durable state, Redis budgets, and exact-response cache](0007-postgresql-authoritative-state-and-response-cache.md)
+8. [Resumable provider operations and typed queries](0008-resumable-provider-operations-and-typed-queries.md)

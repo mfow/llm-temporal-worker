@@ -1,5 +1,12 @@
 # State and Storage
 
+> This chapter describes current storage behavior. Target phase status and
+> authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
+> The exact PostgreSQL system-of-record/Redis materialization boundary, schema,
+> constraints, indexes, and transaction protocols are in
+> [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
+> Temporal's own PostgreSQL schema is never modified.
+
 ## Storage responsibilities
 
 V1 persists three kinds of state behind separate domain ports:
@@ -13,6 +20,18 @@ V1 persists three kinds of state behind separate domain ports:
 Redis implements operation, budget, and continuation state. A blob-store port
 handles payloads that exceed safe Redis or Temporal inline limits; filesystem is
 development-only and object storage is the production example.
+
+This is the current pre-release layout, not the accepted final division of
+responsibility. In the target design PostgreSQL is the durable system of record,
+while Redis is the required production optimization that materializes the
+complete active-window budget working set plus request, token, and concurrency
+throttles. Redis makes each reservation/reconciliation atomic and coordinates
+replicas; it does not become the durable financial record. Normal budget
+admission reads Redis only. Every accepted Redis reservation must be journaled
+to PostgreSQL before paid dispatch; a failed write releases Redis best-effort
+and never dispatches. Both dependencies fail closed for new paid work. Exact
+PostgreSQL decimals are conservatively represented as safe-integer nano-USD in
+Redis as specified by the target schema chapter.
 
 The `storage/redis` implementation uses the official go-redis v9 client and
 one embedded, versioned Redis Function library for each admission mutation.
@@ -130,15 +149,37 @@ blobs are retained until no live operation or other record references them.
 ## Redis key layout
 
 ```text
-llmtw:{admission}:op:<scope-hmac>:<operation-hmac>
-llmtw:{admission}:budget:<policy-version>:<window>:<bucket>
-llmtw:{admission}:function-version
+<key-prefix>:{admission}:op:<scope-hmac>:<operation-hmac>
+<key-prefix>:{admission}:budget:<policy-version>:<window>:<bucket>
+<key-prefix>:{admission}:function-version
 
-llmtw:{admission}:continuation:<tenant-hmac>:<continuation-id>
-llmtw:{admission}:continuation:index:<handle-hmac>
-llmtw:{admission}:continuation-operation:<operation-hmac>
-llmtw:result:<tenant-hmac>:<digest>
+<key-prefix>:{admission}:continuation:<tenant-hmac>:<continuation-id>
+<key-prefix>:{admission}:continuation:index:<handle-hmac>
+<key-prefix>:{admission}:continuation-operation:<operation-hmac>
+<key-prefix>:result:<tenant-hmac>:<digest>
 ```
+
+**state.redis.key_prefix** configures **key-prefix** and defaults to **llmtw**.
+**LLMTW_REDIS_KEY_PREFIX**, when present, overrides the YAML value before
+validation. The effective value must match
+**[A-Za-z0-9][A-Za-z0-9._-]{0,63}**. It is a process-lifetime setting and is
+passed to every admission, continuation, result, readiness, cleanup, and test
+key constructor; no production call site may supply a literal fallback.
+**print-effective-config** emits the resolved non-secret prefix.
+
+The prefix is a data namespace and Redis ACL selector, not a tenant security
+boundary. A shared Redis deployment should constrain the worker role to
+**~<key-prefix>:*** and the required commands. The Redis Function library name
+is server-global and remains separately configured; every Function invocation
+receives only keys in the configured prefix. The hash tag remains independently
+configurable because all keys in one atomic admission mutation must share one
+Redis Cluster slot.
+
+Changing the prefix points the worker at a different empty namespace. This is a
+pre-release configuration change: do not add Redis key copying, backfill,
+dual-read, dual-write, legacy-prefix fallback, or a namespace rename command.
+If a prefix must change after the first release, design and review that data
+migration separately at that time.
 
 All keys touched by admission share the literal configured `{admission}` hash
 tag so a Redis Cluster executes one atomic Function. This creates an intentional

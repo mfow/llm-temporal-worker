@@ -50,13 +50,14 @@ temporal:
     heartbeat_keepalive_interval: 1s
 
 state:
-  kind: redis
+  kind: durable
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
   reservation_lease: 2m
   redis:
     addresses: [redis.example.internal:6379]
+    key_prefix: llmtw
     username:
       kind: env
       name: REDIS_USERNAME
@@ -67,15 +68,37 @@ state:
       enabled: true
       server_name: redis.example.internal
       ca_file: /var/run/ca/redis.pem
-    admission_hash_tag: admission
-    admission_mode: function
-    function_library: llmtw_admission_v1
-    admission_version: admission_v1
-    admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b
+    budget_hash_tag: budget
+    budget_mode: function
+    function_library: llmtw_budget_v1
+    budget_version: budget_v1
+    budget_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b
+    worker_lease_ttl: 30s
+    coordination_stream_enabled: true
+    stream_trim_safety: 10m
     max_connections: 96
     dial_timeout: 2s
     operation_timeout: 3s
     required_persistence: aof_and_rdb
+  postgres:
+    addresses: [postgres.example.internal:5432]
+    database: llm_worker
+    schema: llm_worker
+    table_prefix: ""
+    username:
+      kind: env
+      name: LLMTW_POSTGRES_USERNAME
+    password:
+      kind: file
+      path: /var/run/secrets/llmtw-postgres-password
+    tls:
+      enabled: true
+      server_name: postgres.example.internal
+      ca_file: /var/run/ca/postgres.pem
+    max_connections: 64
+    dial_timeout: 2s
+    statement_timeout: 30s
+    lock_timeout: 2s
 
 blob_store:
   kind: s3
@@ -301,7 +324,6 @@ pricing:
     - file: /etc/llmtw/prices.yaml
       sha256: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
   require_price_when_budgeted: true
-  currency: USD
 
 budgets:
   require_match: true
@@ -313,13 +335,13 @@ budgets:
       windows:
         - duration: 1h
           bucket: 1m
-          limit_micro_usd: 25000000
+          limit_usd: "25.000000000000000000"
         - duration: 24h
           bucket: 5m
-          limit_micro_usd: 250000000
+          limit_usd: "250.000000000000000000"
         - duration: 30d
           bucket: 1h
-          limit_micro_usd: 3000000000
+          limit_usd: "3000.000000000000000000"
 
 continuation:
   handle_keys:
@@ -357,6 +379,101 @@ tracer exports only bounded lifecycle metadata and hashes tenant identifiers;
 it never exports request content, provider payloads, continuation handles, or
 resolved credentials.
 
+## State namespace selection
+
+**state.kind** is **durable** or **memory**. Durable is the production default
+and requires both **state.redis** and **state.postgres**: PostgreSQL is the
+system of record, while Redis provides the active budget/throttle materialization
+and cross-worker coordination optimization.
+
+Memory mode is an explicitly non-durable single-process development mode:
+
+~~~yaml
+environment: development
+state:
+  kind: memory
+  operation_terminal_retention: 45d
+  ambiguous_retention: 90d
+  continuation_retention: 30d
+  reservation_lease: 2m
+blob_store:
+  kind: memory
+~~~
+
+It uses bounded process memory for operations, checkpoints, query audit,
+budget/throttle state, and blobs. Restart loses everything; provider-pending
+jobs cannot be recovered after process loss. Validation rejects **memory** when
+`environment` is production, configured worker replicas exceed one, a durable
+continuation/recovery guarantee is required, or an external blob-store kind is
+mixed with the memory state. Redis/PostgreSQL addresses and credentials are
+omitted and are not dialled. The mode shares semantic conformance tests with
+durable implementations but is never evidence for crash recovery, multi-replica
+admission, backups, or production readiness.
+
+**state.redis.key_prefix** has a
+default of **llmtw**. The optional **LLMTW_REDIS_KEY_PREFIX** environment
+variable overrides only that field. The same validated prefix is injected into
+every worker-owned Redis key constructor; the runtime factory must not hardcode
+**llmtw**. It is distinct from **budget_hash_tag**, which controls Redis
+Cluster co-location rather than the outer data namespace.
+
+The required PostgreSQL subsection has this shape:
+
+~~~yaml
+state:
+  postgres:
+    addresses: [postgres.example.internal:5432]
+    database: llm_worker
+    schema: llm_worker
+    table_prefix: ""
+    username:
+      kind: env
+      name: LLMTW_POSTGRES_USERNAME
+    password:
+      kind: file
+      path: /var/run/secrets/llmtw-postgres-password
+    tls:
+      enabled: true
+      server_name: postgres.example.internal
+      ca_file: /var/run/ca/postgres.pem
+    max_connections: 64
+    dial_timeout: 2s
+    statement_timeout: 30s
+    lock_timeout: 2s
+~~~
+
+The database, schema, and relation prefix are independent:
+
+| Field | Default | Environment override | Meaning |
+| --- | --- | --- | --- |
+| **database** | **llm_worker** | **LLMTW_POSTGRES_DATABASE** | PostgreSQL database selected when opening the pool |
+| **schema** | **llm_worker** | **LLMTW_POSTGRES_SCHEMA** | Schema containing worker-owned objects |
+| **table_prefix** | empty | **LLMTW_POSTGRES_TABLE_PREFIX** | Prefix applied to every worker-owned schema object |
+
+Environment overrides are read once before strict validation, appear in
+**print-effective-config**, and are included in **config_version**. They are
+not secret and are not hot-reloaded. Database and schema match
+**[a-z][a-z0-9_]{0,62}**. Table prefix is empty or matches
+**[a-z][a-z0-9_]{0,22}_**; the trailing underscore makes physical names
+unambiguous and the 24-byte maximum leaves room for the longest specified index
+name under PostgreSQL's 63-byte identifier limit. Schema-contract tests reject
+any generated name that would be truncated. Constraints use the architecture's
+readable deterministic
+`<prefix>c_<kind>_<table_abbrev>_<invariant_slug>` names rather than hashes or
+PostgreSQL-generated names.
+
+The recommended production layout is a dedicated database and schema with an
+empty table prefix. Sharing a PostgreSQL server is fully supported. Sharing a
+database is supported with a dedicated schema. A non-empty table prefix also
+permits an explicitly shared schema, but it is collision avoidance rather than
+a privilege boundary; dedicated roles/schema remain preferable. The worker
+must never resolve a physical relation to one owned by Temporal.
+
+These namespace choices only select where a clean initial schema is created.
+This unreleased change must not implement or document copying, backfill,
+dual-read, dual-write, legacy namespace fallback, or renaming between namespace
+choices. A post-release namespace change requires a separate migration design.
+
 ## Pricing and budget matching
 
 `pricing.require_price_when_budgeted` controls the explicit unpriced policy.
@@ -369,7 +486,10 @@ matching budget policy before quote selection. Consequently, setting both
 fields to `true` requires every dispatched candidate to match a budget and to
 have a current price. An intentionally allowed unpriced result has
 `cost_status: unknown`; its zero cost fields are unknown accounting facts, not
-a free-use assertion.
+a free-use assertion. This describes the current pre-release implementation
+only. The accepted Phase A PostgreSQL contract replaces the zero sentinel with
+nullable price/actual-cost fields plus an explicit unknown reason; exact zero
+then means confirmed free.
 
 ## Provider egress policy
 
@@ -407,7 +527,7 @@ failures are emitted as a safe endpoint-scoped classification, never as a URL,
 credential, authorization header, request body, continuation value, or raw
 provider response.
 
-## Readiness and Redis admission policy
+## Readiness and Redis budget policy
 
 `server.readiness_probe_interval` and
 `server.readiness_probe_timeout` are required positive durations; the timeout
@@ -420,24 +540,44 @@ transient worker drain the monitor keeps checking dependencies, but it never
 starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
-`noeviction` policy, plus the configured admission code identity. It checks
+`noeviction` policy, configured budget code identity, active generation,
+complete manifest, coverage, and the enabled Stream's structural health. It also checks a bounded
+PostgreSQL transaction, physical namespace/schema contract/index identities,
+UTC, and runtime grants. It checks
 the configured S3 bucket with bucket metadata only; it never reads or writes a
 tenant object. Provider endpoints are intentionally excluded because one route
 can be unavailable while another eligible route remains.
 
-`state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
+`state.redis.budget_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned
-Function library and set `function_library`, `admission_version`, and
-`admission_digest` to its immutable identity. The running worker only verifies
+Function library and set `function_library`, `budget_version`, and
+`budget_digest` to its immutable identity. The running worker only verifies
 and calls that Function; it never loads, replaces, or rewrites shared Redis
-code. `admission_mode: lua` is an explicit compatibility fallback: its
-`admission_digest` must be the SHA-256 of the preloaded Lua source, and
+code. `budget_mode: lua` is an explicit compatibility fallback: its
+`budget_digest` must be the SHA-256 of the preloaded Lua source, and
 readiness requires Redis `SCRIPT EXISTS` for that source. The worker never
 falls back from a missing Lua script to `EVAL` or `SCRIPT LOAD`.
 
 `required_persistence` selects the deployment policy: `aof_and_rdb` requires
 both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only
 their named mechanism. Any mismatch fails readiness closed.
+
+`coordination_stream_enabled` defaults to `true` in durable deployments and
+keeps cross-replica invalidation/generation-switch wake-ups fast. It does not
+change authority: a Stream gap or an explicitly disabled tailer discards local
+hints and reloads the manifest/policy state directly from Redis. Readiness
+validates the Stream key/type/retention policy when enabled, but a recoverable
+cursor gap does not invalidate an otherwise complete budget generation.
+
+Workers keep leases and broadcast cursors in the configured Redis budget
+namespace. Joining an existing live lease set, restarting one worker, handling
+a Stream gap, checking readiness, and serving `budget_status` read budget state
+only from Redis. The service may read PostgreSQL budget tables only when the
+Redis lease set proves a zero-live-worker cold bootstrap or the Redis generation
+is missing/incomplete under a verified new Redis process/dataset incarnation
+after persistence loss. Same-incarnation partial corruption fails closed and
+does not read PostgreSQL. There is no config switch
+that enables a routine PostgreSQL fallback.
 
 ## Service-class rules
 
@@ -506,7 +646,6 @@ exact or prefix restriction.
 ```yaml
 version: llmtw-prices/v1
 id: catalog-2026-07-13
-currency: USD
 entries:
   - endpoint_family: openai_responses
     model: gpt-example-2026-07-01
@@ -520,6 +659,8 @@ entries:
 
 Prices in examples are illustrative. Production catalogs require provenance and
 review; they never refresh silently from an untrusted endpoint.
+Every decimal property is defined as USD by its field name and catalog
+contract; no generic currency discriminator is accepted or reported.
 
 ## Validation
 

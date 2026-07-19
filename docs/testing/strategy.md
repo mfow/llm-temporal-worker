@@ -80,6 +80,20 @@ Both CI workflows run `make redis-benchmark-compile`, which compiles the
 build-tagged code with tests and benchmarks disabled; it has no Redis address,
 operator gate, provider call, or Docker dependency.
 
+The staged Redis/PostgreSQL/conversation work has an unimplemented
+[production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
+whose phase/status authority is centralized in
+[scope](../scope.md#staged-delivery-and-document-authority). It adds
+schema/index contracts, exact **NUMERIC(38,18)** round trips
+from sub-micro-dollar values through whole/$10/large values, nullable unknown
+price/cost invariants, concurrent fork/cache/budget tests, provider-poll crash
+recovery, all typed query shapes, query-plan gates, retention, and
+backup/restore proof, conservative nano-USD atomic Redis admission, the
+normative zero-steady-state-PostgreSQL-budget-read proof, adopt-if-intact cold
+start, and fenced rebuild proof for a verified new Redis incarnation that lost
+persistence. Redis remains in production as the coordination/materialization
+optimization.
+
 ## Local release gates
 
 The repository also exposes bounded release-gate targets. They are safe to run
