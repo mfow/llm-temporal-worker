@@ -247,7 +247,7 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		}
 		// Keep the referenced configuration digest self-contained for callers
 		// that do not yet have a separate configuration snapshot repository.
-		if _, err := tx.Exec(ctx, "INSERT INTO "+configs+" (config_digest, config_version, source_digest, sanitized_config) VALUES ($1,$2,$1,'{}'::jsonb) ON CONFLICT (config_digest) DO NOTHING", configDigest[:], request.ConfigVersion); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO "+configs+" (config_digest, config_version, source_digest, sanitized_config) VALUES ($1,$2,$1,'{}'::jsonb) ON CONFLICT DO NOTHING", configDigest[:], request.ConfigVersion); err != nil {
 			return redactPostgresError(fmt.Errorf("persist operation configuration: %w", err))
 		}
 		inserted, err := tx.Exec(ctx, insert, opID, scope.ID, kind, apiVersion, operationKey[:], fingerprint[:], request.RequestDigest[:], version, manifest, sealed.Ciphertext, sealed.KeyID, scopeSealed.Ciphertext, scopeSealed.KeyID, scopeSealed.ContextHash[:], configDigest[:], request.LeaseUntil, request.ExpiresAt, cost, cost)
@@ -516,9 +516,7 @@ func (r OperationRepository) Complete(ctx context.Context, request admission.Com
 		if status == "unknown" {
 			actual = ""
 			method = ""
-			if request.UnknownReason == "" {
-				request.UnknownReason = "provider_outcome_unknown"
-			}
+			request.UnknownReason = safeReason(request.UnknownReason)
 		}
 		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, result_byte_length=$5, result_media_type=$6, actual_cost_usd=$7, cost_status=$8, cost_method=$9, cost_unknown_reason_code=$10, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$11 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], request.ResultRef.Size, request.ResultRef.Media, nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds())
 		return err
@@ -548,7 +546,11 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 		actualText, _ = usdText(actual)
 	}
 	retentionSQL := "NULL"
-	retentionArgs := []any{opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(safeReason(request.Reason))}
+	reason := ""
+	if status == "unknown" {
+		reason = safeReason(request.Reason)
+	}
+	retentionArgs := []any{opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(reason)}
 	if stateValue != "ambiguous" {
 		retentionSQL = "clock_timestamp()+$7 * interval '1 second'"
 		retentionArgs = append(retentionArgs, r.Retention.Seconds())
