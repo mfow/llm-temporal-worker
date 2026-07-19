@@ -113,14 +113,12 @@ func TestGenerateResponseSchemaAcceptsExactUSDWithoutLegacyMoneyFields(t *testin
 	instance := []byte(`{
   "api_version": "llm.temporal/v1",
   "operation_key": "exact-usd",
+  "operation_id": "op-exact-usd",
   "status": "completed",
   "output": [],
-  "route": {},
-  "service": {"requested": "standard", "attempted": "standard", "fallback_index": 0},
-  "usage": {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0},
-  "cost": {"reserved_cost_usd": "1.000000000000000000", "actual_cost_usd": "0.000000000000000001", "method": "catalog_usage", "catalog_version": "v1"},
-  "provider": {},
-  "diagnostics": []
+  "checkpoint": {"handle": "checkpoint-1", "kind": "generation", "depth": 0},
+  "cache": {"disposition": "disabled", "variant": 0},
+  "cost": {"status": "exact", "actual_cost_usd": "0.000000000000000001", "method": "catalog_usage", "catalog_version": "v1"}
 }`)
 	if err := compiled.Validate(instance); err != nil {
 		t.Fatalf("exact-only response rejected: %v", err)
