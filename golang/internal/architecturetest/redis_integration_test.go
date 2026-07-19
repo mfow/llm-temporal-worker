@@ -41,6 +41,23 @@ func TestRedisIntegrationFailureRedactorRunsThroughBash(t *testing.T) {
 	}
 }
 
+func TestReadinessIntegrationProvisionsRedisFunctionsForStorageGate(t *testing.T) {
+	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := makeTarget(t, string(makefile), "readiness-integration:\n", "\n\n# Runs the black-box StoreFactory contract")
+	for _, required := range []string{
+		`LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)"`,
+		"LLMTW_REDIS_TEST_PROVISION=1",
+		`-tags=integration ./storage/redis -run '^TestLiveRedis'`,
+	} {
+		if !strings.Contains(target, required) {
+			t.Errorf("readiness-integration is missing Redis provisioning wiring %q", required)
+		}
+	}
+}
+
 func TestRedisBenchmarkIsOperatorGatedAndExcludedFromCI(t *testing.T) {
 	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
 	if err != nil {
@@ -173,16 +190,18 @@ func TestRedisContinuationLiveTestUsesRefreshedHarness(t *testing.T) {
 }
 
 func redisIntegrationTarget(t *testing.T, makefile string) string {
+	return makeTarget(t, makefile, "redis-integration:\n", "\n\n# Builds a fresh local image")
+}
+
+func makeTarget(t *testing.T, makefile, start, end string) string {
 	t.Helper()
-	const start = "redis-integration:\n"
-	const end = "\n\n# Builds a fresh local image"
 	startOffset := strings.Index(makefile, start)
 	if startOffset < 0 {
-		t.Fatal("Makefile is missing redis-integration")
+		t.Fatalf("Makefile is missing %q", strings.TrimSpace(start))
 	}
 	endOffset := strings.Index(makefile[startOffset:], end)
 	if endOffset < 0 {
-		t.Fatal("redis-integration is missing its target boundary")
+		t.Fatalf("Makefile target %q is missing its boundary", strings.TrimSpace(start))
 	}
 	return makefile[startOffset : startOffset+endOffset]
 }
