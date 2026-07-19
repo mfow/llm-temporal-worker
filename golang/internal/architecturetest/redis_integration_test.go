@@ -132,6 +132,46 @@ func TestRedisPersistenceCleanupUsesRestartedClient(t *testing.T) {
 	}
 }
 
+func TestRedisLiveHarnessRefreshesEphemeralPortBeforeEachTest(t *testing.T) {
+	testSource, err := os.ReadFile(filepath.Join(moduleRoot(t), "storage", "redis", "shared_state_conformance_integration_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(testSource)
+	start := strings.Index(source, "func openLiveRedis(t *testing.T) *redisclient.Client {")
+	if start < 0 {
+		t.Fatal("live Redis harness is missing openLiveRedis")
+	}
+	end := strings.Index(source[start:], "\nfunc openLiveRedisAt(")
+	if end < 0 {
+		t.Fatal("live Redis harness openLiveRedis boundary is missing")
+	}
+	open := source[start : start+end]
+	for _, required := range []string{
+		`os.Getenv("LLMTW_REDIS_CONTAINER")`,
+		`liveRedisAddressForContainer(container)`,
+		`address = current`,
+	} {
+		if !strings.Contains(open, required) {
+			t.Errorf("openLiveRedis must refresh an ephemeral container mapping: missing %q", required)
+		}
+	}
+}
+
+func TestRedisContinuationLiveTestUsesRefreshedHarness(t *testing.T) {
+	testSource, err := os.ReadFile(filepath.Join(moduleRoot(t), "storage", "redis", "continuation_integration_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(testSource)
+	if !strings.Contains(source, "client := openLiveRedis(t)") {
+		t.Fatal("continuation live test must use the shared Redis harness")
+	}
+	if strings.Contains(source, `os.Getenv("LLMTW_REDIS_ADDR")`) {
+		t.Fatal("continuation live test must not retain a stale Redis address")
+	}
+}
+
 func redisIntegrationTarget(t *testing.T, makefile string) string {
 	t.Helper()
 	const start = "redis-integration:\n"

@@ -246,6 +246,17 @@ func isLiveRedisPersistenceContainer(container, configuredPrefix string) bool {
 func openLiveRedis(t *testing.T) *redisclient.Client {
 	t.Helper()
 	address := os.Getenv("LLMTW_REDIS_ADDR")
+	// Docker may assign a different host port when an ephemeral published
+	// port is remapped by `docker restart`. Prefer the container's current
+	// mapping whenever the isolated integration harness provides its name;
+	// LLMTW_REDIS_ADDR is retained for manually provisioned Redis instances.
+	if container := os.Getenv("LLMTW_REDIS_CONTAINER"); container != "" {
+		current, err := liveRedisAddressForContainer(container)
+		if err != nil {
+			t.Fatalf("could not discover the current isolated Redis address: %v", err)
+		}
+		address = current
+	}
 	if address == "" {
 		t.Skip("set LLMTW_REDIS_ADDR to run the pinned live Redis gate")
 	}
