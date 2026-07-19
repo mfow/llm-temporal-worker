@@ -164,6 +164,22 @@ func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
 	if _, err := json.Marshal(response); err == nil {
 		t.Fatal("marshal accepted an unknown nested result field")
 	}
+	for _, test := range []struct {
+		name   string
+		kind   string
+		result string
+	}{
+		{name: "budget unknown page field", kind: "budget_status", result: `{"active_at":"2026-07-19T00:00:00Z","generation_id":"g","manifest_digest":"0000000000000000000000000000000000000000000000000000000000000000","stream_high_water_mark":"h","windows":[],"unexpected":true}`},
+		{name: "spend unknown page field", kind: "spend_summary", result: `{"start_time":"2026-07-18T00:00:00Z","end_time":"2026-07-19T00:00:00Z","buckets":[],"unexpected":true}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":%q,"observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`, test.kind, test.result)
+			var response llm.QueryResponseV1
+			if err := json.Unmarshal([]byte(payload), &response); err == nil {
+				t.Fatalf("invalid query result %s was accepted", test.name)
+			}
+		})
+	}
 }
 
 func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {

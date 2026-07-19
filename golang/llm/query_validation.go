@@ -54,6 +54,81 @@ func (page *CreditStatusPage) UnmarshalJSON(data []byte) error {
 	return validateResultArray(values, "endpoints", validateCreditStatusEntry)
 }
 
+// BudgetStatus and SpendSummary contain required scalar/page members in
+// addition to their open row arrays. Decode their object fields explicitly so
+// encoding/json cannot discard an unknown result member before validation.
+func (value *BudgetStatus) UnmarshalJSON(data []byte) error {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return err
+	}
+	if err := checkUnknownFields(fields, "active_at", "generation_id", "manifest_digest", "stream_high_water_mark", "windows"); err != nil {
+		return err
+	}
+	activeAt, err := requiredString(fields, "active_at")
+	if err != nil {
+		return err
+	}
+	generationID, err := requiredString(fields, "generation_id")
+	if err != nil {
+		return err
+	}
+	digest, err := requiredString(fields, "manifest_digest")
+	if err != nil {
+		return err
+	}
+	streamHighWaterMark, err := requiredString(fields, "stream_high_water_mark")
+	if err != nil {
+		return err
+	}
+	rawWindows, err := requireField(fields, "windows")
+	if err != nil || string(rawWindows) == "null" {
+		return fmt.Errorf("windows must be an array")
+	}
+	var windows []json.RawMessage
+	if err := decodeJSON(rawWindows, &windows); err != nil {
+		return fmt.Errorf("windows must be an array")
+	}
+	decoded := BudgetStatus{ActiveAt: activeAt, GenerationID: generationID, ManifestDigest: digest, StreamHighWaterMark: streamHighWaterMark, Windows: windows}
+	if err := validateBudgetStatus(decoded); err != nil {
+		return err
+	}
+	*value = decoded
+	return nil
+}
+
+func (value *SpendSummary) UnmarshalJSON(data []byte) error {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return err
+	}
+	if err := checkUnknownFields(fields, "start_time", "end_time", "buckets"); err != nil {
+		return err
+	}
+	startTime, err := requiredString(fields, "start_time")
+	if err != nil {
+		return err
+	}
+	endTime, err := requiredString(fields, "end_time")
+	if err != nil {
+		return err
+	}
+	rawBuckets, err := requireField(fields, "buckets")
+	if err != nil || string(rawBuckets) == "null" {
+		return fmt.Errorf("buckets must be an array")
+	}
+	var buckets []json.RawMessage
+	if err := decodeJSON(rawBuckets, &buckets); err != nil {
+		return fmt.Errorf("buckets must be an array")
+	}
+	decoded := SpendSummary{StartTime: startTime, EndTime: endTime, Buckets: buckets}
+	if err := validateSpendSummary(decoded); err != nil {
+		return err
+	}
+	*value = decoded
+	return nil
+}
+
 // validateQueryResult applies the same closed-world checks as the query JSON
 // schemas to the polymorphic result pages. The page structs intentionally keep
 // rows as raw JSON so the public contract can evolve independently of storage;
