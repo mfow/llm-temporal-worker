@@ -59,7 +59,9 @@ approved SPDX identifiers, source references, and exact versions for every
 direct requirement. `make security-verify` rejects an added, removed, or
 changed direct module until that reviewed inventory is deliberately updated.
 The Go vulnerability scan still analyzes reachable code across the complete
-module graph, including indirect dependencies.
+module graph, including indirect dependencies. A baseline exception does not
+narrow that scanner input; it only limits which already-reported trace may be
+accepted after the scan.
 
 The target pins `govulncheck` at `v1.6.0` and runs it with `go1.26.5`, the
 reviewed toolchain patch. Its JSON parser retains unique `GO-*` finding
@@ -79,9 +81,17 @@ scanner traces, provider data, and credential-like material.
 
 ### Active vulnerability exceptions
 
-There are currently no approved vulnerability exceptions. Any future exception
-must be narrowly scoped, documented here, and removed when the verifier no
-longer reports the finding.
+The baseline currently records one approved exception:
+
+| Finding | Owner | Expiry | Remediation | Accepted trace scope |
+| --- | --- | --- | --- | --- |
+| `GO-2026-5932` | `platform-security` | `2026-08-14T00:00:00Z` | [Go vulnerability entry](https://pkg.go.dev/vuln/GO-2026-5932) | `module_only` |
+
+This `module_only` exception accepts only the finding's single module/version
+trace frame. It does not accept a reachable package or function trace, and it
+does not suppress unrelated findings. The verifier requires the finding to be
+present and rejects the exception after its expiry; remove or update this
+entry when remediation is complete.
 
 ## Repository module
 
