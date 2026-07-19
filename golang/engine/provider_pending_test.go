@@ -131,3 +131,43 @@ func TestPollProviderOperationRejectsChangedProviderIdentity(t *testing.T) {
 		t.Fatalf("error = %#v, want ambiguous state corruption", err)
 	}
 }
+
+func TestPollProviderOperationRejectsChangedTerminalIdentity(t *testing.T) {
+	cases := []provider.ResumableState{provider.ResumableCompleted, provider.ResumableFailed}
+	for _, state := range cases {
+		t.Run(string(state), func(t *testing.T) {
+			response := provider.ResumableResult{State: state, ProviderOperationID: "other-op", Dispatch: provider.DispatchAccepted}
+			if state == provider.ResumableCompleted {
+				response.Result = provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}}
+			} else {
+				response.Failure = provider.NewError(provider.CodeProviderUnavailable, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "provider operation failed")
+			}
+			adapter := &resumableTestAdapter{responses: []provider.ResumableResult{response}}
+			_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
+			if err == nil {
+				t.Fatal("changed terminal provider operation identity was accepted")
+			}
+			mapped, ok := err.(*provider.Error)
+			if !ok || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
+				t.Fatalf("error = %#v, want ambiguous state corruption", err)
+			}
+		})
+	}
+}
+
+func TestPollProviderOperationPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{State: provider.ResumablePending, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted}}}
+	_, err := PollProviderOperation(ctx, adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
+	if err == nil {
+		t.Fatal("canceled polling unexpectedly completed")
+	}
+	mapped, ok := err.(*provider.Error)
+	if !ok || mapped.Code != provider.CodeCanceled || mapped.Retry != provider.RetryNever {
+		t.Fatalf("error = %#v, want non-retryable canceled result", err)
+	}
+	if adapter.polls != 0 {
+		t.Fatalf("poll calls = %d, want zero after cancellation", adapter.polls)
+	}
+}

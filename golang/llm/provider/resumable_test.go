@@ -25,6 +25,10 @@ func TestResumableResultValidation(t *testing.T) {
 			result: provider.ResumableResult{State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted, Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}}},
 		},
 		{
+			name:   "completed may omit terminal id",
+			result: provider.ResumableResult{State: provider.ResumableCompleted, Dispatch: provider.DispatchAccepted, Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}}},
+		},
+		{
 			name:   "failed",
 			result: provider.ResumableResult{State: provider.ResumableFailed, Failure: validFailure, Dispatch: provider.DispatchAccepted},
 		},

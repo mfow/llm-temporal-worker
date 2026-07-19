@@ -59,18 +59,23 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 	}
 	for poll := 1; poll <= maxPolls; poll++ {
 		if err := ctx.Err(); err != nil {
-			return provider.Result{}, pollDeadlineError(err)
+			return provider.Result{}, pollStoppedError(err)
 		}
 		result, err := adapter.Poll(ctx, call, providerOperationID, observer)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return provider.Result{}, pollDeadlineError(err)
+				return provider.Result{}, pollStoppedError(err)
 			}
 			return provider.Result{}, err
 		}
 		if err := result.Validate(); err != nil {
 			mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "provider polling response is invalid")
 			mapped.Cause = err
+			return provider.Result{}, mapped
+		}
+		if result.ProviderOperationID != "" && result.ProviderOperationID != providerOperationID {
+			mapped := provider.NewError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "provider operation identity changed while polling")
+			mapped.Cause = fmt.Errorf("provider operation identity changed")
 			return provider.Result{}, mapped
 		}
 		if result.State == provider.ResumableCompleted {
@@ -81,11 +86,6 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 		}
 		if result.State == provider.ResumableNotFound {
 			return provider.Result{}, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "provider operation could not be found")
-		}
-		if result.ProviderOperationID != providerOperationID {
-			mapped := provider.NewError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "provider operation identity changed while polling")
-			mapped.Cause = fmt.Errorf("provider operation identity changed")
-			return provider.Result{}, mapped
 		}
 		if poll == maxPolls {
 			return provider.Result{}, provider.NewError(provider.CodeDeadlineExceeded, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider polling limit reached")
@@ -101,7 +101,7 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 		}
 		if err := sleep(ctx, delay); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return provider.Result{}, pollDeadlineError(err)
+				return provider.Result{}, pollStoppedError(err)
 			}
 			return provider.Result{}, err
 		}
@@ -109,8 +109,16 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 	return provider.Result{}, provider.NewError(provider.CodeInternal, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider polling loop exhausted")
 }
 
-func pollDeadlineError(cause error) *provider.Error {
-	mapped := provider.NewError(provider.CodeDeadlineExceeded, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider polling stopped before completion")
+func pollStoppedError(cause error) *provider.Error {
+	code := provider.CodeDeadlineExceeded
+	retry := provider.RetrySameOperation
+	message := "provider polling stopped before completion"
+	if errors.Is(cause, context.Canceled) {
+		code = provider.CodeCanceled
+		retry = provider.RetryNever
+		message = "provider polling canceled"
+	}
+	mapped := provider.NewError(code, provider.PhasePoll, provider.DispatchAccepted, retry, message)
 	mapped.Cause = cause
 	return mapped
 }
