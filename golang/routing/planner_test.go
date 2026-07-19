@@ -56,6 +56,23 @@ func TestPlannerCollectsSafeRejections(t *testing.T) {
 	}
 }
 
+func TestPlannerRejectsMissingTenantForTenantScopedRoute(t *testing.T) {
+	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+		{ID: "tenant-scoped", EndpointID: "ep", Provider: "openai", Family: "openai_responses", Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, AllowedTenants: []string{"tenant-a"}, Capabilities: testCapabilities(), PriceVersion: "price-v1"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := llm.Request{OperationKey: "op-tenantless", Model: "logical"}
+	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
+	if err == nil {
+		t.Fatal("tenantless request unexpectedly matched tenant-scoped route")
+	}
+	if len(plan.Rejections) != 1 || plan.Rejections[0].Code != RejectTenant || plan.Rejections[0].Path != "context.tenant" {
+		t.Fatalf("unexpected rejection: %#v", plan.Rejections)
+	}
+}
+
 func TestPlannerDoesNotTrustCallerBudgetedTagForPricePolicy(t *testing.T) {
 	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{{
 		ID: "unpriced", EndpointID: "ep", Provider: "openai", Family: "openai_responses", Model: "model",
