@@ -177,6 +177,7 @@ func (continuation Continuation) Constraints(mode llm.PortabilityMode) Constrain
 
 type Store interface {
 	Get(context.Context, Handle) (Continuation, error)
+	GetForTenant(context.Context, string, Handle) (Continuation, error)
 	PutChild(context.Context, PutChildRequest) (Handle, error)
 }
 
