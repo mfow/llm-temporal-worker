@@ -95,6 +95,26 @@ func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.
 	}
 }
 
+func TestDockerBuildInstructionsUseGoModuleContext(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, relative := range []string{
+		"docs/superpowers/plans/2026-07-13-master-sequence.md",
+		"docs/superpowers/plans/2026-07-14-v1-completion.md",
+	} {
+		t.Run(relative, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(root, relative))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "docker build ") {
+					t.Fatalf("%s must build from the nested golang module context: %s", relative, strings.TrimSpace(line))
+				}
+			}
+		})
+	}
+}
+
 func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, test := range []struct {
