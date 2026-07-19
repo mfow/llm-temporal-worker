@@ -69,6 +69,7 @@ is the single status/authority index:
 - [Catalog loader contract](reference/catalog-loaders.md)
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)
+- [Generic compaction safeguards](reference/generic-compaction.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
