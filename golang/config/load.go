@@ -28,6 +28,7 @@ func Load(data []byte) (Config, error) {
 	}
 	applyDefaults(&config)
 	applyPostgresEnvOverrides(&config)
+	applyEnvironmentOverrides(&config)
 	canonicalize(&config)
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -106,6 +107,9 @@ func applyDefaults(config *Config) {
 	if config.State.Postgres.LockTimeout == 0 {
 		config.State.Postgres.LockTimeout = Duration(2 * time.Second)
 	}
+	if config.State.Redis.KeyPrefix == "" {
+		config.State.Redis.KeyPrefix = "llmtw"
+	}
 	if config.BlobStore.Kind == "" {
 		config.BlobStore.Kind = "s3"
 	}
@@ -180,6 +184,19 @@ func applyPostgresEnvOverrides(config *Config) {
 	}
 	if value, ok := os.LookupEnv("LLMTW_POSTGRES_TABLE_PREFIX"); ok {
 		config.State.Postgres.TablePrefix = value
+	}
+}
+
+// applyEnvironmentOverrides applies direct, non-secret process settings before
+// validation and canonical effective-config rendering. A present-but-empty
+// override is intentionally retained so validation rejects it instead of
+// silently falling back to the default namespace.
+func applyEnvironmentOverrides(config *Config) {
+	if config == nil {
+		return
+	}
+	if value, ok := os.LookupEnv("LLMTW_REDIS_KEY_PREFIX"); ok {
+		config.State.Redis.KeyPrefix = value
 	}
 }
 

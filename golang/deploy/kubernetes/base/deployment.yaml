@@ -53,6 +53,8 @@ spec:
               value: 1800MiB
             - name: GOMAXPROCS
               value: "2"
+            - name: LLMTW_REDIS_KEY_PREFIX
+              value: llmtw
           envFrom:
             - secretRef:
                 name: llmtw-provider-credentials

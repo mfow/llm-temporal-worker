@@ -5,13 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
 const (
-	defaultKeyPrefix = "llmtw"
-	defaultHashTag   = "admission"
+	defaultHashTag = "admission"
 )
+
+var keyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // KeyOptions controls the names used by the shared Redis stores. The secret
 // is used only to derive opaque key components; raw operation and tenant
@@ -22,6 +24,17 @@ type KeyOptions struct {
 	KeySecret []byte
 }
 
+// NewKeyOptions constructs one immutable, validated namespace for all
+// worker-owned Redis stores. Callers should pass the effective configuration
+// prefix rather than relying on a store-local default.
+func NewKeyOptions(prefix, hashTag string, keySecret []byte) (KeyOptions, error) {
+	options := KeyOptions{Prefix: prefix, HashTag: hashTag, KeySecret: keySecret}
+	if _, err := newKeySpace(options); err != nil {
+		return KeyOptions{}, err
+	}
+	return options, nil
+}
+
 type keySpace struct {
 	prefix string
 	tag    string
@@ -30,10 +43,7 @@ type keySpace struct {
 
 func newKeySpace(options KeyOptions) (keySpace, error) {
 	prefix := options.Prefix
-	if prefix == "" {
-		prefix = defaultKeyPrefix
-	}
-	if !safeKeyPart(prefix) {
+	if !keyPrefixPattern.MatchString(prefix) {
 		return keySpace{}, fmt.Errorf("invalid Redis key prefix")
 	}
 	tag := options.HashTag

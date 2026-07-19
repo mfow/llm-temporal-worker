@@ -333,9 +333,10 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 	for _, required := range []string{
 		"REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}",
 		"REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}",
+		"REDIS_KEY_PREFIX: ${LLMTW_REDIS_KEY_PREFIX:-llmtw}",
 		"umask 077",
 		"user default off",
-		"user %s on >%s ~* +@all",
+		"user %s on >%s ~%s:* +@all",
 		"acl_file=\"$$(mktemp /tmp/llmtw-users.XXXXXX)\"",
 		"chmod 0600 \"$${acl_file}\"",
 		"--aclfile \"$${acl_file}\"",
@@ -452,6 +453,7 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"LLMTW_REDIS_ADDR=\"$$redis_address\"",
 		"LLMTW_REDIS_USERNAME",
 		"LLMTW_REDIS_PASSWORD",
+		"LLMTW_REDIS_KEY_PREFIX",
 	} {
 		if !strings.Contains(string(data), required) {
 			t.Errorf("compose live integration target is missing %q", required)
@@ -558,7 +560,7 @@ func TestComposeTemporalRecoveryFailureDiagnosticsUseRedactedServiceLogs(t *test
 		t.Fatal(err)
 	}
 
-	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
+	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
 	makefile := string(data)
 	start := strings.Index(makefile, "if ! "+temporalRecoveryTest)
 	if start < 0 {
@@ -597,7 +599,7 @@ func TestComposeTemporalRecoveryRefreshesRedisAddressAfterLifecycle(t *testing.T
 	}
 
 	const lifecycleTest = `GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'`
-	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
+	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
 	const redisAddressRefresh = `redis_address="$$( $(COMPOSE) port redis 6379 )";`
 	makefile := string(data)
 	lifecycleStart := strings.Index(makefile, "if ! "+lifecycleTest)

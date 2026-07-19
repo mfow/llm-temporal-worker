@@ -417,6 +417,11 @@ every worker-owned Redis key constructor; the runtime factory must not hardcode
 **llmtw**. It is distinct from **budget_hash_tag**, which controls Redis
 Cluster co-location rather than the outer data namespace.
 
+When Redis is shared, grant the worker role the configured key pattern
+**~<key-prefix>:*** (for example **~llmtw:***), plus the reviewed command set.
+The prefix is namespace isolation only; it is not a tenant boundary or an
+authentication mechanism, and the Redis Function library name remains global.
+
 The required PostgreSQL subsection has this shape:
 
 ~~~yaml

@@ -14,8 +14,25 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
+	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
+
+func TestRedisKeyOptionsUseConfiguredPrefix(t *testing.T) {
+	value := config.Config{}
+	value.State.Redis.KeyPrefix = "worker-a.v1"
+	value.State.Redis.AdmissionHashTag = "admission"
+	options, err := redisKeyOptions(value, []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Prefix != "worker-a.v1" {
+		t.Fatalf("Redis key prefix = %q, want worker-a.v1", options.Prefix)
+	}
+	if _, err := redisstore.NewKeyOptions("bad prefix", "admission", options.KeySecret); err == nil {
+		t.Fatal("invalid Redis key prefix accepted")
+	}
+}
 
 func TestDefaultRedisFactoryDisablesClientRetries(t *testing.T) {
 	client, err := defaultRedisFactory(context.Background(), config.RedisConfig{Addresses: []string{"127.0.0.1:6379"}}, "", "")

@@ -199,8 +199,13 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, err
 	}
+	keyOptions, err := redisKeyOptions(value, keySecret)
+	if err != nil {
+		closeOwned()
+		return nil, nil, fmt.Errorf("construct Redis key namespace: %w", err)
+	}
 	clock := factory.options.Clock
-	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: redisstore.KeyOptions{Prefix: "llmtw", HashTag: value.State.Redis.AdmissionHashTag, KeySecret: keySecret}, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
+	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: keyOptions, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
 	if err != nil {
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
@@ -215,7 +220,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, err
 	}
-	continuationStore, err := redisstore.NewContinuationStore(redisstore.ContinuationOptions{Client: redisClient, Keys: redisstore.KeyOptions{Prefix: "llmtw", HashTag: value.State.Redis.AdmissionHashTag, KeySecret: keySecret}, Keyring: keyring, Clock: clock, MaxBytes: value.Limits.RequestBytes, MaxDepth: value.Limits.ContinuationDepth})
+	continuationStore, err := redisstore.NewContinuationStore(redisstore.ContinuationOptions{Client: redisClient, Keys: keyOptions, Keyring: keyring, Clock: clock, MaxBytes: value.Limits.RequestBytes, MaxDepth: value.Limits.ContinuationDepth})
 	if err != nil {
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis continuation store: %w", err)
@@ -290,6 +295,10 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return nil
 		},
 	}, nil
+}
+
+func redisKeyOptions(value config.Config, keySecret []byte) (redisstore.KeyOptions, error) {
+	return redisstore.NewKeyOptions(value.State.Redis.KeyPrefix, value.State.Redis.AdmissionHashTag, keySecret)
 }
 
 func buildEstimator(value config.Config) (budget.Estimator, error) {

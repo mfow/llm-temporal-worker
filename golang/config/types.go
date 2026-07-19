@@ -133,6 +133,7 @@ type StateConfig struct {
 
 type RedisConfig struct {
 	Addresses           []string  `yaml:"addresses" json:"addresses"`
+	KeyPrefix           string    `yaml:"key_prefix" json:"key_prefix"`
 	Username            SecretRef `yaml:"username" json:"username"`
 	Password            SecretRef `yaml:"password" json:"password"`
 	TLS                 TLSConfig `yaml:"tls" json:"tls"`

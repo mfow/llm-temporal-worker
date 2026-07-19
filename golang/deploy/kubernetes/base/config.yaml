@@ -33,6 +33,7 @@ state:
   reservation_lease: 2m
   redis:
     addresses: [redis.example.internal:6379]
+    key_prefix: llmtw
     username:
       kind: file
       path: /var/run/secrets/llmtw/redis-username

@@ -24,6 +24,7 @@ var supportedFamilies = map[string]struct{}{
 
 var postgresNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 var postgresPrefixPattern = regexp.MustCompile(`^(|[a-z][a-z0-9_]{0,22}_)$`)
+var redisKeyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // Validate checks references, closed enums, safety bounds, and retention
 // inequalities. It never resolves secret values or performs network I/O.
@@ -220,6 +221,9 @@ func (postgres PostgresConfig) validate(environment string, required bool) error
 }
 
 func (redis RedisConfig) validate(environment string) error {
+	if !redisKeyPrefixPattern.MatchString(redis.KeyPrefix) {
+		return fmt.Errorf("state.redis.key_prefix must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+	}
 	if environment == "production" && !redis.TLS.Enabled {
 		return fmt.Errorf("state.redis.tls.enabled must be true in production")
 	}

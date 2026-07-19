@@ -48,6 +48,7 @@ services:
     environment:
       REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
       REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
+      REDIS_KEY_PREFIX: ${LLMTW_REDIS_KEY_PREFIX:-llmtw}
     entrypoint:
       - /bin/sh
       - -ec
@@ -56,7 +57,7 @@ services:
         acl_file="$$(mktemp /tmp/llmtw-users.XXXXXX)"
         chmod 0600 "$${acl_file}"
         printf '%s\n' 'user default off' > "$${acl_file}"
-        printf 'user %s on >%s ~* +@all\n' "$${REDIS_USERNAME}" "$${REDIS_PASSWORD}" >> "$${acl_file}"
+        printf 'user %s on >%s ~%s:* +@all\n' "$${REDIS_USERNAME}" "$${REDIS_PASSWORD}" "$${REDIS_KEY_PREFIX}" >> "$${acl_file}"
         chown redis "$${acl_file}"
         exec /usr/local/bin/docker-entrypoint.sh redis-server \
           --appendonly yes \
@@ -167,6 +168,7 @@ services:
       MOCK_API_KEY: local-only
       REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
       REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
+      LLMTW_REDIS_KEY_PREFIX: ${LLMTW_REDIS_KEY_PREFIX:-llmtw}
       AWS_EC2_METADATA_DISABLED: "true"
     secrets:
       - source: continuation_hmac

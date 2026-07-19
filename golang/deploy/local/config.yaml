@@ -33,6 +33,7 @@ state:
   reservation_lease: 2m
   redis:
     addresses: [redis:6379]
+    key_prefix: llmtw
     username:
       kind: env
       name: REDIS_USERNAME
