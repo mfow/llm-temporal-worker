@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -35,4 +39,416 @@ func TestResolveOCIManifestDescriptorRejectsCyclicOCIIndexChain(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("cyclic OCI index chain error = %v, want cycle rejection", err)
 	}
+}
+
+func TestRunRejectsUnknownOrIncompleteCommands(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "empty", want: "usage"},
+		{name: "unknown", args: []string{"publish"}, want: `unknown command "publish"`},
+		{name: "verify missing flags", args: []string{"verify"}, want: "verify requires"},
+		{name: "layout missing path", args: []string{"layout-digest"}, want: "layout-digest requires"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			err := run(test.args, &stdout)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("run(%v) error = %v, want substring %q", test.args, err, test.want)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("run(%v) wrote unexpected stdout %q", test.args, stdout.String())
+			}
+		})
+	}
+}
+
+func TestArtifactArgumentsMapForRequiredRejectsMalformedInput(t *testing.T) {
+	complete := make([]string, 0, len(requiredArtifacts))
+	for _, name := range requiredArtifacts {
+		complete = append(complete, name+"="+canonicalArtifactPaths[name])
+	}
+	if values, err := (artifactArguments(complete)).mapForRequired(); err != nil {
+		t.Fatalf("complete artifact arguments rejected: %v", err)
+	} else if len(values) != len(requiredArtifacts) {
+		t.Fatalf("complete artifact arguments returned %d values, want %d", len(values), len(requiredArtifacts))
+	}
+
+	tests := []struct {
+		name string
+		args artifactArguments
+		want string
+	}{
+		{name: "missing equals", args: artifactArguments{"test_summary=test-summary.json", "race_summary"}, want: "invalid artifact argument"},
+		{name: "unknown artifact", args: artifactArguments{"unexpected=artifact.json"}, want: `unknown artifact "unexpected"`},
+		{name: "duplicate artifact", args: artifactArguments{"test_summary=a.json", "test_summary=b.json"}, want: `artifact "test_summary" was specified more than once`},
+		{name: "missing required artifact", args: artifactArguments{"test_summary=test-summary.json"}, want: "missing required artifacts"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.args.mapForRequired(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("mapForRequired(%v) error = %v, want substring %q", test.args, err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateEvidenceMetadataEnforcesImmutableReleaseSubjects(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	valid := evidence{
+		SchemaVersion: evidenceSchemaVersion,
+		GeneratedAt:   "2026-07-19T00:00:00Z",
+		Source:        source{Repository: "https://github.com/example/project", Revision: strings.Repeat("b", 40)},
+		Image:         image{Reference: "registry.example/project@sha256:" + digest, Digest: "sha256:" + digest},
+	}
+	if err := validateEvidenceMetadata(valid); err != nil {
+		t.Fatalf("valid evidence metadata rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*evidence)
+		want   string
+	}{
+		{name: "non HTTPS repository", mutate: func(record *evidence) { record.Source.Repository = "http://github.com/example/project" }, want: "HTTPS URL"},
+		{name: "short revision", mutate: func(record *evidence) { record.Source.Revision = strings.Repeat("b", 39) }, want: "full lowercase Git SHA"},
+		{name: "digest mismatch", mutate: func(record *evidence) { record.Image.Digest = "sha256:" + strings.Repeat("c", 64) }, want: "immutable digest reference"},
+		{name: "mutable tag", mutate: func(record *evidence) { record.Image.Reference = "registry.example/project:latest@sha256:" + digest }, want: "must not include a mutable tag"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := valid
+			test.mutate(&record)
+			if err := validateEvidenceMetadata(record); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateEvidenceMetadata() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestProvenanceAndSecretGuardsRejectUnsafeEvidence(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		ok    bool
+	}{
+		{value: "https://github.com/example/project", ok: true},
+		{value: "https://example.invalid/path/to/artifact", ok: true},
+		{value: "http://github.com/example/project"},
+		{value: "https://user:password@example.com/project"},
+		{value: "https://example.com:443/project"},
+		{value: "https://127.0.0.1/project"},
+		{value: "https://example.com/project?token=secret"},
+		{value: "https://example.com/project#fragment"},
+	} {
+		if got := isSafeHTTPSURL(test.value); got != test.ok {
+			t.Errorf("isSafeHTTPSURL(%q) = %v, want %v", test.value, got, test.ok)
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{name: "private key", data: "-----BEGIN PRIVATE KEY-----"},
+		{name: "credential field", data: `{"api_key":"release-secret-0123456789"}`},
+		{name: "escaped credential field", data: `{"api\u005fkey":"release-secret-0123456789"}`},
+		{name: "provider token", data: "ghp_012345678901234567890123456789"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := rejectSecretLikeContent(test.name, []byte(test.data)); err == nil {
+				t.Fatalf("rejectSecretLikeContent accepted %s", test.name)
+			}
+		})
+	}
+	if err := rejectSecretLikeContent("redacted.json", []byte(`{"status":"ok"}`)); err != nil {
+		t.Fatalf("ordinary redacted evidence rejected: %v", err)
+	}
+}
+
+func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) {
+	base := func(name string) map[string]any {
+		service := logArtifactServices[name]
+		return map[string]any{
+			"kind":             name,
+			"service":          service,
+			"source":           "docker_compose_logs",
+			"redaction_policy": "allowlist-v1",
+			"line_count":       2,
+			"input_bytes":      20,
+			"event_counts":     map[string]any{"redacted_line": 1, "redis_ready": 1},
+		}
+	}
+	valid := base("redis_log")
+	if err := validateRedactedLogArtifact("redis_log", mustJSON(t, valid)); err != nil {
+		t.Fatalf("valid Redis log rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{name: "wrong identity", mutate: func(document map[string]any) { document["service"] = "temporal" }, want: "invalid redacted-log identity"},
+		{name: "unknown event", mutate: func(document map[string]any) { document["event_counts"].(map[string]any)["secret_dump"] = 1 }, want: "unallowlisted"},
+		{name: "line count mismatch", mutate: func(document map[string]any) { document["event_counts"].(map[string]any)["redis_ready"] = 2 }, want: "invalid redacted-log event count"},
+		{name: "missing Redis boundary", mutate: func(document map[string]any) { document["event_counts"] = map[string]any{"redacted_line": 2} }, want: "no Redis runtime-boundary"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := base("redis_log")
+			test.mutate(document)
+			if err := validateRedactedLogArtifact("redis_log", mustJSON(t, document)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateRedactedLogArtifact() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRunLayoutDigestSmoke(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := []byte(`{"architecture":"arm64","os":"linux"}`)
+	layer := []byte("application layer")
+	configDigest := writeOCIBlob(t, root, config)
+	layerDigest := writeOCIBlob(t, root, layer)
+	manifestData, err := json.Marshal(ociManifestDocument{
+		SchemaVersion: 2,
+		Config:        ociDescriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + configDigest, Size: int64(len(config))},
+		Layers:        []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + layerDigest, Size: int64(len(layer))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := writeOCIBlob(t, root, manifestData)
+	indexData, err := json.Marshal(ociIndexDocument{
+		SchemaVersion: 2,
+		Manifests:     []ociDescriptor{{MediaType: ociImageManifestMediaType, Digest: "sha256:" + manifestDigest, Size: int64(len(manifestData))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.json"), indexData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	if err := run([]string{"layout-digest", "-layout", root}, &stdout); err != nil {
+		t.Fatalf("layout-digest smoke test failed: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "sha256:"+manifestDigest {
+		t.Fatalf("layout-digest = %q, want %q", got, "sha256:"+manifestDigest)
+	}
+}
+
+func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
+	image := image{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
+	valid := map[string]any{
+		"bomFormat":   "CycloneDX",
+		"specVersion": "1.5",
+		"metadata": map[string]any{
+			"component": map[string]any{
+				"type": "container",
+				"properties": []any{
+					map[string]any{"name": "org.opencontainers.image.ref.name", "value": image.Reference},
+					map[string]any{"name": "org.opencontainers.image.manifest.digest", "value": image.Digest},
+				},
+			},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "sbom.json")
+	if err := os.WriteFile(path, mustJSON(t, valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCycloneDXSBOM(path, image); err != nil {
+		t.Fatalf("valid SBOM rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{name: "wrong component type", mutate: func(document map[string]any) {
+			document["metadata"].(map[string]any)["component"].(map[string]any)["type"] = "library"
+		}, want: "does not describe a container image"},
+		{name: "stale digest", mutate: func(document map[string]any) {
+			properties := document["metadata"].(map[string]any)["component"].(map[string]any)["properties"].([]any)
+			properties[1].(map[string]any)["value"] = "sha256:" + strings.Repeat("b", 64)
+		}, want: "does not exactly match"},
+		{name: "duplicate subject property", mutate: func(document map[string]any) {
+			properties := document["metadata"].(map[string]any)["component"].(map[string]any)["properties"].([]any)
+			properties = append(properties, map[string]any{"name": "org.opencontainers.image.ref.name", "value": image.Reference})
+			document["metadata"].(map[string]any)["component"].(map[string]any)["properties"] = properties
+		}, want: "repeats immutable image subject property"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := cloneJSONMap(t, valid)
+			test.mutate(document)
+			if err := os.WriteFile(path, mustJSON(t, document), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateCycloneDXSBOM(path, image); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateCycloneDXSBOM() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
+	image := image{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
+	valid := map[string]any{
+		"SchemaVersion": 2,
+		"ArtifactType":  "container_image",
+		"ArtifactName":  "image.oci",
+		"release_subject": map[string]any{
+			"reference": image.Reference,
+			"digest":    image.Digest,
+		},
+		"Results": []any{map[string]any{"Vulnerabilities": []any{}}},
+	}
+	path := filepath.Join(t.TempDir(), "scan.json")
+	if err := os.WriteFile(path, mustJSON(t, valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTrivyScan(path, image); err != nil {
+		t.Fatalf("valid Trivy report rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{name: "wrong report type", mutate: func(document map[string]any) { document["ArtifactType"] = "filesystem" }, want: "not a Trivy container-image report"},
+		{name: "wrong temporary basename", mutate: func(document map[string]any) { document["ArtifactName"] = "image.tar" }, want: "not normalized"},
+		{name: "stale subject", mutate: func(document map[string]any) {
+			document["release_subject"].(map[string]any)["digest"] = "sha256:" + strings.Repeat("b", 64)
+		}, want: "does not exactly match"},
+		{name: "critical finding", mutate: func(document map[string]any) {
+			document["Results"] = []any{map[string]any{"Vulnerabilities": []any{map[string]any{"Severity": "CRITICAL"}}}}
+		}, want: "HIGH or CRITICAL"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := cloneJSONMap(t, valid)
+			test.mutate(document)
+			if err := os.WriteFile(path, mustJSON(t, document), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateTrivyScan(path, image); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateTrivyScan() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSecureArtifactAndOutputPathsRejectTraversalAndSymlinks(t *testing.T) {
+	directory := t.TempDir()
+	artifactPath := filepath.Join(directory, "artifact.json")
+	if err := os.WriteFile(artifactPath, []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := secureArtifactPath(directory, "artifact.json"); err != nil || got != artifactPath {
+		t.Fatalf("secureArtifactPath valid path = %q, %v", got, err)
+	}
+	for _, value := range []string{"", "../artifact.json", "/tmp/artifact.json", "missing.json"} {
+		if _, err := secureArtifactPath(directory, value); err == nil {
+			t.Errorf("secureArtifactPath(%q) accepted an unsafe path", value)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"outside":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "link.json")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secureArtifactPath(directory, "link.json"); err == nil {
+		t.Fatal("secureArtifactPath accepted a symlink")
+	}
+	if got, err := secureOutputPath(directory, filepath.Join(directory, "evidence.json")); err != nil || got != filepath.Join(directory, "evidence.json") {
+		t.Fatalf("secureOutputPath valid path = %q, %v", got, err)
+	}
+	if _, err := secureOutputPath(directory, filepath.Join(directory, "..", "evidence.json")); err == nil {
+		t.Fatal("secureOutputPath accepted a path outside the artifact directory")
+	}
+}
+
+func TestValidateFixtureManifestRejectsDuplicateProfilesAndUnsafeProvenance(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "fixture-manifest.json")
+	valid := fixtureManifest{
+		Version: 1,
+		Fixtures: []fixtureRecord{{
+			Profile:        "example",
+			UpstreamURL:    "https://example.invalid/contracts",
+			UpstreamDate:   "2026-07-19",
+			ManifestSHA256: strings.Repeat("a", 64),
+		}},
+	}
+	if err := os.WriteFile(path, mustJSON(t, valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFixtureManifest(path); err != nil {
+		t.Fatalf("valid fixture manifest rejected: %v", err)
+	}
+	invalid := valid
+	invalid.Fixtures = append(invalid.Fixtures, valid.Fixtures[0])
+	if err := os.WriteFile(path, mustJSON(t, invalid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFixtureManifest(path); err == nil || !strings.Contains(err.Error(), "duplicate profile") {
+		t.Fatalf("duplicate fixture profile error = %v", err)
+	}
+	invalid = valid
+	invalid.Fixtures[0].UpstreamURL = "https://user:secret@example.invalid/contracts"
+	if err := os.WriteFile(path, mustJSON(t, invalid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFixtureManifest(path); err == nil || !strings.Contains(err.Error(), "invalid upstream URL") {
+		t.Fatalf("unsafe fixture URL error = %v", err)
+	}
+}
+
+func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
+	t.Helper()
+	return mustUnmarshalMap(t, mustJSON(t, value))
+}
+
+func mustUnmarshalMap(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func writeOCIBlob(t *testing.T, root string, data []byte) string {
+	t.Helper()
+	digest := sha256Hex(data)
+	directory := filepath.Join(root, "blobs", "sha256")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, digest), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }
