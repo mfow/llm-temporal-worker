@@ -137,6 +137,35 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 	}
 }
 
+func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
+	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`
+	for _, test := range []struct {
+		name   string
+		result string
+	}{
+		{name: "unknown page field", result: `{"routes":[],"unexpected":true}`},
+		{name: "null required page", result: `{"routes":null}`},
+		{name: "unknown route field", result: `{"routes":[{"route_id":"r","provider":"p","endpoint":"e","availability":"available","observed_at":"2026-07-19T00:00:00Z","stale_after":"2026-07-20T00:00:00Z","unexpected":true}]}`},
+		{name: "null route row", result: `{"routes":[null]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var response llm.QueryResponseV1
+			if err := json.Unmarshal([]byte(fmt.Sprintf(base, test.result)), &response); err == nil {
+				t.Fatalf("invalid query result %s was accepted", test.name)
+			}
+		})
+	}
+	response := llm.QueryResponseV1{
+		OperationKey: "q", QueryExecutionID: "query-id", Kind: llm.QueryProviderStatus,
+		ObservedAt: "2026-07-19T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true,
+		Result: llm.ProviderStatusPage{Routes: []json.RawMessage{json.RawMessage(`{"route_id":"r","provider":"p","endpoint":"e","availability":"available","observed_at":"2026-07-19T00:00:00Z","stale_after":"2026-07-20T00:00:00Z","unexpected":true}`)}},
+		Cost:   llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
+	}
+	if _, err := json.Marshal(response); err == nil {
+		t.Fatal("marshal accepted an unknown nested result field")
+	}
+}
+
 func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	requestData := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"instructions":{"set":[{"kind":"parts","content":[{"kind":"text","text":"hello"}]}]},"tools":{"set":[{"name":"lookup","description":"lookup data","input_schema":{"type":"object"}}]},"output":{"set":{"max_tokens":32,"format":{"kind":"text"}}}}}`)
 	var request llm.GenerateRequestV1
