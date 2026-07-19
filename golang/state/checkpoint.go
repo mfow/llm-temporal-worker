@@ -248,6 +248,9 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		result.Items = cloneItems(checkpoint.Snapshot.Items)
 		result.Settings = checkpoint.Snapshot.Settings.Clone()
 		result.Depth = checkpoint.Snapshot.Depth
+		if result.Depth < 0 || result.Depth > graph.limits.MaxDepth {
+			return MaterializedState{}, fmt.Errorf("checkpoint snapshot exceeds depth limit")
+		}
 		if err := graph.validateMaterializedLimits(result.Items); err != nil {
 			return MaterializedState{}, err
 		}
