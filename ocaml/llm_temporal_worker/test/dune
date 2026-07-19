@@ -1,3 +1,7 @@
 (test
  (name test_wrapper)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_conversation)
+ (libraries llm_temporal temporal-sdk yojson))
