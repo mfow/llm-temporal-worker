@@ -98,3 +98,131 @@ type diagnostic_severity = Info | Warning | Diagnostic_error
 type diagnostic = { code : Diagnostic_code.t; message : string; severity : diagnostic_severity; path : string option; details : (string * string) list option }
 type response_metadata = { operation_id : Operation_id.t option }
 type response = { operation_key : Operation_key.t; operation_id : Operation_id.t option; status : response_status; output : item list; route : route; service : service; usage : usage; cost : cost; provider : provider; continuation : continuation option; diagnostics : diagnostic list; metadata : response_metadata }
+
+module Usd_decimal : module type of Llm_temporal_usd_decimal
+
+module Query_execution_id : Opaque_identifier
+module Budget_policy_key : Opaque_identifier
+module Budget_generation_id : Opaque_identifier
+module Checkpoint : Opaque_identifier
+module Query_cursor : Opaque_identifier
+module Budget_stream_id : Opaque_identifier
+module Sha256_digest : sig
+  type t = private string
+  val of_hex : string -> t
+  val to_hex : t -> string
+end
+
+type 'a patch = Keep | Set of 'a | Clear
+type checkpoint_kind = Generation_checkpoint | Compaction_checkpoint | Cache_replay_checkpoint
+type checkpoint_metadata = { handle : Checkpoint.t; parent : Checkpoint.t option; kind : checkpoint_kind; depth : int32 }
+type cache_policy = { max_age_seconds : int64; variant : int32 }
+type cache_disposition_kind = Cache_disabled | Cache_miss_populated | Cache_hit | Cache_miss_not_populated
+type cache_disposition = { disposition : cache_disposition_kind; variant : int32; entry_age_seconds : int64 option }
+type cost_method = Provider_reported | Catalog_usage | Control_query_zero
+type cost_unknown_reason = Provider_did_not_report_cost | Catalog_incomplete | State_unavailable | Ambiguous_dispatch
+type settled_cost =
+  | Exact_cost of { actual_cost_usd : Usd_decimal.t; method_ : cost_method; catalog_version : Cost_catalog_version.t option }
+  | Unknown_cost of { reason : cost_unknown_reason }
+type checkpoint_provenance = Provider_provenance | Worker_cache_provenance
+type provenance = { source : checkpoint_provenance; origin_operation_id : Operation_id.t option; policy : string option }
+type settings_patch = {
+  model : Model_selector.t patch;
+  service_class : service_class patch;
+  service_class_fallbacks : service_class list patch;
+  portability : portability patch;
+  instructions : instruction list patch;
+  tools : function_tool list patch;
+  tool_policy : tool_policy patch;
+  output : output_spec patch;
+  temperature : float patch;
+  reasoning_effort : reasoning_effort patch;
+  reasoning_summary : reasoning_summary patch;
+  compaction_policy : Yojson.Safe.t patch;
+  extensions : (string * Yojson.Safe.t) list patch;
+}
+type generate_request = {
+  api_version : string;
+  operation_key : Operation_key.t;
+  context : request_context;
+  parent : Checkpoint.t option;
+  append : item list;
+  settings_patch : settings_patch;
+  cache : cache_policy option;
+}
+type generate_response = {
+  api_version : string;
+  operation_key : Operation_key.t;
+  operation_id : Operation_id.t;
+  status : response_status;
+  output : item list;
+  checkpoint : checkpoint_metadata;
+  cache : cache_disposition;
+  route : route option;
+  usage : usage option;
+  cost : settled_cost;
+  diagnostics : diagnostic list;
+}
+type summary_style = Concise | Balanced | Detailed
+type compaction_policy = { target_tokens : int64 option; summary_style : summary_style option }
+type compact_request = {
+  api_version : string;
+  operation_key : Operation_key.t;
+  context : request_context;
+  parent : Checkpoint.t;
+  policy : compaction_policy option;
+  cache : cache_policy option;
+}
+type compaction_response = {
+  api_version : string;
+  operation_key : Operation_key.t;
+  operation_id : Operation_id.t;
+  checkpoint : checkpoint_metadata;
+  cache : cache_disposition;
+  provenance : provenance option;
+  usage : usage option;
+  cost : settled_cost;
+  diagnostics : diagnostic list;
+}
+
+type availability = Available | Degraded | Unavailable
+type model_lifecycle = Active | Deprecated | Retired
+type model_capability = string
+type inventory_source = Provider_api_inventory | Operator_inventory | Unknown_inventory_source
+type credit_state = Credit_ok | Credit_low | Credit_exhausted | Credit_unknown
+type billing_state = Billing_ok | Billing_blocked | Billing_unknown
+type circuit_state = Circuit_closed | Circuit_open | Circuit_half_open
+type credit_evidence_source = Provider_api_evidence | Operator_evidence | Unknown_evidence
+type query_source = Persisted | Persisted_and_refreshed | Redis_budget_generation
+type freshness = Current | Stale | Unknown_freshness
+type operation_kind = Generate | Compact | Query
+type spend_group_by = By_operation_kind | By_provider | By_model
+type cost_completeness = Complete_cost | Partial_cost
+
+module Safe_metadata : sig
+  type t
+  val empty : t
+  val of_list : (string * Yojson.Safe.t) list -> t
+  val to_list : t -> (string * Yojson.Safe.t) list
+end
+
+type provider_status_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; availability : availability option; include_healthy : bool; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
+type model_inventory_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; model_prefix : string option; lifecycle : model_lifecycle option; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
+type credit_status_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; include_ok : bool; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
+type budget_status_filter = { policy_key : Budget_policy_key.t option; active_at : Ptime.t option; include_windows : bool }
+type spend_summary_filter = { start_time : Ptime.t; end_time : Ptime.t; group_by : spend_group_by list; operation_kinds : operation_kind list }
+type provider_route_status = { route_id : Route_id.t; provider : Provider_id.t; endpoint : Endpoint_id.t; availability : availability; credit_state : credit_state; billing_state : billing_state; circuit_state : circuit_state; observed_at : Ptime.t; stale_after : Ptime.t; safe_code : string option }
+type provider_status_page = { routes : provider_route_status list }
+type model_inventory_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; provider_model_id : string; display_name : string option; lifecycle : model_lifecycle; capabilities : model_capability list; source : inventory_source; complete_snapshot : bool; safe_metadata : Safe_metadata.t }
+type model_inventory_page = { models : model_inventory_entry list }
+type credit_status_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; credit_state : credit_state; billing_state : billing_state; confirmed_at : Ptime.t option; evidence_source : credit_evidence_source; safe_evidence_code : string option }
+type credit_status_page = { endpoints : credit_status_entry list }
+type budget_window_status = { policy_key : Budget_policy_key.t; window_key : string; coverage_start : Ptime.t; coverage_end : Ptime.t; limit_usd : Usd_decimal.t; reserved_cost_usd : Usd_decimal.t; accounted_cost_usd : Usd_decimal.t; available_usd : Usd_decimal.t; retry_after_seconds : int64 option }
+type budget_status = { active_at : Ptime.t; generation_id : Budget_generation_id.t; manifest_digest : Sha256_digest.t; stream_high_water_mark : Budget_stream_id.t; windows : budget_window_status list }
+type spend_group_key = { operation_kind : operation_kind option; provider : Provider_id.t option; model : Model_selector.t option }
+type spend_bucket = { group : spend_group_key; known_actual_cost_usd : Usd_decimal.t; exact_operation_count : int64; unknown_operation_count : int64; completeness : cost_completeness }
+type spend_summary = { start_time : Ptime.t; end_time : Ptime.t; buckets : spend_bucket list }
+type query_request = Provider_status_request of provider_status_filter | Model_inventory_request of model_inventory_filter | Credit_status_request of credit_status_filter | Budget_status_request of budget_status_filter | Spend_summary_request of spend_summary_filter
+type query_envelope = { api_version : string; operation_key : Operation_key.t; context : request_context; query : query_request }
+type query_result = Provider_status_result of provider_status_page | Model_inventory_result of model_inventory_page | Credit_status_result of credit_status_page | Budget_status_result of budget_status | Spend_summary_result of spend_summary
+type query_response = { api_version : string; operation_key : Operation_key.t; query_execution_id : Query_execution_id.t; observed_at : Ptime.t; source : query_source; freshness : freshness; complete : bool; next_cursor : Query_cursor.t option; result : query_result; cost : settled_cost }

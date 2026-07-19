@@ -542,7 +542,7 @@ let instruction_to_json = function
       let level = match level with Application -> "application" | Policy -> "policy" in
       `Assoc [ ("kind", `String "parts"); ("level", `String level); ("content", `List (List.map content_to_json content)) ]
 
-let tool_to_json tool =
+let tool_to_json (tool : function_tool) =
   let kind = match tool.kind with Function -> "function" | Provider -> "provider" | Remote_mcp -> "remote_mcp" in
   let fields = [
     ("kind", `String kind); ("name", `String (Tool_name.to_string tool.name)); ("description", `String tool.description);
@@ -550,7 +550,7 @@ let tool_to_json tool =
   ] in
   `Assoc (match tool.output_schema with None -> fields | Some schema -> ("output_schema", schema) :: fields)
 
-let validate_request_schema_objects request =
+let validate_request_schema_objects (request : request) =
   let validate_tool tool =
     let* _ = json_object "tool input_schema" tool.input_schema in
     match tool.output_schema with
@@ -573,7 +573,7 @@ let policy_to_json policy =
   | Required -> `Assoc [ ("mode", `String "required"); ("parallel", `Bool policy.parallel) ]
   | Named name -> `Assoc [ ("mode", `String "named"); ("name", `String (Tool_name.to_string name)); ("parallel", `Bool policy.parallel) ]
 
-let context_to_json context =
+let context_to_json (context : request_context) =
   `Assoc (
     option_field "tenant" (fun value -> `String (Tenant_id.to_string value)) context.tenant
     @ option_field "project" (fun value -> `String (Project_id.to_string value)) context.project
@@ -588,7 +588,7 @@ let output_to_json output =
         `Assoc ([ ("kind", `String "json_schema"); ("name", `String name); ("schema", schema); ("strict", `Bool strict) ] @ option_field "description" (fun value -> `String value) description) in
   `Assoc ([ ("format", format) ] @ option_field "max_tokens" (fun value -> `Int value) output.max_tokens)
 
-let sampling_to_json sampling =
+let sampling_to_json (sampling : sampling) =
   `Assoc (
     option_field "temperature" (fun value -> `Float value) sampling.temperature
     @ option_field "top_p" (fun value -> `Float value) sampling.top_p
@@ -598,7 +598,7 @@ let sampling_to_json sampling =
     @ option_field "frequency_penalty" (fun value -> `Float value) sampling.frequency_penalty
     @ option_field "stop_sequences" (fun value -> `List (List.map (fun item -> `String item) value)) sampling.stop_sequences)
 
-let reasoning_to_json reasoning =
+let reasoning_to_json (reasoning : reasoning) =
   let mode = match reasoning.mode with Provider_default -> "provider_default" | Reasoning_disabled -> "disabled" | Adaptive -> "adaptive" | Reasoning_enabled -> "enabled" in
   let effort = match reasoning.effort with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Maximum -> "maximum" in
   let summary = match reasoning.summary with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed" in
@@ -607,7 +607,7 @@ let reasoning_to_json reasoning =
 let provider_state_to_json (state : provider_state) =
   `Assoc [ ("kind", `String "provider_state"); ("provider", `String (Provider_id.to_string state.provider)); ("endpoint_family", `String (Endpoint_family.to_string state.endpoint_family)); ("media_type", `String state.media_type); ("opaque", `String state.opaque) ]
 
-let continuation_to_json continuation =
+let continuation_to_json (continuation : continuation) =
   `Assoc (
     [ ("handle", `String (Continuation_handle.to_string continuation.handle)); ("pinned", `Bool continuation.pinned) ]
     @ option_field "endpoint_id" (fun value -> `String (Endpoint_id.to_string value)) continuation.endpoint_id
@@ -643,7 +643,7 @@ let service_to_json service =
   let fields = match service.actual with None -> fields | Some value -> ("actual", `String (service_class_to_string value)) :: fields in
   `Assoc (match service.provider_value with None -> fields | Some value -> ("provider_value", `String value) :: fields)
 
-let usage_to_json usage =
+let usage_to_json (usage : usage) =
   `Assoc ([
     ("input_tokens", `Intlit (Int64.to_string usage.input_tokens));
     ("output_tokens", `Intlit (Int64.to_string usage.output_tokens));
@@ -652,14 +652,14 @@ let usage_to_json usage =
     ("cache_write_tokens", `Intlit (Int64.to_string usage.cache_write_tokens));
   ] @ option_field "provider_raw" (fun value -> `Assoc value) usage.provider_raw)
 
-let route_to_json route = `Assoc (
+let route_to_json (route : route) = `Assoc (
   option_field "route_id" (fun value -> `String (Route_id.to_string value)) route.route_id
   @ option_field "endpoint_id" (fun value -> `String (Endpoint_id.to_string value)) route.endpoint_id
   @ option_field "api_family" (fun value -> `String (Api_family.to_string value)) route.api_family
   @ option_field "requested_model" (fun value -> `String (Model_selector.to_string value)) route.requested_model
   @ option_field "resolved_model" (fun value -> `String (Resolved_model_id.to_string value)) route.resolved_model)
 
-let cost_to_json cost =
+let cost_to_json (cost : cost) =
   let status = function Cost_known -> "known" | Cost_unknown -> "unknown" in
   `Assoc
     ([ ("currency", `String cost.currency);
@@ -668,21 +668,21 @@ let cost_to_json cost =
        ("method", `String cost.method_); ("catalog_version", `String (Cost_catalog_version.to_string cost.catalog_version)) ]
     @ option_field "cost_status" (fun value -> `String (status value)) cost.status)
 
-let provider_to_json provider = `Assoc (
+let provider_to_json (provider : provider) = `Assoc (
   option_field "response_id" (fun value -> `String (Provider_response_id.to_string value)) provider.response_id
   @ option_field "request_id" (fun value -> `String (Provider_request_id.to_string value)) provider.request_id
   @ option_field "generation_id" (fun value -> `String (Provider_generation_id.to_string value)) provider.generation_id
   @ option_field "finish_reason" (fun value -> `String value) provider.finish_reason
   @ if provider.raw = [] then [] else [ ("raw", `Assoc provider.raw) ])
 
-let diagnostic_to_json diagnostic =
+let diagnostic_to_json (diagnostic : diagnostic) =
   let severity = match diagnostic.severity with Info -> "info" | Warning -> "warning" | Diagnostic_error -> "error" in
   `Assoc ([ ("code", `String (Diagnostic_code.to_string diagnostic.code)); ("message", `String diagnostic.message); ("severity", `String severity) ] @ option_field "path" (fun value -> `String value) diagnostic.path @ option_field "details" (fun value -> `Assoc (List.map (fun (key, text) -> (key, `String text)) value)) diagnostic.details)
 
 let metadata_to_json (metadata : response_metadata) =
   `Assoc (option_field "operation_id" (fun value -> `String (Operation_id.to_string value)) metadata.operation_id)
 
-let response_metadata response =
+let response_metadata (response : response) =
   match response.operation_id, response.metadata.operation_id with
   | None, None -> Ok { operation_id = None }
   | Some operation_id, None -> Ok { operation_id = Some operation_id }

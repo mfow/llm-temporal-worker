@@ -34,3 +34,30 @@ module Blob_digest = Make ()
 module Diagnostic_code = Make ()
 module Cost_catalog_version = Make ()
 module Temporal_task_queue = Make ()
+module Query_execution_id = Make ()
+module Budget_policy_key = Make ()
+module Budget_generation_id = Make ()
+
+module Checkpoint = struct
+  type t = string
+  let of_string value = value
+  let to_string value = value
+end
+
+module Query_cursor = struct
+  type t = string
+  let of_string value = value
+  let to_string value = value
+end
+
+module Budget_stream_id = struct
+  type t = string
+  let of_string value = value
+  let to_string value = value
+end
+
+module Sha256_digest = struct
+  type t = string
+  let of_hex value = value
+  let to_hex value = value
+end
