@@ -96,12 +96,17 @@ func TestServerNilAndDuplicateStartErrors(t *testing.T) {
 		t.Fatalf("nil server Shutdown() error = %v", err)
 	}
 
-	server, err := httpserver.New(httpserver.Options{Address: "127.0.0.1:0"})
+	preStartServer, err := httpserver.New(httpserver.Options{Address: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.Shutdown(t.Context()); err != nil {
+	if err := preStartServer.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown before Start() error = %v", err)
+	}
+
+	server, err := httpserver.New(httpserver.Options{Address: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := server.Start(); err != nil {
 		if strings.Contains(err.Error(), "operation not permitted") {
