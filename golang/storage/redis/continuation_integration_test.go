@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -15,17 +14,9 @@ import (
 )
 
 func TestLiveRedisContinuationConformance(t *testing.T) {
-	address := os.Getenv("LLMTW_REDIS_ADDR")
-	if address == "" {
-		t.Skip("set LLMTW_REDIS_ADDR to run the pinned live Redis gate")
-	}
-	client := redisclient.NewClient(&redisclient.Options{Addr: address})
-	t.Cleanup(func() { _ = client.Close() })
+	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		t.Fatalf("Redis ping: %v", err)
-	}
 
 	now := time.Now().UTC()
 	keys := KeyOptions{
