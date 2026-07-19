@@ -3,14 +3,17 @@
 The provider-control domain (`golang/control`) is the boundary between an
 adapter observation and the durable PostgreSQL projections described in the
 [control-plane design](../architecture/postgresql-state-cache-and-control-plane.md#provider-status-credit-state-and-inventory).
-It is intentionally independent of provider SDKs and database clients.
+It is intentionally independent of provider SDKs and database clients. The
+PostgreSQL hand-off is implemented by `storage/postgres.ProviderStatusRepository`
+and `storage/postgres.InventoryRepository`; provider adapters and query
+Activities remain separate integration layers.
 
-This package is the normalization and projection-invariant slice of Task 13.
-It does not open a database, append an event, update a PostgreSQL projection,
-call a provider management API, or register a query Activity. Those durable
-repositories and adapters are a follow-up Task 13/14 change. Keeping that
-boundary explicit prevents an in-memory `RouteStatus` or `InventorySnapshot`
-from being mistaken for persisted production state.
+This package remains the normalization and projection-invariant slice of Task
+13. The domain package itself does not open a database, call a provider
+management API, or register a query Activity. The PostgreSQL repositories
+described below are the separate durable boundary; keeping that boundary
+explicit prevents an in-memory `RouteStatus` or `InventorySnapshot` from being
+mistaken for persisted production state.
 
 ## Status and credit
 
@@ -48,8 +51,24 @@ silently presenting a fabricated current result.
 
 ## Persistence hand-off
 
-The future PostgreSQL repository should consume `StatusEvent` values in one
-transaction: append the event and update the route current projection, then
-persist `InventorySnapshot` rows and their bounded model rows. The domain
-package supplies validation, safe fields, deterministic digests, and sticky
-incident rules; it does not claim that this hand-off is implemented yet.
+`ProviderStatusRepository.PersistStatusEvent` consumes a validated
+`StatusEvent` in one transaction. It appends the event (with its deterministic
+digest as an idempotency key), takes a transaction-scoped advisory lock for the
+configuration/route identity (including when the projection row does not yet
+exist), locks the route projection, applies the domain sticky-incident rules,
+and commits the current projection. Stale observations
+remain in the append-only ledger but do not replace the current projection.
+`GetRouteStatus` reads only the projection and never returns raw provider
+response data.
+
+`InventoryRepository.PersistSnapshot` validates the deterministic inventory
+digest, writes one immutable snapshot and all normalized model rows in one
+transaction, and treats a repeated observation/digest as an idempotent replay.
+Continuation cursors are envelope-encrypted with authenticated context bound
+to the configuration, endpoint account, snapshot identity, and inventory
+digest; plaintext cursors are never stored. `GetSnapshot` revalidates the
+loaded rows and `OpenCursor` authenticates the cursor before returning it.
+
+The repositories do not register provider management adapters or a query
+Activity. Those runtime/query integrations remain explicit follow-up work,
+and discovered models remain informational rather than routable.
