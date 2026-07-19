@@ -343,14 +343,7 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 }
 
 func compatibilityActualMicroUSD(exact pricing.USD) (pricing.MicroUSD, error) {
-	actual, err := pricing.MicroFromUSD(exact)
-	if err != nil {
-		return 0, err
-	}
-	if actual == 0 && !exact.IsZero() {
-		return 1, nil
-	}
-	return actual, nil
+	return pricing.CeilMicroFromUSD(exact)
 }
 
 func operationIdentity(request llm.Request, digest [32]byte) (string, string) {

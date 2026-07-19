@@ -51,6 +51,10 @@ The exact Go pricing and budget contracts now use the same **NUMERIC(38,18)**
 shape as the durable ledger, providing 18 fractional digits and 20 whole-dollar
 digits. Redis compatibility materialization remains an explicit boundary and
 does not define the public money representation.
+When an exact provider-reported amount crosses that boundary, positive
+fractional microUSD is rounded up (ceiling) so integer admission accounting
+cannot undercharge; exact zero remains zero. Provider JSON number exponents are
+normalized into the same exact USD representation before this materialization.
 
 ## Price catalog
 

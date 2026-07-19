@@ -279,12 +279,9 @@ func costMicroUSD(cost llm.Cost) (int64, error) {
 	if cost.ActualCostUSD == nil {
 		return 0, fmt.Errorf("actual cost is unknown")
 	}
-	micro, err := pricing.MicroFromUSD(*cost.ActualCostUSD)
+	micro, err := pricing.CeilMicroFromUSD(*cost.ActualCostUSD)
 	if err != nil {
 		return 0, err
-	}
-	if micro == 0 && !cost.ActualCostUSD.IsZero() {
-		return 1, nil
 	}
 	return int64(micro), nil
 }

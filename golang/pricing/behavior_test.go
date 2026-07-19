@@ -205,6 +205,22 @@ func TestLegacyMoneyConversionsUseExplicitFloorAndSafeBounds(t *testing.T) {
 	if _, err := MicroFromUSD(MustUSD("9007199254.740992000000000000")); err == nil {
 		t.Fatal("USD above Redis-safe compatibility range converted successfully")
 	}
+	for _, test := range []struct {
+		usd  string
+		want MicroUSD
+	}{
+		{"0.000001000000000001", 2},
+		{"0.000000000000000001", 1},
+		{"9007199254.740991", RedisSafeLimit},
+	} {
+		got, err := CeilMicroFromUSD(MustUSD(test.usd))
+		if err != nil || got != test.want {
+			t.Errorf("CeilMicroFromUSD(%s) = %d, %v; want %d", test.usd, got, err, test.want)
+		}
+	}
+	if _, err := CeilMicroFromUSD(MustUSD("9007199254.740991000001000000")); err == nil {
+		t.Fatal("CeilMicroFromUSD permitted a value above the Redis-safe ceiling")
+	}
 }
 
 func TestUSDBoundariesValidateYAMLAndUnderflow(t *testing.T) {

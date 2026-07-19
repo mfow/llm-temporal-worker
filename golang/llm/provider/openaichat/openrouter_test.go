@@ -74,6 +74,16 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 	}
 }
 
+func TestParseDecimalUSDAcceptsExponentForm(t *testing.T) {
+	amount, err := parseDecimalUSD(json.RawMessage(`1.23e-7`), "openrouter_cost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := amount.String(); got != "0.000000123000000000" {
+		t.Fatalf("exponent cost = %s, want 0.000000123000000000", got)
+	}
+}
+
 func TestOpenRouterRejectsCallerProviderOverride(t *testing.T) {
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""}, ProviderOrder: []string{"ProviderA"}, RequireParameters: true})
 	if err != nil {

@@ -12,8 +12,8 @@ func TestCompatibilityActualMicroUSDPreservesExactRecoveredCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compatibilityActualMicroUSD() = %v", err)
 	}
-	if actual != 2_000_000 {
-		t.Fatalf("recovered exact cost = %d, want 2000000", actual)
+	if actual != 2_000_001 {
+		t.Fatalf("recovered exact cost = %d, want 2000001 (ceil materialization)", actual)
 	}
 
 	subMicro := pricing.MustUSD("0.000000000000000001")

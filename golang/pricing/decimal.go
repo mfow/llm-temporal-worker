@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -33,10 +34,24 @@ func ParseUSD(value string) (USD, error) {
 	if value == "" || strings.TrimSpace(value) != value || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
 		return USD{}, fmt.Errorf("USD must be a non-negative decimal string")
 	}
-	if strings.Count(value, ".") > 1 || value == "." {
+	mantissa := value
+	exponent := int64(0)
+	if index := strings.IndexAny(value, "eE"); index >= 0 {
+		mantissa = value[:index]
+		exponentText := value[index+1:]
+		if exponentText == "" {
+			return USD{}, fmt.Errorf("USD %q has an invalid exponent", value)
+		}
+		parsed, err := strconv.ParseInt(exponentText, 10, 64)
+		if err != nil {
+			return USD{}, fmt.Errorf("USD %q has an invalid exponent", value)
+		}
+		exponent = parsed
+	}
+	if strings.Count(mantissa, ".") > 1 || mantissa == "." {
 		return USD{}, fmt.Errorf("USD %q is invalid", value)
 	}
-	parts := strings.SplitN(value, ".", 2)
+	parts := strings.SplitN(mantissa, ".", 2)
 	whole, fraction := parts[0], ""
 	if len(parts) == 2 {
 		fraction = parts[1]
@@ -44,7 +59,7 @@ func ParseUSD(value string) (USD, error) {
 	if whole == "" || (len(parts) == 2 && fraction == "") {
 		return USD{}, fmt.Errorf("USD %q is invalid", value)
 	}
-	if len(fraction) > USDScale || len(whole) > usdWholeDigits {
+	if len(whole) > 1024 || len(fraction) > 1024 {
 		return USD{}, fmt.Errorf("USD %q exceeds NUMERIC(38,18)", value)
 	}
 	for _, character := range whole + fraction {
@@ -52,19 +67,34 @@ func ParseUSD(value string) (USD, error) {
 			return USD{}, fmt.Errorf("USD %q contains a non-digit", value)
 		}
 	}
-	if len(whole) == usdWholeDigits && strings.TrimLeft(whole, "0") != "" {
-		// A 20-digit whole part is valid only if it remains within the maximum
-		// representable NUMERIC(38,18) value. The scaled integer check below
-		// handles the fractional boundary exactly.
-	}
 	digits := strings.TrimLeft(whole+fraction, "0")
 	if digits == "" {
-		digits = "0"
+		return USD{}, nil
 	}
-	digits += strings.Repeat("0", USDScale-len(fraction))
-	units, ok := new(big.Int).SetString(digits, 10)
+	coefficient, ok := new(big.Int).SetString(digits, 10)
 	if !ok {
 		return USD{}, fmt.Errorf("USD %q cannot be parsed", value)
+	}
+	scale := int64(len(fraction)) - exponent
+	fixedShift := int64(USDScale) - scale
+	units := new(big.Int)
+	if fixedShift >= 0 {
+		if fixedShift > 1024 {
+			return USD{}, fmt.Errorf("USD %q exceeds NUMERIC(38,18)", value)
+		}
+		units.Mul(coefficient, new(big.Int).Exp(big.NewInt(10), big.NewInt(fixedShift), nil))
+	} else {
+		divisorShift := -fixedShift
+		if divisorShift > 1024 {
+			return USD{}, fmt.Errorf("USD %q has more than 18 fractional digits", value)
+		}
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(divisorShift), nil)
+		quotient, remainder := new(big.Int), new(big.Int)
+		quotient.QuoRem(coefficient, divisor, remainder)
+		if remainder.Sign() != 0 {
+			return USD{}, fmt.Errorf("USD %q has more than 18 fractional digits", value)
+		}
+		units.Set(quotient)
 	}
 	max := new(big.Int).Exp(big.NewInt(10), big.NewInt(38), nil)
 	max.Sub(max, big.NewInt(1))

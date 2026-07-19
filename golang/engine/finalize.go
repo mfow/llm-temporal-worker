@@ -98,7 +98,7 @@ func actualCost(entry pricing.Entry, response llm.Response) (pricing.Cost, error
 		if err := response.Cost.ActualCostUSD.Validate(); err != nil {
 			return pricing.Cost{}, fmt.Errorf("provider-reported USD cost is invalid: %w", err)
 		}
-		legacy, err := pricing.MicroFromUSD(*response.Cost.ActualCostUSD)
+		legacy, err := pricing.CeilMicroFromUSD(*response.Cost.ActualCostUSD)
 		if err != nil {
 			return pricing.Cost{}, err
 		}
