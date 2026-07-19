@@ -90,23 +90,31 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        library=llmtw_admission_v1
-        version=admission_v1
-        source=/opt/llmtw/functions/admission.lua
-        if redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
-          echo "Redis Function $${library} already exists; leaving it unchanged"
-          exit 0
-        fi
-        {
-          printf '%s\n' "#!lua name=$${library}"
-          printf '%s\n' "redis.register_function('$${version}', function(KEYS, ARGV)"
-          cat "$${source}"
-          printf '\nend)\n'
-        } | redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" -x FUNCTION LOAD
+        load_function() {
+          library="$${1}"
+          version="$${2}"
+          source="$${3}"
+          if redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" --raw FUNCTION LIST LIBRARYNAME "$${library}" | grep -Fxq "$${library}"; then
+            echo "Redis Function $${library} already exists; leaving it unchanged"
+            return 0
+          fi
+          {
+            printf '%s\n' "#!lua name=$${library}"
+            printf '%s\n' "redis.register_function('$${version}', function(KEYS, ARGV)"
+            cat "$${source}"
+            printf '\nend)\n'
+          } | redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" -x FUNCTION LOAD
+        }
+        load_function llmtw_admission_v1 admission_v1 /opt/llmtw/functions/admission.lua
+        load_function llmtw_throttle_v1 throttle_v1 /opt/llmtw/functions/throttle.lua
     volumes:
       - type: bind
         source: ./storage/redis/functions/admission.lua
         target: /opt/llmtw/functions/admission.lua
+        read_only: true
+      - type: bind
+        source: ./storage/redis/functions/throttle.lua
+        target: /opt/llmtw/functions/throttle.lua
         read_only: true
 
   provider-mock:

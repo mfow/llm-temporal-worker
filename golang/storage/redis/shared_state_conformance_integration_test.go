@@ -251,8 +251,10 @@ func openLiveRedis(t *testing.T) *redisclient.Client {
 	}
 	client := openLiveRedisAt(t, address)
 	if os.Getenv("LLMTW_REDIS_TEST_PROVISION") == "1" {
-		if err := client.FunctionLoad(context.Background(), AdmissionFunctionSource()).Err(); err != nil && !strings.Contains(err.Error(), "already exists") {
-			t.Fatal("could not provision the isolated Redis Function")
+		for _, source := range []string{AdmissionFunctionSource(), ThrottleFunctionSource()} {
+			if err := client.FunctionLoad(context.Background(), source).Err(); err != nil && !strings.Contains(err.Error(), "already exists") {
+				t.Fatal("could not provision the isolated Redis Function")
+			}
 		}
 	}
 	return client
