@@ -62,6 +62,8 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		{entry.Prices.OutputPerMillion, outputTokens, 1_000_000, "output"},
 		{entry.Prices.ReasoningPerMillion, reasoningTokens, 1_000_000, "reasoning"},
 		{entry.Prices.CacheWritePerMillion, cacheWrite, 1_000_000, "cache_write"},
+		// PerRequest is already an amount in USD for this invocation. It is
+		// not quoted per million units like the token components.
 		{entry.Prices.PerRequest, 1, 1, "per_request"},
 	}
 	totalUSD := pricing.MustUSD("0")

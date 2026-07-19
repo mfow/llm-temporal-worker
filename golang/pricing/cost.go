@@ -14,6 +14,9 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 		{entry.Prices.CacheReadPerMillion, usage.CacheReadTokens, 1_000_000, "cache_read"},
 		{entry.Prices.CacheWritePerMillion, usage.CacheWriteTokens, 1_000_000, "cache_write"},
 		{entry.Prices.ReasoningPerMillion, usage.ReasoningTokens, 1_000_000, "reasoning"},
+		// PerRequest is an absolute USD charge for one invocation, not a
+		// per-million-unit price. Keep its denominator at one so a catalog
+		// value such as 0.10 is charged as ten cents.
 		{entry.Prices.PerRequest, 1, 1, "per_request"},
 	}
 	totalUSD := MustUSD("0")

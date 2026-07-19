@@ -32,14 +32,16 @@ type UnitPrices struct {
 	CacheReadPerMillion   DecimalUSD
 	CacheWritePerMillion  DecimalUSD
 	ReasoningPerMillion   DecimalUSD
-	PerRequest            DecimalUSD
+	PerRequest            DecimalUSD // absolute USD, charged once per request
 }
 ```
 
-Every positive component is multiplied with integer usage and rounded up only
-at the fixed 18-digit USD boundary. Components are summed with checked exact
-arithmetic. Values smaller than one microUSD remain representable. A nil USD
-pointer means unknown; a non-nil zero value means known free.
+Token components are multiplied with integer usage and divided by 1,000,000;
+the fixed per-request component is added once as an absolute USD amount. Each
+component is rounded up only at the fixed 18-digit USD boundary, then summed
+with checked exact arithmetic. Values smaller than one microUSD remain
+representable. A nil USD pointer means unknown; a non-nil zero value means
+known free.
 
 Redis Lua numbers are exact only within their integer-safe range. Configuration
 compilation rejects any single limit, bucket total, reservation, or possible

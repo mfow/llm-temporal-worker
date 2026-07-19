@@ -98,6 +98,20 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 	}
 }
 
+func TestCostFromUsageKeepsTokenPricesPerMillion(t *testing.T) {
+	entry := Entry{Prices: UnitPrices{
+		InputPerMillion: MustDecimalUSD("2"),
+		PerRequest:      MustDecimalUSD("0.10"),
+	}}
+	cost, err := CostFromUsage(entry, Usage{InputTokens: 500_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cost.USD.String(), "1.100000000000000000"; got != want {
+		t.Fatalf("token plus per-request cost = %s, want %s", got, want)
+	}
+}
+
 func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
 	valid := Entry{
 		Provider:     "provider",
