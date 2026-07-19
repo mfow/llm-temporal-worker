@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -201,6 +202,40 @@ func baseRequest(operationKey string) llm.Request {
 
 func successfulResponse() llm.Response {
 	return llm.Response{Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "world"}}}}, Usage: llm.Usage{OutputTokens: 1}, Provider: llm.ProviderFacts{RequestID: "provider-request-1"}}
+}
+
+func TestLoadContinuationRequiresRequestTenant(t *testing.T) {
+	harness := newHarness(t, &fakeAdapter{name: "continuation-tenant", response: successfulResponse()})
+	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{8}, 16)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.NewContinuationStore(memory.ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return harness.clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness.engine.dependencies.Continuations = store
+	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	_, digest, err := state.CanonicalTranscript(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant-1", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: harness.clock.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := baseRequest("tenantless-continuation")
+	request.Context.Tenant = ""
+	request.Continuation = &llm.Continuation{Handle: handle.String()}
+	if _, _, _, err := harness.engine.loadContinuation(context.Background(), request, harness.clock); err == nil {
+		t.Fatal("tenantless continuation request succeeded, want error")
+	}
+
+	request.Context.Tenant = "tenant-1"
+	if _, _, _, err := harness.engine.loadContinuation(context.Background(), request, harness.clock); err != nil {
+		t.Fatalf("tenant-bound continuation request failed: %v", err)
+	}
 }
 
 func TestGenerateDefaultsOmittedServiceClassToStandard(t *testing.T) {
