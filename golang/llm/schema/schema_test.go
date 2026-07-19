@@ -86,7 +86,11 @@ func TestSchemaInstanceRejectsInvalidJSON(t *testing.T) {
 }
 
 func TestPublicAPISchemasCompileLocally(t *testing.T) {
-	for _, name := range []string{"generate-request.schema.json", "generate-response.schema.json"} {
+	for _, name := range []string{
+		"generate-request.schema.json", "generate-response.schema.json",
+		"compact-request.schema.json", "compact-response.schema.json",
+		"query-request.schema.json", "query-response.schema.json",
+	} {
 		data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
 		if err != nil {
 			t.Fatal(err)

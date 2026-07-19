@@ -4,284 +4,93 @@
   "title": "llm.temporal/v1 GenerateRequest",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "api_version",
-    "operation_key",
-    "model",
-    "service_class_fallbacks",
-    "portability",
-    "instructions",
-    "input",
-    "tools",
-    "tool_policy",
-    "continuation",
-    "extensions"
-  ],
+  "required": ["api_version", "operation_key", "context", "append"],
   "properties": {
     "api_version": {"const": "llm.temporal/v1"},
     "operation_key": {"type": "string", "minLength": 1, "maxLength": 256},
     "context": {"$ref": "#/$defs/context"},
-    "model": {"type": "string", "minLength": 1, "maxLength": 256},
-    "service_class": {"enum": ["economy", "standard", "priority"], "default": "standard"},
-    "service_class_fallbacks": {
-      "type": "array",
-      "uniqueItems": true,
-      "items": {"enum": ["economy", "standard", "priority"]}
-    },
-    "portability": {"enum": ["strict", "best_effort"], "default": "strict"},
-    "instructions": {"type": "array", "items": {"$ref": "#/$defs/instruction"}},
-    "input": {"type": "array", "items": {"$ref": "#/$defs/item"}},
-    "tools": {"type": "array", "items": {"$ref": "#/$defs/tool"}},
-    "tool_policy": {"$ref": "#/$defs/tool_policy"},
-    "output": {"$ref": "#/$defs/output"},
-    "sampling": {"$ref": "#/$defs/sampling"},
-    "reasoning": {"$ref": "#/$defs/reasoning"},
-    "continuation": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/continuation"}]},
-    "extensions": {"type": "object", "additionalProperties": true}
+    "parent": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+    "append": {"type": "array", "items": {"$ref": "#/$defs/item"}, "maxItems": 10000},
+    "settings_patch": {"$ref": "#/$defs/settings_patch"},
+    "cache": {"$ref": "#/$defs/cache"}
   },
   "$defs": {
     "context": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
+      "required": ["tenant", "project", "actor"],
       "properties": {
-        "tenant": {"type": "string"},
-        "project": {"type": "string"},
-        "actor": {"type": "string"},
-        "tags": {"type": "object", "additionalProperties": {"type": "string"}}
+        "tenant": {"type": "string", "minLength": 1, "maxLength": 256},
+        "project": {"type": "string", "minLength": 1, "maxLength": 256},
+        "actor": {"type": "string", "minLength": 1, "maxLength": 256}
       }
     },
+    "cache": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_age_seconds"],
+      "properties": {
+        "max_age_seconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
+        "variant": {"type": "integer", "minimum": 0, "maximum": 2147483647, "default": 0}
+      }
+    },
+    "set_or_clear": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {}}},
+        {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}
+      ]
+    },
+    "settings_patch": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "model": {"$ref": "#/$defs/model_patch"},
+        "service_class": {"$ref": "#/$defs/service_patch"},
+        "service_class_fallbacks": {"$ref": "#/$defs/service_list_patch"},
+        "portability": {"$ref": "#/$defs/portability_patch"},
+        "instructions": {"$ref": "#/$defs/instruction_list_patch"},
+        "tools": {"$ref": "#/$defs/tool_list_patch"},
+        "tool_policy": {"$ref": "#/$defs/tool_policy_patch"},
+        "output": {"$ref": "#/$defs/output_patch"},
+        "temperature": {"$ref": "#/$defs/temperature_patch"},
+        "reasoning_effort": {"$ref": "#/$defs/reasoning_effort_patch"},
+        "reasoning_summary": {"$ref": "#/$defs/reasoning_summary_patch"},
+        "compaction_policy": {"$ref": "#/$defs/compaction_patch"},
+        "extensions": {"$ref": "#/$defs/extensions_patch"}
+      }
+    },
+    "model_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "string", "minLength": 1, "maxLength": 256}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "service_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"enum": ["economy", "standard", "priority"]}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "service_list_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "array", "uniqueItems": true, "items": {"enum": ["economy", "standard", "priority"]}}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "portability_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"enum": ["strict", "best_effort"]}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "instruction_list_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "array", "items": {"$ref": "#/$defs/instruction"}}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "tool_list_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "array", "items": {"$ref": "#/$defs/tool"}}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "tool_policy_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"$ref": "#/$defs/tool_policy"}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "output_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"$ref": "#/$defs/output"}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "temperature_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "number", "minimum": 0}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "reasoning_effort_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"enum": ["provider_default", "minimal", "low", "medium", "high", "maximum"]}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "reasoning_summary_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"enum": ["provider_default", "none", "auto", "concise", "detailed"]}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "compaction_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "object", "additionalProperties": false}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
+    "extensions_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "object"}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
     "instruction": {
       "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "text"],
-          "properties": {
-            "kind": {"const": "text"},
-            "level": {"enum": ["application", "policy"]},
-            "text": {"type": "string"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "content"],
-          "properties": {
-            "kind": {"const": "parts"},
-            "level": {"enum": ["application", "policy"]},
-            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}
-          }
-        }
+        {"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "text"}, "level": {"enum": ["application", "policy"]}, "text": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "content"], "properties": {"kind": {"const": "parts"}, "level": {"enum": ["application", "policy"]}, "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}}}
       ]
     },
     "item": {
       "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "actor", "content"],
-          "properties": {
-            "kind": {"const": "message"},
-            "actor": {"enum": ["human", "model"]},
-            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "id", "name", "arguments"],
-          "properties": {
-            "kind": {"const": "tool_call"},
-            "id": {"type": "string", "minLength": 1},
-            "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
-            "arguments": {"type": ["object", "array", "string", "number", "boolean", "null"]}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "call_id", "content", "is_error"],
-          "properties": {
-            "kind": {"const": "tool_result"},
-            "call_id": {"type": "string", "minLength": 1},
-            "name": {"type": "string"},
-            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}},
-            "is_error": {"type": "boolean"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
-          "properties": {
-            "kind": {"const": "provider_state"},
-            "provider": {"type": "string", "minLength": 1},
-            "endpoint_family": {"type": "string", "minLength": 1},
-            "media_type": {"type": "string", "minLength": 1},
-            "opaque": {"type": "string", "contentEncoding": "base64"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "uri"],
-          "properties": {
-            "kind": {"const": "reference"},
-            "uri": {"type": "string", "format": "uri"},
-            "metadata": {"type": "object", "additionalProperties": true}
-          }
-        }
+        {"type": "object", "additionalProperties": false, "required": ["kind", "actor", "content"], "properties": {"kind": {"const": "message"}, "actor": {"enum": ["human", "model"]}, "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "id", "name", "arguments"], "properties": {"kind": {"const": "tool_call"}, "id": {"type": "string", "minLength": 1}, "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "arguments": {}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "call_id", "content", "is_error"], "properties": {"kind": {"const": "tool_result"}, "call_id": {"type": "string", "minLength": 1}, "name": {"type": "string"}, "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}, "is_error": {"type": "boolean"}}}
       ]
     },
     "part": {
       "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "text"],
-          "properties": {"kind": {"const": "text"}, "text": {"type": "string"}}
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "media_type"],
-          "properties": {
-            "kind": {"const": "image"},
-            "url": {"type": "string", "format": "uri"},
-            "bytes": {"type": "string", "contentEncoding": "base64"},
-            "blob": {"$ref": "#/$defs/blob"},
-            "media_type": {"type": "string", "minLength": 1},
-            "detail": {"type": "string"}
-          },
-          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "media_type"],
-          "properties": {
-            "kind": {"const": "document"},
-            "url": {"type": "string", "format": "uri"},
-            "bytes": {"type": "string", "contentEncoding": "base64"},
-            "blob": {"$ref": "#/$defs/blob"},
-            "media_type": {"type": "string", "minLength": 1},
-            "title": {"type": "string"}
-          },
-          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "value"],
-          "properties": {"kind": {"const": "json"}, "value": {}}
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "text"],
-          "properties": {
-            "kind": {"const": "refusal"},
-            "text": {"type": "string"},
-            "provider_code": {"type": "string"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
-          "properties": {
-            "kind": {"const": "provider_state"},
-            "provider": {"type": "string"},
-            "endpoint_family": {"type": "string"},
-            "media_type": {"type": "string"},
-            "opaque": {"type": "string", "contentEncoding": "base64"}
-          }
-        }
+        {"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "text"}, "text": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "json"}, "value": {}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "refusal"}, "text": {"type": "string"}, "provider_code": {"type": "string"}}}
       ]
     },
-    "blob": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["digest", "byte_length", "media_type", "locator"],
-      "properties": {
-        "digest": {"type": "string", "minLength": 1},
-        "byte_length": {"type": "integer", "minimum": 0},
-        "media_type": {"type": "string", "minLength": 1},
-        "locator": {"type": "string", "minLength": 1}
-      }
-    },
-    "tool": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "description", "input_schema"],
-      "properties": {
-        "kind": {"enum": ["function", "provider", "remote_mcp"]},
-        "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
-        "description": {"type": "string"},
-        "input_schema": {"type": "object"},
-        "output_schema": {"type": "object"}
-      }
-    },
-    "tool_policy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mode", "parallel"],
-      "properties": {
-        "mode": {"enum": ["none", "auto", "required", "named"]},
-        "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
-        "parallel": {"type": "boolean"}
-      }
-    },
-    "output": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["format"],
-      "properties": {
-        "max_tokens": {"type": "integer", "minimum": 0},
-        "format": {
-          "oneOf": [
-            {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "text"}}},
-            {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "json"}}},
-            {"type": "object", "additionalProperties": false, "required": ["kind", "schema", "strict"], "properties": {"kind": {"const": "json_schema"}, "name": {"type": "string"}, "description": {"type": "string"}, "schema": {"type": "object"}, "strict": {"type": "boolean"}}}
-          ]
-        }
-      }
-    },
-    "sampling": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "temperature": {"type": "number"},
-        "top_p": {"type": "number"},
-        "top_k": {"type": "integer"},
-        "seed": {"type": "integer"},
-        "presence_penalty": {"type": "number"},
-        "frequency_penalty": {"type": "number"},
-        "stop_sequences": {"type": "array", "items": {"type": "string"}}
-      }
-    },
-    "reasoning": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "mode": {"enum": ["provider_default", "disabled", "adaptive", "enabled"]},
-        "effort": {"enum": ["provider_default", "minimal", "low", "medium", "high", "maximum"]},
-        "token_budget": {"type": "integer", "minimum": 0},
-        "summary": {"enum": ["provider_default", "none", "auto", "concise", "detailed"]}
-      }
-    },
-    "continuation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["handle", "pinned"],
-      "properties": {
-        "handle": {"type": "string", "minLength": 1},
-        "endpoint_id": {"type": "string"},
-        "model": {"type": "string"},
-        "expires_at": {"type": "string", "format": "date-time"},
-        "pinned": {"type": "boolean"},
-        "provider_state": {"type": "array", "items": {"$ref": "#/$defs/item"}}
-      }
-    }
+    "tool": {"type": "object", "additionalProperties": false, "required": ["name", "description", "input_schema"], "properties": {"kind": {"enum": ["function", "provider", "remote_mcp"]}, "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "description": {"type": "string"}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}},
+    "tool_policy": {"type": "object", "additionalProperties": false, "required": ["mode", "parallel"], "properties": {"mode": {"enum": ["none", "auto", "required", "named"]}, "name": {"type": "string"}, "parallel": {"type": "boolean"}}},
+    "output": {"type": "object", "additionalProperties": false, "required": ["format"], "properties": {"max_tokens": {"type": "integer", "minimum": 0}, "format": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["text", "json", "json_schema"]}, "name": {"type": "string"}, "description": {"type": "string"}, "schema": {"type": "object"}, "strict": {"type": "boolean"}}}}}
   }
 }

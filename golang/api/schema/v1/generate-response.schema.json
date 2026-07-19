@@ -4,242 +4,56 @@
   "title": "llm.temporal/v1 GenerateResponse",
   "type": "object",
   "additionalProperties": false,
-  "required": ["api_version", "operation_key", "status", "output", "route", "service", "usage", "cost", "provider", "diagnostics"],
+  "required": ["api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "cost"],
   "properties": {
     "api_version": {"const": "llm.temporal/v1"},
     "operation_key": {"type": "string", "minLength": 1},
-    "operation_id": {"type": "string"},
+    "operation_id": {"type": "string", "minLength": 1},
     "status": {"enum": ["completed", "tool_calls", "refused", "length", "content_filtered"]},
     "output": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "checkpoint": {"$ref": "#/$defs/checkpoint"},
+    "cache": {"$ref": "#/$defs/cache_disposition"},
     "route": {"$ref": "#/$defs/route"},
-    "service": {"$ref": "#/$defs/service"},
     "usage": {"$ref": "#/$defs/usage"},
     "cost": {"$ref": "#/$defs/cost"},
-    "provider": {"$ref": "#/$defs/provider"},
-    "continuation": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/continuation"}]},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
   },
   "$defs": {
-    "item": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "actor", "content"],
-          "properties": {
-            "kind": {"const": "message"},
-            "actor": {"enum": ["human", "model"]},
-            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "id", "name", "arguments"],
-          "properties": {
-            "kind": {"const": "tool_call"},
-            "id": {"type": "string", "minLength": 1},
-            "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
-            "arguments": {"type": ["object", "array", "string", "number", "boolean", "null"]}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "call_id", "content", "is_error"],
-          "properties": {
-            "kind": {"const": "tool_result"},
-            "call_id": {"type": "string", "minLength": 1},
-            "name": {"type": "string"},
-            "content": {"type": "array", "items": {"$ref": "#/$defs/part"}},
-            "is_error": {"type": "boolean"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
-          "properties": {
-            "kind": {"const": "provider_state"},
-            "provider": {"type": "string", "minLength": 1},
-            "endpoint_family": {"type": "string", "minLength": 1},
-            "media_type": {"type": "string", "minLength": 1},
-            "opaque": {"type": "string", "contentEncoding": "base64"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "uri"],
-          "properties": {
-            "kind": {"const": "reference"},
-            "uri": {"type": "string", "format": "uri"},
-            "metadata": {"type": "object", "additionalProperties": true}
-          }
-        }
-      ]
-    },
-    "part": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "text"],
-          "properties": {"kind": {"const": "text"}, "text": {"type": "string"}}
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "media_type"],
-          "properties": {
-            "kind": {"const": "image"},
-            "url": {"type": "string", "format": "uri"},
-            "bytes": {"type": "string", "contentEncoding": "base64"},
-            "blob": {"$ref": "#/$defs/blob"},
-            "media_type": {"type": "string", "minLength": 1},
-            "detail": {"type": "string"}
-          },
-          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "media_type"],
-          "properties": {
-            "kind": {"const": "document"},
-            "url": {"type": "string", "format": "uri"},
-            "bytes": {"type": "string", "contentEncoding": "base64"},
-            "blob": {"$ref": "#/$defs/blob"},
-            "media_type": {"type": "string", "minLength": 1},
-            "title": {"type": "string"}
-          },
-          "oneOf": [{"required": ["url"]}, {"required": ["bytes"]}, {"required": ["blob"]}]
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "value"],
-          "properties": {"kind": {"const": "json"}, "value": {}}
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "text"],
-          "properties": {
-            "kind": {"const": "refusal"},
-            "text": {"type": "string"},
-            "provider_code": {"type": "string"}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "provider", "endpoint_family", "media_type", "opaque"],
-          "properties": {
-            "kind": {"const": "provider_state"},
-            "provider": {"type": "string"},
-            "endpoint_family": {"type": "string"},
-            "media_type": {"type": "string"},
-            "opaque": {"type": "string", "contentEncoding": "base64"}
-          }
-        }
-      ]
-    },
-    "blob": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["digest", "byte_length", "media_type", "locator"],
+    "checkpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["handle", "kind", "depth"],
       "properties": {
-        "digest": {"type": "string", "minLength": 1},
-        "byte_length": {"type": "integer", "minimum": 0},
-        "media_type": {"type": "string", "minLength": 1},
-        "locator": {"type": "string", "minLength": 1}
+        "handle": {"type": "string", "minLength": 1, "maxLength": 512},
+        "parent": {"type": ["string", "null"], "maxLength": 512},
+        "kind": {"enum": ["generation", "compaction", "cache_replay"]},
+        "depth": {"type": "integer", "minimum": 0, "maximum": 2147483647}
       }
     },
-    "route": {
-      "type": "object",
-      "additionalProperties": false,
+    "cache_disposition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["disposition", "variant"],
       "properties": {
-        "route_id": {"type": "string"},
-        "endpoint_id": {"type": "string"},
-        "api_family": {"type": "string"},
-        "requested_model": {"type": "string"},
-        "resolved_model": {"type": "string"}
-      }
-    },
-    "service": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["requested", "attempted", "fallback_index"],
-      "properties": {
-        "requested": {"enum": ["economy", "standard", "priority"]},
-        "attempted": {"enum": ["economy", "standard", "priority"]},
-        "actual": {"enum": ["economy", "standard", "priority"]},
-        "provider_value": {"type": "string"},
-        "fallback_index": {"type": "integer", "minimum": 0}
-      }
-    },
-    "usage": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens"],
-      "properties": {
-        "input_tokens": {"type": "integer", "minimum": 0},
-        "output_tokens": {"type": "integer", "minimum": 0},
-        "reasoning_tokens": {"type": "integer", "minimum": 0},
-        "cache_read_tokens": {"type": "integer", "minimum": 0},
-        "cache_write_tokens": {"type": "integer", "minimum": 0},
-        "provider_raw": {"type": "object", "additionalProperties": true}
+        "disposition": {"enum": ["disabled", "miss_populated", "hit", "miss_not_populated"]},
+        "variant": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "entry_age_seconds": {"type": "integer", "minimum": 0}
       }
     },
     "cost": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["currency", "reserved_microusd", "actual_microusd", "method", "catalog_version"],
-      "properties": {
-        "cost_status": {"enum": ["known", "unknown"]},
-        "currency": {"type": "string"},
-        "reserved_microusd": {"type": "integer", "minimum": 0},
-        "actual_microusd": {"type": "integer", "minimum": 0},
-        "method": {"type": "string"},
-        "catalog_version": {"type": "string"}
-      }
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["status", "actual_cost_usd", "method"], "properties": {"status": {"const": "exact"}, "actual_cost_usd": {"type": "string", "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,18})?$"}, "method": {"enum": ["provider_reported", "catalog_usage", "control_query_zero"]}, "catalog_version": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["status", "actual_cost_usd", "unknown_reason"], "properties": {"status": {"const": "unknown"}, "actual_cost_usd": {"type": "null"}, "unknown_reason": {"enum": ["provider_did_not_report_cost", "catalog_incomplete", "state_unavailable", "ambiguous_dispatch"]}}}
+      ]
     },
-    "provider": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "response_id": {"type": "string"},
-        "request_id": {"type": "string"},
-        "generation_id": {"type": "string"},
-        "finish_reason": {"type": "string"},
-        "raw": {"type": "object", "additionalProperties": true}
-      }
+    "route": {"type": "object", "additionalProperties": false, "properties": {"route_id": {"type": "string"}, "endpoint_id": {"type": "string"}, "api_family": {"type": "string"}, "requested_model": {"type": "string"}, "resolved_model": {"type": "string"}}},
+    "usage": {"type": "object", "additionalProperties": false, "required": ["input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens"], "properties": {"input_tokens": {"type": "integer", "minimum": 0}, "output_tokens": {"type": "integer", "minimum": 0}, "reasoning_tokens": {"type": "integer", "minimum": 0}, "cache_read_tokens": {"type": "integer", "minimum": 0}, "cache_write_tokens": {"type": "integer", "minimum": 0}}},
+    "diagnostic": {"type": "object", "additionalProperties": false, "required": ["code", "severity", "message"], "properties": {"code": {"type": "string", "minLength": 1}, "severity": {"enum": ["info", "warning", "error"]}, "path": {"type": "string"}, "message": {"type": "string", "minLength": 1}}},
+    "item": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "actor", "content"], "properties": {"kind": {"const": "message"}, "actor": {"enum": ["human", "model"]}, "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "id", "name", "arguments"], "properties": {"kind": {"const": "tool_call"}, "id": {"type": "string"}, "name": {"type": "string"}, "arguments": {}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "call_id", "content", "is_error"], "properties": {"kind": {"const": "tool_result"}, "call_id": {"type": "string"}, "name": {"type": "string"}, "content": {"type": "array", "items": {"$ref": "#/$defs/part"}}, "is_error": {"type": "boolean"}}}
+      ]
     },
-    "continuation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["handle", "pinned"],
-      "properties": {
-        "handle": {"type": "string"},
-        "endpoint_id": {"type": "string"},
-        "model": {"type": "string"},
-        "expires_at": {"type": "string", "format": "date-time"},
-        "pinned": {"type": "boolean"},
-        "provider_state": {"type": "array"}
-      }
-    },
-    "diagnostic": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["code", "severity", "message"],
-      "properties": {
-        "code": {"type": "string", "minLength": 1},
-        "severity": {"enum": ["info", "warning", "error"]},
-        "path": {"type": "string"},
-        "message": {"type": "string", "minLength": 1},
-        "details": {"type": "object", "additionalProperties": {"type": "string"}}
-      }
-    }
+    "part": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "text"}, "text": {"type": "string"}}}, {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "json"}, "value": {}}}, {"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "refusal"}, "text": {"type": "string"}}}]}
   }
 }

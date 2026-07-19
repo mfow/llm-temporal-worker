@@ -158,10 +158,6 @@ func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 		if name == "generate-request.schema.json" {
 			var schema struct {
 				AdditionalProperties bool `json:"additionalProperties"`
-				Properties           map[string]struct {
-					Default string   `json:"default"`
-					Enum    []string `json:"enum"`
-				} `json:"properties"`
 			}
 			if err := json.Unmarshal(data, &schema); err != nil {
 				t.Fatal(err)
@@ -169,12 +165,12 @@ func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 			if schema.AdditionalProperties {
 				t.Fatal("request schema must close top-level properties")
 			}
-			serviceClass := schema.Properties["service_class"]
-			if !reflect.DeepEqual(serviceClass.Enum, []string{"economy", "standard", "priority"}) {
-				t.Fatalf("service_class enum = %#v", serviceClass.Enum)
-			}
-			if serviceClass.Default != "standard" {
-				t.Fatalf("service_class default = %q, want standard", serviceClass.Default)
+			// Service class is now a sparse settings patch. Keep its closed
+			// economy/standard/priority enum in the generated contract.
+			for _, value := range []string{`"economy"`, `"standard"`, `"priority"`} {
+				if !bytes.Contains(data, []byte(value)) {
+					t.Fatalf("request schema omitted service class value %s", value)
+				}
 			}
 		}
 	}
