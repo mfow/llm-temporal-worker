@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -242,6 +243,166 @@ func TestRunLayoutDigestSmoke(t *testing.T) {
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "sha256:"+manifestDigest {
 		t.Fatalf("layout-digest = %q, want %q", got, "sha256:"+manifestDigest)
+	}
+}
+
+func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDir = resolvedArtifactDir
+	digest := strings.Repeat("a", 64)
+	image := "registry.example/project@sha256:" + digest
+	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	schemaPath := releaseEvidenceSchemaPath(t)
+
+	recordArgs := []string{
+		"record",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-output", filepath.Join(artifactDir, "evidence.json"),
+		"-repository", "https://github.com/example/project",
+		"-revision", strings.Repeat("b", 40),
+		"-image-reference", image,
+		"-image-digest", "sha256:" + digest,
+	}
+	for _, name := range requiredArtifacts {
+		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
+	}
+	var stdout bytes.Buffer
+	if err := run(recordArgs, &stdout); err != nil {
+		t.Fatalf("record smoke test failed: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "release evidence recorded" {
+		t.Fatalf("record output = %q", got)
+	}
+	if info, err := os.Stat(filepath.Join(artifactDir, "evidence.json")); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0o600 {
+		t.Fatalf("evidence.json mode = %o, want 600", info.Mode().Perm())
+	}
+
+	stdout.Reset()
+	if err := run([]string{
+		"verify",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-evidence", filepath.Join(artifactDir, "evidence.json"),
+	}, &stdout); err != nil {
+		t.Fatalf("verify smoke test failed: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "release evidence verified" {
+		t.Fatalf("verify output = %q", got)
+	}
+
+	testSummary := filepath.Join(artifactDir, canonicalArtifactPaths["test_summary"])
+	data, err := os.ReadFile(testSummary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testSummary, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{
+		"verify",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-evidence", filepath.Join(artifactDir, "evidence.json"),
+	}, &stdout); err == nil || !strings.Contains(err.Error(), "sha256 does not match") {
+		t.Fatalf("tampered evidence verification error = %v, want digest mismatch", err)
+	}
+}
+
+func releaseEvidenceSchemaPath(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(file), "..", "..", "..", "docs", "release", "evidence.schema.json")
+}
+
+func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imageDigest string) {
+	t.Helper()
+	digest := strings.Repeat("c", 64)
+	artifacts := map[string]any{
+		"test_summary": gateSummary("test_summary"),
+		"race_summary": gateSummary("race_summary"),
+		"fuzz_summary": gateSummary("fuzz_summary"),
+		"fixture_manifest": map[string]any{
+			"schema_version": 1, "kind": "fixture_manifest", "status": "pass", "version": 1,
+			"fixtures": []any{map[string]any{
+				"profile": "example", "upstream_url": "https://example.invalid/contracts", "upstream_date": "2026-07-19", "manifest_sha256": digest,
+			}}, "redacted": true,
+		},
+		"redis_summary": map[string]any{
+			"schema_version": 1, "kind": "redis_summary", "status": "pass", "service": "redis", "state": "running", "health": "healthy", "redacted": true,
+		},
+		"temporal_summary": map[string]any{
+			"schema_version": 1, "kind": "temporal_summary", "status": "pass", "service": "temporal", "state": "running", "health": "healthy", "redacted": true,
+		},
+		"compose_summary": map[string]any{
+			"schema_version": 1, "kind": "compose_summary", "status": "pass", "services": []string{"redis", "temporal"}, "redacted": true,
+		},
+		"redis_log":    redactedLog("redis_log", "redis", map[string]int{"redis_ready": 1}),
+		"temporal_log": redactedLog("temporal_log", "temporal", map[string]int{"temporal_ready": 1}),
+		"compose_log":  redactedLog("compose_log", "compose", map[string]int{"redis_ready": 1, "temporal_ready": 1}),
+		"rendered_manifests": map[string]any{
+			"schema_version": 1, "kind": "rendered_manifests", "status": "pass",
+			"manifests": []any{map[string]any{"source": "compose.yaml", "sha256": digest, "bytes": 1, "objects": 1}}, "redacted": true,
+		},
+		"dependency_license": map[string]any{
+			"schema_version": 1, "kind": "dependency_license", "status": "pass", "baseline_sha256": digest,
+			"direct_modules": []any{map[string]any{"path": "github.com/example/module", "version": "v1.0.0", "license": "MIT", "source": "https://github.com/example/module"}}, "redacted": true,
+		},
+		"vulnerability_results": map[string]any{
+			"schema_version": 1, "kind": "vulnerability_results", "status": "pass",
+			"components":          map[string]string{"test": "pass", "source": "pass", "go_mod": "pass", "vulnerability": "pass"},
+			"direct_module_count": 1, "findings": []string{}, "approved_findings": []string{}, "redacted": true,
+		},
+		"sbom": map[string]any{
+			"bomFormat": "CycloneDX", "specVersion": "1.5",
+			"metadata": map[string]any{"component": map[string]any{
+				"type": "container", "properties": []any{
+					map[string]any{"name": "org.opencontainers.image.ref.name", "value": imageReference},
+					map[string]any{"name": "org.opencontainers.image.manifest.digest", "value": imageDigest},
+				},
+			}},
+		},
+		"image_scan": map[string]any{
+			"SchemaVersion": 2, "ArtifactType": "container_image", "ArtifactName": "image.oci",
+			"release_subject": map[string]any{"reference": imageReference, "digest": imageDigest},
+			"Results":         []any{map[string]any{"Vulnerabilities": []any{}}},
+		},
+	}
+	for name, value := range artifacts {
+		path := filepath.Join(directory, canonicalArtifactPaths[name])
+		if err := os.WriteFile(path, mustJSON(t, value), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+}
+
+func gateSummary(kind string) map[string]any {
+	return map[string]any{
+		"schema_version": 1, "kind": kind, "status": "pass", "output_sha256": strings.Repeat("d", 64), "output_bytes": 1, "redacted": true,
+	}
+}
+
+func redactedLog(kind, service string, events map[string]int) map[string]any {
+	lineCount := 0
+	for _, count := range events {
+		lineCount += count
+	}
+	return map[string]any{
+		"schema_version": 1, "kind": kind, "status": "pass", "service": service, "source": "docker_compose_logs", "redaction_policy": "allowlist-v1",
+		"line_count": lineCount, "input_bytes": lineCount, "event_counts": events, "redacted": true,
 	}
 }
 
