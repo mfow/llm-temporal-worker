@@ -2,6 +2,7 @@ package routing
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 )
@@ -13,7 +14,10 @@ func FuzzProviderCacheKeyForkIdentity(f *testing.F) {
 	}
 	f.Add("tenant/project", "epoch-1", "lineage", seed[:])
 	f.Fuzz(func(t *testing.T, scope, epoch, lineage string, raw []byte) {
-		if len(scope) == 0 || len(epoch) == 0 || len(lineage) == 0 || len(raw) > 128 {
+		// DeriveProviderCacheKey rejects an empty or whitespace-only tenant
+		// scope. Keep those invalid inputs out of the identity-preservation
+		// property; they are covered by the validation test below.
+		if strings.TrimSpace(scope) == "" || len(epoch) == 0 || len(lineage) == 0 || len(raw) > 128 {
 			t.Skip()
 		}
 		var parent [32]byte

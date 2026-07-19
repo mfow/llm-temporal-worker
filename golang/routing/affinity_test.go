@@ -58,6 +58,16 @@ func TestDeriveProviderCacheKeyIsStableAndDomainSeparated(t *testing.T) {
 	}
 }
 
+func TestDeriveProviderCacheKeyRejectsWhitespaceTenantScope(t *testing.T) {
+	var parent [32]byte
+	parent[0] = 1
+	for _, scope := range []string{"", " ", "\t\n"} {
+		if _, err := DeriveProviderCacheKey([]byte("secret"), scope, parent, "epoch", "lineage"); err == nil {
+			t.Fatalf("tenant scope %q was accepted", scope)
+		}
+	}
+}
+
 func TestPreferProviderCacheAffinityStaysWithinEligibleClass(t *testing.T) {
 	accountA := [32]byte{1}
 	accountB := [32]byte{2}
