@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
+	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -92,6 +93,67 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
+		})
+	}
+}
+
+func TestChatContractFixturesVerifySemanticRoundTrip(t *testing.T) {
+	for _, profile := range chatFixtureProfiles(t) {
+		t.Run(profile.id, func(t *testing.T) {
+			requestSemantic := readChatFixture(t, profile, "request.semantic.json")
+			responseSemantic := readChatFixture(t, profile, "response.semantic.json")
+			semantic, err := json.Marshal(struct {
+				Request  json.RawMessage `json:"request"`
+				Response json.RawMessage `json:"response"`
+			}{Request: requestSemantic, Response: responseSemantic})
+			if err != nil {
+				t.Fatal(err)
+			}
+			metadata := loadChatFixtureMetadata(t, profile)
+			responseWire := readChatFixture(t, profile, "response.completed.json")
+			if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+				var fixture struct {
+					Request  json.RawMessage `json:"request"`
+					Response json.RawMessage `json:"response"`
+				}
+				if err := json.Unmarshal(semantic, &fixture); err != nil {
+					return nil, err
+				}
+				var request llm.Request
+				if err := json.Unmarshal(fixture.Request, &request); err != nil {
+					return nil, err
+				}
+				normalized, err := llm.NormalizeRequest(request)
+				if err != nil {
+					return nil, err
+				}
+				serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+				if err != nil {
+					return nil, err
+				}
+				tier, err := profile.profile.providerTier(serviceClass)
+				if err != nil {
+					return nil, err
+				}
+				if _, err := lowerRequest(normalized, profile.profile, tier); err != nil {
+					return nil, err
+				}
+				var response openai.ChatCompletion
+				if err := json.Unmarshal(responseWire, &response); err != nil {
+					return nil, err
+				}
+				lifted, err := profile.profile.liftResponse(chatFixtureCall(profile, normalized, serviceClass), &response, profile.requestID)
+				if err != nil {
+					return nil, err
+				}
+				fixture.Response, err = json.Marshal(lifted)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(fixture)
+			}, metadata.GeneratedFieldExemptions); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -341,6 +403,15 @@ func loadChatFixtureResponse(t *testing.T, profile chatFixtureProfile, name stri
 		t.Fatal(err)
 	}
 	return response
+}
+
+func loadChatFixtureMetadata(t *testing.T, profile chatFixtureProfile) contracttest.Metadata {
+	t.Helper()
+	var metadata contracttest.Metadata
+	if err := yaml.Unmarshal(readChatFixture(t, profile, "metadata.yaml"), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
 }
 
 func readChatFixture(t *testing.T, profile chatFixtureProfile, name string) []byte {

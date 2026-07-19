@@ -14,6 +14,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
+	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -77,6 +78,64 @@ func TestAnthropicAWSContractFixturesMatchCurrentLoweringAndLifting(t *testing.T
 		t.Fatal(err)
 	}
 	assertCanonicalAnthropicAWSFixture(t, gotSemantic, "response.semantic.json")
+}
+
+func TestAnthropicAWSContractFixturesVerifySemanticRoundTrip(t *testing.T) {
+	profile := anthropicAWSFixtureProfile(t)
+	requestSemantic := readAnthropicAWSFixture(t, "request.semantic.json")
+	responseSemantic := readAnthropicAWSFixture(t, "response.semantic.json")
+	semantic, err := json.Marshal(struct {
+		Request  json.RawMessage `json:"request"`
+		Response json.RawMessage `json:"response"`
+	}{Request: requestSemantic, Response: responseSemantic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := loadAnthropicAWSFixtureMetadata(t)
+	responseWire := readAnthropicAWSFixture(t, "response.completed.json")
+	if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+		var fixture struct {
+			Request  json.RawMessage `json:"request"`
+			Response json.RawMessage `json:"response"`
+		}
+		if err := json.Unmarshal(semantic, &fixture); err != nil {
+			return nil, err
+		}
+		var request llm.Request
+		if err := json.Unmarshal(fixture.Request, &request); err != nil {
+			return nil, err
+		}
+		normalized, err := llm.NormalizeRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+		if err != nil {
+			return nil, err
+		}
+		tier, err := profile.providerTier(serviceClass)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := lowerRequest(normalized, profile, tier); err != nil {
+			return nil, err
+		}
+		var response anthropic.Message
+		if err := json.Unmarshal(responseWire, &response); err != nil {
+			return nil, err
+		}
+		lifted, err := profile.liftResponse(anthropicAWSFixtureCall(normalized, serviceClass), &response, "req-anthropic-aws-fixture")
+		if err != nil {
+			return nil, err
+		}
+		fixture.Response, err = json.Marshal(lifted)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(fixture)
+	}, metadata.GeneratedFieldExemptions); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAnthropicAWSContractFixtureLowersToolInputAndOutput(t *testing.T) {
@@ -284,6 +343,15 @@ func loadAnthropicAWSFixtureResponse(t *testing.T, name string) anthropic.Messag
 		t.Fatal(err)
 	}
 	return response
+}
+
+func loadAnthropicAWSFixtureMetadata(t *testing.T) contracttest.Metadata {
+	t.Helper()
+	var metadata contracttest.Metadata
+	if err := yaml.Unmarshal(readAnthropicAWSFixture(t, "metadata.yaml"), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
 }
 
 func readAnthropicAWSFixture(t *testing.T, name string) []byte {
