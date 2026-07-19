@@ -289,7 +289,11 @@ func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
 		}}
 		policy.Windows = make([]budget.Window, 0, len(policyValue.Windows))
 		for index, windowValue := range policyValue.Windows {
-			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: pricing.MicroUSD(windowValue.LimitMicroUSD)})
+			legacyLimit, err := compatibilityBudgetLimit(windowValue.LimitUSD, pricing.MicroUSD(windowValue.LimitMicroUSD))
+			if err != nil {
+				return nil, fmt.Errorf("budget policy %q window %d: %w", policyValue.ID, index, err)
+			}
+			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: legacyLimit})
 		}
 		if err := policy.Validate(value.Limits.MaxBudgetBucketsPerWindow); err != nil {
 			return nil, fmt.Errorf("budget policy %q: %w", policy.ID, err)
@@ -297,6 +301,24 @@ func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
 		policies = append(policies, policy)
 	}
 	return policies, nil
+}
+
+// compatibilityBudgetLimit materializes an exact config limit for the legacy
+// Redis admission boundary. A positive sub-micro USD limit is rounded up to
+// one micro-dollar so an exact-only budget cannot become an accidental zero
+// limit while the admission wire contract remains integer microUSD.
+func compatibilityBudgetLimit(exact pricing.USD, legacy pricing.MicroUSD) (pricing.MicroUSD, error) {
+	if exact.IsZero() {
+		return legacy, nil
+	}
+	converted, err := pricing.MicroFromUSD(exact)
+	if err != nil {
+		return 0, fmt.Errorf("exact budget limit cannot be represented at Redis boundary: %w", err)
+	}
+	if converted == 0 {
+		return 1, nil
+	}
+	return converted, nil
 }
 
 func endpointFamily(value string) provider.Family {
