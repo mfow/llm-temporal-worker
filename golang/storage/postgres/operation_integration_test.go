@@ -132,3 +132,151 @@ func TestAcceptedFailurePersistsUnknownCost(t *testing.T) {
 		t.Fatalf("accepted failure=%#v, want ambiguous with unknown cost", failed)
 	}
 }
+
+func TestOperationValidationAndRetryGuards(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	future := time.Now().UTC().Add(time.Hour)
+	invalid := []struct {
+		name    string
+		request admission.BeginRequest
+	}{
+		{name: "missing id", request: admission.BeginRequest{ScopeKey: "tenant/project", ExpiresAt: future}},
+		{name: "expired", request: admission.BeginRequest{ID: "expired", ScopeKey: "tenant/project", ExpiresAt: time.Now().UTC().Add(-time.Minute)}},
+		{name: "unsupported operation kind", request: admission.BeginRequest{ID: "unsupported", ScopeKey: "tenant/project", OperationKind: "query", ExpiresAt: future}},
+		{name: "invalid manifest json", request: admission.BeginRequest{ID: "invalid-json", ScopeKey: "tenant/project", RequestManifest: []byte(`{"model":`), ExpiresAt: future}},
+		{name: "non-object manifest", request: admission.BeginRequest{ID: "array-manifest", ScopeKey: "tenant/project", RequestManifest: []byte(`["model"]`), ExpiresAt: future}},
+		{name: "empty scope component", request: admission.BeginRequest{ID: "empty-scope", ScopeKey: "tenant\x00", ExpiresAt: future}},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := repository.Begin(ctx, test.request); err == nil {
+				t.Fatal("invalid begin request unexpectedly succeeded")
+			}
+		})
+	}
+
+	id := "operation-guards-" + time.Now().UTC().Format("20060102150405.000000000")
+	request := admission.BeginRequest{
+		ID:             id,
+		ScopeKey:       "compact-tenant",
+		RequestDigest:  admission.Digest([]byte("compact-request")),
+		ReservationUSD: pricing.MustUSD("1.25"),
+		OperationKind:  "compact",
+		ExpiresAt:      future,
+	}
+	started, err := repository.Begin(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Existing || started.Operation.State != admission.StateReserved || started.Operation.ConfigVersion != "unknown" || started.Operation.ScopeKey != request.ScopeKey {
+		t.Fatalf("begin defaults = %#v", started)
+	}
+	token := started.Operation.DispatchToken
+
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: "wrong"}); !errors.Is(err, admission.ErrInvalidToken) {
+		t.Fatalf("invalid dispatch token = %v", err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: token}); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := repository.Attempts(ctx, id)
+	if err != nil || len(attempts) != 1 || attempts[0].AttemptNumber != 1 || attempts[0].RouteID != "unknown" || attempts[0].EndpointID != "unknown" || attempts[0].Provider != "unknown" || attempts[0].Dispatch != admission.Accepted {
+		t.Fatalf("default dispatch attempt = %#v, %v", attempts, err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: token}); !errors.Is(err, admission.ErrInvalidTransition) {
+		t.Fatalf("repeated dispatch = %v", err)
+	}
+
+	if _, err := repository.Continue(ctx, admission.ContinueRequest{OperationID: id, DispatchToken: "wrong", RemainingUSD: pricing.MustUSD("0.25")}); !errors.Is(err, admission.ErrInvalidToken) {
+		t.Fatalf("invalid continue token = %v", err)
+	}
+	continued, err := repository.Continue(ctx, admission.ContinueRequest{OperationID: id, DispatchToken: token, RemainingUSD: pricing.MustUSD("0.25")})
+	if err != nil || continued.Operation.State != admission.StateReserved {
+		t.Fatalf("continue to reserved = %#v, %v", continued, err)
+	}
+
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: token, Attempt: admission.AttemptFacts{RouteID: "retry", EndpointID: "endpoint", Provider: "fixture"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkProviderPending(ctx, admission.ProviderPendingRequest{OperationID: id, DispatchToken: token, EndpointID: "endpoint"}); err == nil {
+		t.Fatal("provider pending accepted without provider operation id")
+	}
+	if err := repository.MarkProviderPending(ctx, admission.ProviderPendingRequest{OperationID: id, DispatchToken: "wrong", ProviderOperationID: "provider-1", EndpointID: "endpoint"}); !errors.Is(err, admission.ErrInvalidToken) {
+		t.Fatalf("invalid provider pending token = %v", err)
+	}
+	providerRequest := admission.ProviderPendingRequest{OperationID: id, DispatchToken: token, ProviderOperationID: "provider-1", EndpointID: "endpoint", Provider: "fixture"}
+	if err := repository.MarkProviderPending(ctx, providerRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkProviderPending(ctx, providerRequest); err != nil {
+		t.Fatalf("idempotent provider pending = %v", err)
+	}
+	providerRequest.ProviderOperationID = "provider-2"
+	if err := repository.MarkProviderPending(ctx, providerRequest); !errors.Is(err, admission.ErrOperationConflict) {
+		t.Fatalf("divergent provider pending = %v", err)
+	}
+	if providerID, err := repository.ProviderOperation(ctx, id); err != nil || providerID != "provider-1" {
+		t.Fatalf("provider operation = %q, %v", providerID, err)
+	}
+	continued, err = repository.Continue(ctx, admission.ContinueRequest{OperationID: id, DispatchToken: token, RemainingUSD: pricing.MustUSD("0.10")})
+	if err != nil || continued.Operation.State != admission.StateReserved {
+		t.Fatalf("provider pending continue = %#v, %v", continued, err)
+	}
+
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: token}); err != nil {
+		t.Fatal(err)
+	}
+	result := &state.BlobRef{Digest: admission.Digest([]byte("result")), Size: 6, Media: "application/json"}
+	if err := repository.Complete(ctx, admission.CompleteRequest{OperationID: id, DispatchToken: token, ResultRef: result, CostStatus: "invalid"}); err == nil {
+		t.Fatal("invalid completion cost status unexpectedly succeeded")
+	}
+	if err := repository.Complete(ctx, admission.CompleteRequest{OperationID: id, DispatchToken: token, ResultRef: result, CostStatus: "unknown", UnknownReason: "provider timeout"}); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := repository.Get(ctx, id)
+	if err != nil || completed.State != admission.StateCompleted || completed.ResultRef == nil || completed.ActualCostUSD != nil {
+		t.Fatalf("unknown-cost completion = %#v, %v", completed, err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: token}); !errors.Is(err, admission.ErrInvalidTransition) {
+		t.Fatalf("dispatch after completion = %v", err)
+	}
+	if _, err := repository.Continue(ctx, admission.ContinueRequest{OperationID: id, DispatchToken: token, RemainingUSD: pricing.MustUSD("0")}); !errors.Is(err, admission.ErrInvalidTransition) {
+		t.Fatalf("continue after completion = %v", err)
+	}
+}
+
+func TestRejectedFailurePersistsExactCostAndSafeReason(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	id := "operation-rejected-failure-" + time.Now().UTC().Format("20060102150405.000000000")
+	request := admission.BeginRequest{ID: id, ScopeKey: "failure/rejected", RequestDigest: admission.Digest([]byte("rejected")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	started, err := repository.Begin(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: started.Operation.DispatchToken}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Fail(ctx, admission.FailRequest{OperationID: id, DispatchToken: started.Operation.DispatchToken, Certainty: admission.Rejected, Reason: "Provider timeout: request/123"}); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := repository.Get(ctx, id)
+	if err != nil || failed.State != admission.StateDefiniteFailed || failed.ActualCostUSD == nil || failed.ActualCostUSD.Cmp(pricing.MustUSD("0")) != 0 {
+		t.Fatalf("rejected failure = %#v, %v", failed, err)
+	}
+
+	relation, err := repository.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status, method, reason string
+	if err := repository.Pool.QueryRow(ctx, "SELECT cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,'') FROM "+relation+" WHERE operation_id=$1", operationUUID(id)).Scan(&status, &method, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "exact" || method != "worker_cache_zero" || reason != "" {
+		t.Fatalf("rejected failure metadata = %q, %q, %q", status, method, reason)
+	}
+}
