@@ -72,8 +72,69 @@ func (patch SettingsPatch) Validate() error {
 			return fmt.Errorf("temperature must be finite and non-negative")
 		}
 	}
+	if patch.ServiceClass.Set != nil {
+		if _, err := llm.NormalizeServiceClass(*patch.ServiceClass.Set); err != nil {
+			return fmt.Errorf("service_class: %w", err)
+		}
+	}
+	if patch.ServiceClassFallbacks.Set != nil {
+		for index, value := range *patch.ServiceClassFallbacks.Set {
+			if _, err := llm.NormalizeServiceClass(value); err != nil {
+				return fmt.Errorf("service_class_fallbacks[%d]: %w", index, err)
+			}
+		}
+	}
+	if patch.Portability.Set != nil && !patch.Portability.Set.Valid() {
+		return fmt.Errorf("portability %q is invalid", *patch.Portability.Set)
+	}
+	if patch.ReasoningEffort.Set != nil && !validReasoningEffort(*patch.ReasoningEffort.Set) {
+		return fmt.Errorf("reasoning effort %q is invalid", *patch.ReasoningEffort.Set)
+	}
+	if patch.ReasoningSummary.Set != nil && !validReasoningSummary(*patch.ReasoningSummary.Set) {
+		return fmt.Errorf("reasoning summary %q is invalid", *patch.ReasoningSummary.Set)
+	}
+	if err := validateJSONLeaf("tool_policy", patch.ToolPolicy.Set); err != nil {
+		return err
+	}
+	if err := validateJSONLeaf("output", patch.Output.Set); err != nil {
+		return err
+	}
+	if err := validateJSONLeaf("instructions", patch.Instructions.Set); err != nil {
+		return err
+	}
+	if err := validateJSONLeaf("tools", patch.Tools.Set); err != nil {
+		return err
+	}
 	if patch.Model.Set != nil && *patch.Model.Set == "" {
 		return fmt.Errorf("model cannot be set to an empty value")
 	}
 	return nil
+}
+
+func validateJSONLeaf(name string, value any) error {
+	if value == nil {
+		return nil
+	}
+	if _, err := json.Marshal(value); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+func validReasoningEffort(value llm.ReasoningEffort) bool {
+	switch value {
+	case "", llm.ReasoningEffortProviderDefault, llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum:
+		return true
+	default:
+		return false
+	}
+}
+
+func validReasoningSummary(value llm.ReasoningSummary) bool {
+	switch value {
+	case "", llm.ReasoningSummaryProviderDefault, llm.ReasoningSummaryNone, llm.ReasoningSummaryAuto, llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
+		return true
+	default:
+		return false
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -20,10 +21,12 @@ type Checkpoint struct {
 	Project       string
 	Parent        *Handle
 	OperationKey  string
+	RequestDigest [32]byte
 	Delta         []llm.Item
 	Output        []llm.Item
 	SettingsPatch SettingsPatch
 	Depth         int32
+	ExpiresAt     time.Time
 	Snapshot      *CheckpointSnapshot
 }
 
@@ -140,17 +143,49 @@ func (graph *CheckpointGraph) put(checkpoint Checkpoint) error {
 		}
 	}
 	value := checkpoint.clone()
+	value.RequestDigest = checkpointRequestDigest(value)
 	graph.mu.Lock()
 	defer graph.mu.Unlock()
-	if _, exists := graph.checkpoints[value.Handle]; exists {
+	if existing, exists := graph.checkpoints[value.Handle]; exists {
+		if existing.RequestDigest == value.RequestDigest {
+			return nil
+		}
 		return ErrConflict
 	}
-	if previous, exists := graph.operations[value.OperationKey]; exists && previous != value.Handle {
+	if previous, exists := graph.operations[value.OperationKey]; exists {
+		existing := graph.checkpoints[previous]
+		if !existing.ExpiresAt.IsZero() && !time.Now().Before(existing.ExpiresAt) {
+			return ErrExpired
+		}
+		if previous == value.Handle && existing.RequestDigest == value.RequestDigest {
+			return nil
+		}
 		return ErrConflict
 	}
 	graph.checkpoints[value.Handle] = value
 	graph.operations[value.OperationKey] = value.Handle
 	return nil
+}
+
+func checkpointRequestDigest(checkpoint Checkpoint) [32]byte {
+	data, err := json.Marshal(struct {
+		Schema        string
+		Tenant        string
+		Project       string
+		Parent        *Handle
+		OperationKey  string
+		Delta         []llm.Item
+		Output        []llm.Item
+		SettingsPatch SettingsPatch
+	}{checkpointSchemaVersion, checkpoint.Tenant, checkpoint.Project, checkpoint.Parent, checkpoint.OperationKey, checkpoint.Delta, checkpoint.Output, checkpoint.SettingsPatch})
+	if err != nil {
+		return [32]byte{}
+	}
+	canonical, err := llm.CanonicalJSON(data)
+	if err != nil {
+		return [32]byte{}
+	}
+	return sha256.Sum256(canonical)
 }
 
 func (graph *CheckpointGraph) Get(handle Handle) (Checkpoint, error) {
@@ -185,6 +220,9 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		if checkpoint.Tenant != tenant {
 			return MaterializedState{}, ErrTenantMismatch
 		}
+		if !checkpoint.ExpiresAt.IsZero() && !time.Now().Before(checkpoint.ExpiresAt) {
+			return MaterializedState{}, ErrExpired
+		}
 		path = append(path, checkpoint)
 		if int32(len(path)) > graph.limits.MaxDepth || len(path) > graph.limits.MaxRows {
 			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit")
@@ -210,6 +248,9 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		result.Items = cloneItems(checkpoint.Snapshot.Items)
 		result.Settings = checkpoint.Snapshot.Settings.Clone()
 		result.Depth = checkpoint.Snapshot.Depth
+		if err := graph.validateMaterializedLimits(result.Items); err != nil {
+			return MaterializedState{}, err
+		}
 		start = index - 1
 		break
 	}
@@ -226,15 +267,8 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		result.Items = appendItems(result.Items, checkpoint.Delta...)
 		result.Items = appendItems(result.Items, checkpoint.Output...)
 		result.Depth = checkpoint.Depth
-		if len(result.Items) > graph.limits.MaxItems {
-			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds item limit")
-		}
-		bytes, err := canonicalItems(result.Items)
-		if err != nil {
+		if err := graph.validateMaterializedLimits(result.Items); err != nil {
 			return MaterializedState{}, err
-		}
-		if int64(len(bytes)) > graph.limits.MaxBytes {
-			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds byte limit")
 		}
 	}
 	if result.Settings.Model == "" {
@@ -248,6 +282,20 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 	result.PendingToolCalls = append([]string(nil), pending...)
 	result.Settings = result.Settings.Clone()
 	return result, nil
+}
+
+func (graph *CheckpointGraph) validateMaterializedLimits(items []llm.Item) error {
+	if len(items) > graph.limits.MaxItems {
+		return fmt.Errorf("checkpoint materialization exceeds item limit")
+	}
+	bytes, err := canonicalItems(items)
+	if err != nil {
+		return err
+	}
+	if int64(len(bytes)) > graph.limits.MaxBytes {
+		return fmt.Errorf("checkpoint materialization exceeds byte limit")
+	}
+	return nil
 }
 
 func NewCheckpointSnapshot(materialized MaterializedState) *CheckpointSnapshot {

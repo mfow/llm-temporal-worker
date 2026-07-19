@@ -121,6 +121,46 @@ func TestMaterializationCarriesEveryAncestorAndSnapshotMatchesReplay(t *testing.
 	}
 }
 
+func TestSnapshotReplayEqualsFullReplay(t *testing.T) {
+	withoutSnapshot := NewCheckpointGraph(MaterializeLimits{})
+	if err := withoutSnapshot.PutRoot(rootCheckpoint("root", "tenant-a", "op-root")); err != nil {
+		t.Fatal(err)
+	}
+	parent := childCheckpoint("one", "root", "tenant-a", "op-one", "one")
+	if err := withoutSnapshot.PutChild(parent); err != nil {
+		t.Fatal(err)
+	}
+	leaf := childCheckpoint("two", "one", "tenant-a", "op-two", "two")
+	if err := withoutSnapshot.PutChild(leaf); err != nil {
+		t.Fatal(err)
+	}
+	full, err := withoutSnapshot.Materialize("tenant-a", "two")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withSnapshot := NewCheckpointGraph(MaterializeLimits{})
+	if err := withSnapshot.PutRoot(rootCheckpoint("root", "tenant-a", "op-root")); err != nil {
+		t.Fatal(err)
+	}
+	if err := withSnapshot.PutChild(parent); err != nil {
+		t.Fatal(err)
+	}
+	snapshotLeaf := leaf
+	snapshotLeaf.Snapshot = NewCheckpointSnapshot(full)
+	snapshotLeaf.Delta = nil
+	if err := withSnapshot.PutChild(snapshotLeaf); err != nil {
+		t.Fatal(err)
+	}
+	optimized, err := withSnapshot.Materialize("tenant-a", "two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(full.Items, optimized.Items) || !reflect.DeepEqual(full.Settings, optimized.Settings) || full.Depth != optimized.Depth {
+		t.Fatalf("snapshot replay diverged: full=%#v optimized=%#v", full, optimized)
+	}
+}
+
 func TestMaterializationRejectsUnmatchedToolFrontierAndLimits(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxItems: 2})
 	root := rootCheckpoint("root", "tenant-a", "op-root")
