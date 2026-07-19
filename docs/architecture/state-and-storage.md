@@ -45,14 +45,16 @@ the operation or continuation index to resolve whether the write committed.
 Offline command/function harnesses exercise the same store ports without
 requiring a Redis daemon. `storage/conformance` then runs the same public
 admission and continuation contract against memory and the pinned live Redis
-fixture. `make redis-integration` creates one uniquely named loopback-only
-container, discovers its ephemeral port, enables the configured AOF/RDB
-persistence profile, explicitly provisions the immutable Function only inside
-that test dependency, and removes it on completion. It tests a post-mutation
-timeout resolved by a read, restart persistence, fail-closed Function/Lua
-identity mismatch, and the single configured hash slot. Failure logs pass
-through the repository redactor; the trusted master workflow runs this live
-gate while pull-request CI remains offline.
+fixture in both Function mode and the explicitly configured preloaded-Lua
+compatibility mode. `make redis-integration` creates one uniquely named
+loopback-only container, discovers its ephemeral port, enables the configured
+AOF/RDB persistence profile, explicitly provisions the immutable Function and
+compatibility script only inside that test dependency, and removes it on
+completion. It tests a post-mutation timeout resolved by a read, restart
+persistence, fail-closed Function/Lua identity mismatch, and the single
+configured hash slot. Failure logs pass through the repository redactor; the
+trusted master workflow runs this live gate while pull-request CI remains
+offline.
 
 Operational request, token, and concurrency limits use the separate
 `ThrottleStore` and its `llmtw_throttle_v1/throttle_v1` Function. A throttle

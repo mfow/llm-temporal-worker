@@ -30,6 +30,57 @@ func TestLiveRedisStoreFactoryConformance(t *testing.T) {
 	conformance.Run(t, liveRedisStoreFactory(client))
 }
 
+func TestLiveRedisLuaStoreFactoryConformance(t *testing.T) {
+	client := openLiveRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Lua is an explicit compatibility mode. Provision the exact immutable
+	// script only in this isolated test dependency, then exercise the same
+	// black-box StoreFactory contract used by Function mode. The worker never
+	// performs this load at runtime.
+	sha, err := client.ScriptLoad(ctx, AdmissionLuaSource()).Result()
+	if err != nil {
+		t.Fatalf("provision Redis admission Lua script: %v", err)
+	}
+	if sha != AdmissionLuaSHA1() {
+		t.Fatalf("provisioned Lua script SHA = %q, want %q", sha, AdmissionLuaSHA1())
+	}
+	t.Cleanup(func() {
+		if !liveRedisLuaScriptCleanupAllowed() {
+			return
+		}
+		flushContext, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer flushCancel()
+		if err := client.ScriptFlush(flushContext).Err(); err != nil {
+			t.Errorf("flush isolated Redis Lua script cache: %v", err)
+		}
+	})
+	conformance.Run(t, liveRedisStoreFactoryWithMode(client, AdmissionModeLua))
+}
+
+func TestLiveRedisLuaScriptCleanupRequiresIsolatedProvisioning(t *testing.T) {
+	tests := []struct {
+		name      string
+		provision string
+		container string
+		prefix    string
+		wantAllow bool
+	}{
+		{name: "manual address", provision: "1", wantAllow: false},
+		{name: "provisioning disabled", container: "llmtw-redis-integration-123", prefix: "llmtw-redis-integration", wantAllow: false},
+		{name: "unrecognized container", provision: "1", container: "redis-shared-123", prefix: "llmtw-redis-integration", wantAllow: false},
+		{name: "isolated provisioned container", provision: "1", container: "llmtw-redis-integration-123", prefix: "llmtw-redis-integration", wantAllow: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := liveRedisLuaScriptCleanupAllowedValues(test.provision, test.container, test.prefix); got != test.wantAllow {
+				t.Fatalf("cleanup allowed = %t, want %t", got, test.wantAllow)
+			}
+		})
+	}
+}
+
 func TestLiveRedisFunctionBeginDecodesTwoFieldDenial(t *testing.T) {
 	client := openLiveRedis(t)
 	now := time.Now().UTC()
@@ -243,6 +294,18 @@ func isLiveRedisPersistenceContainer(container, configuredPrefix string) bool {
 	return configuredPrefix != "" && strings.HasPrefix(container, configuredPrefix+"-")
 }
 
+func liveRedisLuaScriptCleanupAllowed() bool {
+	return liveRedisLuaScriptCleanupAllowedValues(
+		os.Getenv("LLMTW_REDIS_TEST_PROVISION"),
+		os.Getenv("LLMTW_REDIS_CONTAINER"),
+		os.Getenv("LLMTW_REDIS_CONTAINER_PREFIX"),
+	)
+}
+
+func liveRedisLuaScriptCleanupAllowedValues(provision, container, prefix string) bool {
+	return provision == "1" && isLiveRedisPersistenceContainer(container, prefix)
+}
+
 func openLiveRedis(t *testing.T) *redisclient.Client {
 	t.Helper()
 	address := os.Getenv("LLMTW_REDIS_ADDR")
@@ -339,8 +402,12 @@ func waitForLiveRedis(t *testing.T, client *redisclient.Client) {
 }
 
 func liveRedisStoreFactory(client *redisclient.Client) conformance.StoreFactory {
+	return liveRedisStoreFactoryWithMode(client, AdmissionModeFunction)
+}
+
+func liveRedisStoreFactoryWithMode(client *redisclient.Client, mode AdmissionMode) conformance.StoreFactory {
 	return conformance.StoreFactory{
-		Name: "redis",
+		Name: "redis-" + string(mode),
 		New: func(t testing.TB) conformance.Stores {
 			t.Helper()
 			now := time.Now().UTC()
@@ -356,7 +423,7 @@ func liveRedisStoreFactory(client *redisclient.Client) conformance.StoreFactory 
 			}
 			admissions, err := NewAdmissionStore(AdmissionOptions{
 				Client: client,
-				Mode:   AdmissionModeFunction,
+				Mode:   mode,
 				Keys:   keys,
 				Clock:  func() time.Time { return now },
 			})

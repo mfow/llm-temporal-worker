@@ -251,7 +251,8 @@ manifest.
 `storage/conformance` holds one black-box suite that accepts a `StoreFactory`.
 The memory adapter runs it in the ordinary storage test suite; the Redis adapter
 runs the unchanged suite against the isolated pinned daemon started by
-`make redis-integration`. It tests:
+`make redis-integration` in both the preferred Redis Function mode and the
+explicit preloaded-Lua compatibility mode. It tests:
 
 - all operation transitions and invalid compare-and-set tokens;
 - idempotent Begin/Complete/Fail;
@@ -280,11 +281,13 @@ make redis-integration
 
 The target starts one uniquely named, loopback-only Redis 7.4.2 image pinned
 by digest, discovers its ephemeral port, enables AOF plus snapshot persistence,
-and removes only that container on completion. It exercises timeout-after-write
-read resolution, Function/Lua mismatch handling, configured persistence across
-a restart, and the configured single hash slot. Because Docker can remap an
-ephemeral host port during that restart, each live test re-discovers the
-container's current published port instead of reusing the initial address.
+explicitly provisions the immutable Function and, for the compatibility case,
+the exact Lua script only inside that test dependency, and removes only that
+container on completion. It exercises timeout-after-write read resolution,
+Function/Lua mismatch handling, configured persistence across a restart, and
+the configured single hash slot. Because Docker can remap an ephemeral host
+port during that restart, each live test re-discovers the container's current
+published port instead of reusing the initial address.
 Redis logs are emitted only on failure after redaction. The target is invoked
 by the trusted master workflow, not the pull-request workflow.
 
