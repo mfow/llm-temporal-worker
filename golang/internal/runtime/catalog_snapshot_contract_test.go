@@ -351,6 +351,28 @@ func TestCompileBudgetPoliciesMapsAndValidatesWindows(t *testing.T) {
 	}
 }
 
+func TestCompileBudgetPoliciesMaterializesExactLimitForLegacyAdmission(t *testing.T) {
+	value := config.Config{Limits: config.LimitsConfig{MaxBudgetBucketsPerWindow: 64}, Budgets: config.BudgetsConfig{Policies: []config.BudgetPolicy{{
+		ID: "exact-policy", Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitUSD: pricing.MustUSD("2.000000000000000001")}},
+	}}}}
+	policies, err := compileBudgetPolicies(value)
+	if err != nil {
+		t.Fatalf("compileBudgetPolicies() = %v", err)
+	}
+	if got, want := policies[0].Windows[0].Limit, pricing.MicroUSD(2_000_000); got != want {
+		t.Fatalf("legacy exact limit = %d, want %d", got, want)
+	}
+
+	value.Budgets.Policies[0].Windows[0].LimitUSD = pricing.MustUSD("0.000000000000000001")
+	policies, err = compileBudgetPolicies(value)
+	if err != nil {
+		t.Fatalf("compileBudgetPolicies(sub-micro) = %v", err)
+	}
+	if got := policies[0].Windows[0].Limit; got != 1 {
+		t.Fatalf("sub-micro exact limit = %d, want one compatibility micro-dollar", got)
+	}
+}
+
 func TestRoutingCapabilitiesOnlyProjectsSupportedProviderFeatures(t *testing.T) {
 	set := provider.CapabilitySet{Version: "cap-v1", Features: map[provider.Feature]provider.Capability{
 		provider.FeatureText:      {State: provider.CapabilityNative, Reason: "verified"},

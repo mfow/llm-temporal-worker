@@ -101,6 +101,30 @@ func TestPublicAPISchemasCompileLocally(t *testing.T) {
 	}
 }
 
+func TestGenerateResponseSchemaAcceptsExactUSDWithoutLegacyMoneyFields(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", "generate-response.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(data)
+	if err != nil {
+		t.Fatalf("parse response schema: %v", err)
+	}
+	instance := []byte(`{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "exact-usd",
+  "operation_id": "op-exact-usd",
+  "status": "completed",
+  "output": [],
+  "checkpoint": {"handle": "checkpoint-1", "kind": "generation", "depth": 0},
+  "cache": {"disposition": "disabled", "variant": 0},
+  "cost": {"status": "exact", "actual_cost_usd": "0.000000000000000001", "method": "catalog_usage", "catalog_version": "v1"}
+}`)
+	if err := compiled.Validate(instance); err != nil {
+		t.Fatalf("exact-only response rejected: %v", err)
+	}
+}
+
 func parseFixture(t *testing.T, name string) *schema.Schema {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))

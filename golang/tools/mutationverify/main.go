@@ -27,8 +27,8 @@ var mutations = []mutation{
 	{
 		name:        "money-round-up",
 		path:        "pricing/decimal.go",
-		from:        "if remainder.Sign() != 0 {\n\t\tquotient.Add(quotient, big.NewInt(1))\n\t}",
-		to:          "if remainder.Sign() != 0 {\n\t\t// mutant omits the required ceiling increment\n\t}",
+		from:        "if remainder.Sign() != 0 {\n\t\tquotient.Add(quotient, big.NewInt(1))\n\t}\n\tif !quotient.IsInt64() {",
+		to:          "if remainder.Sign() != 0 {\n\t\t// mutant omits the required ceiling increment\n\t}\n\tif !quotient.IsInt64() {",
 		packagePath: "./pricing",
 		testName:    "TestDecimalCeilingAndOverflowInvariants",
 	},

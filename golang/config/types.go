@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -282,9 +283,10 @@ type BudgetMatch struct {
 }
 
 type BudgetWindow struct {
-	Duration      Duration `yaml:"duration" json:"duration"`
-	Bucket        Duration `yaml:"bucket" json:"bucket"`
-	LimitMicroUSD int64    `yaml:"limit_micro_usd" json:"limit_micro_usd"`
+	Duration      Duration    `yaml:"duration" json:"duration"`
+	Bucket        Duration    `yaml:"bucket" json:"bucket"`
+	LimitUSD      pricing.USD `yaml:"limit_usd" json:"limit_usd"`
+	LimitMicroUSD int64       `yaml:"limit_micro_usd" json:"limit_micro_usd,omitempty"`
 }
 
 type ContinuationConfig struct {

@@ -539,8 +539,12 @@ func (budgets BudgetsConfig) validate() error {
 			if window.Bucket > window.Duration {
 				return fmt.Errorf("%s.bucket must not exceed duration", windowPath)
 			}
-			if window.LimitMicroUSD <= 0 {
-				return fmt.Errorf("%s.limit_micro_usd must be positive", windowPath)
+			if !window.LimitUSD.IsZero() {
+				if err := window.LimitUSD.Validate(); err != nil {
+					return fmt.Errorf("%s.limit_usd: %w", windowPath, err)
+				}
+			} else if window.LimitMicroUSD <= 0 {
+				return fmt.Errorf("%s.limit_usd must be positive", windowPath)
 			}
 		}
 	}

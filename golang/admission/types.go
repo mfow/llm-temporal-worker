@@ -38,6 +38,8 @@ type WindowReservation struct {
 	Bucket        int64
 	Amount        pricing.MicroUSD
 	Limit         pricing.MicroUSD
+	AmountUSD     pricing.USD
+	LimitUSD      pricing.USD
 	BucketNanos   int64
 	DurationNanos int64
 }
@@ -60,6 +62,9 @@ type Operation struct {
 	ReservedMicroUSD pricing.MicroUSD
 	IncurredMicroUSD pricing.MicroUSD
 	FinalMicroUSD    pricing.MicroUSD
+	ReservedCostUSD  *pricing.USD
+	IncurredCostUSD  *pricing.USD
+	ActualCostUSD    *pricing.USD
 	Reservations     []WindowReservation
 	ConfigVersion    string
 	PriceVersion     string
@@ -82,15 +87,16 @@ func (operation Operation) Clone() Operation {
 }
 
 type BeginRequest struct {
-	ID            string
-	ScopeKey      string
-	RequestDigest [32]byte
-	Reservation   pricing.MicroUSD
-	Reservations  []WindowReservation
-	ConfigVersion string
-	PriceVersion  string
-	LeaseUntil    time.Time
-	ExpiresAt     time.Time
+	ID             string
+	ScopeKey       string
+	RequestDigest  [32]byte
+	Reservation    pricing.MicroUSD
+	ReservationUSD pricing.USD
+	Reservations   []WindowReservation
+	ConfigVersion  string
+	PriceVersion   string
+	LeaseUntil     time.Time
+	ExpiresAt      time.Time
 }
 
 type BeginResult struct {
@@ -100,12 +106,15 @@ type BeginResult struct {
 }
 
 type Denial struct {
-	RetryAfter time.Duration
-	PolicyID   string
-	WindowID   string
-	Limit      pricing.MicroUSD
-	Active     pricing.MicroUSD
-	Requested  pricing.MicroUSD
+	RetryAfter   time.Duration
+	PolicyID     string
+	WindowID     string
+	Limit        pricing.MicroUSD
+	Active       pricing.MicroUSD
+	Requested    pricing.MicroUSD
+	LimitUSD     pricing.USD
+	ActiveUSD    pricing.USD
+	RequestedUSD pricing.USD
 }
 
 type DispatchRequest struct {
@@ -118,6 +127,7 @@ type DispatchRequest struct {
 type AttemptOutcome struct {
 	Certainty         DispatchCertainty
 	Incurred          pricing.MicroUSD
+	IncurredCostUSD   pricing.USD
 	ProviderRequestID string
 	Attempt           AttemptFacts
 }
@@ -127,6 +137,7 @@ type ContinueRequest struct {
 	DispatchToken string
 	Outcome       AttemptOutcome
 	Remaining     pricing.MicroUSD
+	RemainingUSD  pricing.USD
 	Reservations  []WindowReservation
 	LeaseUntil    time.Time
 	ExpiresAt     time.Time
@@ -141,17 +152,19 @@ type CompleteRequest struct {
 	OperationID   string
 	DispatchToken string
 	Actual        pricing.MicroUSD
+	ActualCostUSD pricing.USD
 	ResultRef     *state.BlobRef
 	Attempt       AttemptFacts
 }
 
 type FailRequest struct {
-	OperationID   string
-	DispatchToken string
-	Certainty     DispatchCertainty
-	Incurred      pricing.MicroUSD
-	Attempt       AttemptFacts
-	Reason        string
+	OperationID     string
+	DispatchToken   string
+	Certainty       DispatchCertainty
+	Incurred        pricing.MicroUSD
+	IncurredCostUSD pricing.USD
+	Attempt         AttemptFacts
+	Reason          string
 }
 
 func Digest(value []byte) [32]byte { return sha256.Sum256(value) }

@@ -59,6 +59,7 @@ type Metrics struct {
 	budgetAdmission      *prometheus.CounterVec
 	budgetReserved       *prometheus.GaugeVec
 	costTotal            *prometheus.CounterVec
+	costExactTotal       *prometheus.CounterVec
 	operationState       *prometheus.CounterVec
 	ambiguousTotal       *prometheus.CounterVec
 	continuationTotal    *prometheus.CounterVec
@@ -111,6 +112,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.budgetAdmission = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_budget_admission_total", Help: "Budget admission outcomes."}, []string{"policy", "outcome"})
 	m.budgetReserved = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_budget_reserved_micro_usd", Help: "Currently reserved budget in microUSD."}, []string{"policy", "window"})
 	m.costTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_micro_usd_total", Help: "Accounted cost in integer microUSD."}, []string{"endpoint", "model", "class", "method"})
+	m.costExactTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_usd_total", Help: "Count of accounted exact-USD cost events; amount remains in the durable ledger."}, []string{"endpoint", "model", "class", "method"})
 	m.operationState = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_operation_state_total", Help: "Operation state transitions."}, []string{"state"})
 	m.ambiguousTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_ambiguous_total", Help: "Operations whose provider dispatch is unresolved."}, []string{"endpoint"})
 	m.continuationTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_continuation_total", Help: "Continuation decisions."}, []string{"decision"})
@@ -119,7 +121,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	collectors := []prometheus.Collector{
 		m.activityTotal, m.activityFailureTotal, m.activityDuration, m.providerAttemptTotal, m.providerDuration,
-		m.serviceClassActual, m.budgetAdmission, m.budgetReserved, m.costTotal,
+		m.serviceClassActual, m.budgetAdmission, m.budgetReserved, m.costTotal, m.costExactTotal,
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
 		m.workerPolling, m.heartbeatAge,
 	}
@@ -238,6 +240,19 @@ func (metrics *Metrics) RecordCost(endpoint, model, class, method string, microU
 	defer metrics.mu.RUnlock()
 	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
 	metrics.costTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, classes), metrics.allow(method, metrics.allowed.methods)).Add(microUSD)
+}
+
+// RecordExactCost records an exact-USD accounting event without converting
+// the amount to float. The exact decimal remains in the response/ledger;
+// Prometheus only receives a bounded event count.
+func (metrics *Metrics) RecordExactCost(endpoint, model, class, method string) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
+	metrics.costExactTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, classes), metrics.allow(method, metrics.allowed.methods)).Inc()
 }
 
 func (metrics *Metrics) RecordOperationState(state string) {

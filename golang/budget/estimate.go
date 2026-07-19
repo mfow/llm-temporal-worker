@@ -23,8 +23,10 @@ type Estimate struct {
 	ReasoningTokens  int64
 	CacheWriteTokens int64
 	MicroUSD         pricing.MicroUSD
-	Currency         string
-	CatalogVersion   string
+	// CostUSD is the exact fixed-scale reservation used by new callers.
+	CostUSD        pricing.USD
+	Currency       string
+	CatalogVersion string
 }
 
 func (estimator Estimator) EstimateCandidate(request llm.Request, candidate routing.Candidate, entry pricing.Entry) (Estimate, error) {
@@ -61,27 +63,35 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		{entry.Prices.CacheWritePerMillion, cacheWrite, "cache_write"},
 		{entry.Prices.PerRequest, 1, "per_request"},
 	}
-	total := pricing.MicroUSD(0)
+	totalUSD := pricing.MustUSD("0")
+	legacyTotal := pricing.MicroUSD(0)
 	for _, component := range components {
-		value, err := pricing.CeilMicroUSD(component.price, component.units, 1_000_000)
+		value, err := pricing.CeilUSD(component.price, component.units, 1_000_000)
 		if err != nil {
 			return Estimate{}, fmt.Errorf("estimate %s: %w", component.name, err)
 		}
-		total, err = total.Add(value)
+		totalUSD, err = totalUSD.Add(value)
 		if err != nil {
 			return Estimate{}, err
+		}
+		if legacy, legacyErr := pricing.CeilMicroUSD(component.price, component.units, 1_000_000); legacyErr == nil {
+			legacyTotal, _ = legacyTotal.Add(legacy)
 		}
 	}
 	if estimator.SafetyRatio != nil {
 		if estimator.SafetyRatio.Sign() <= 0 {
 			return Estimate{}, fmt.Errorf("safety ratio must be positive")
 		}
-		total, err = multiplyCeil(total, estimator.SafetyRatio)
+		totalUSD, err = multiplyUSD(totalUSD, estimator.SafetyRatio)
+		if err != nil {
+			return Estimate{}, err
+		}
+		legacyTotal, err = multiplyCeil(legacyTotal, estimator.SafetyRatio)
 		if err != nil {
 			return Estimate{}, err
 		}
 	}
-	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, MicroUSD: total, Currency: entry.Currency, CatalogVersion: entry.Version}, nil
+	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, Currency: entry.Currency, CatalogVersion: entry.Version}, nil
 }
 
 func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, entries map[string]pricing.Entry) (Estimate, error) {
@@ -98,7 +108,7 @@ func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, 
 		if err != nil {
 			return Estimate{}, err
 		}
-		if estimate.MicroUSD > maximum.MicroUSD {
+		if estimate.CostUSD.Cmp(maximum.CostUSD) > 0 {
 			maximum = estimate
 		}
 	}
@@ -140,6 +150,13 @@ func multiplyCeil(value pricing.MicroUSD, ratio *big.Rat) (pricing.MicroUSD, err
 		return 0, fmt.Errorf("estimate exceeds safe range")
 	}
 	return result, nil
+}
+
+func multiplyUSD(value pricing.USD, ratio *big.Rat) (pricing.USD, error) {
+	if ratio == nil {
+		return pricing.USD{}, fmt.Errorf("invalid estimate multiplier")
+	}
+	return value.MulRatio(ratio.Num(), ratio.Denom())
 }
 
 func mustRequestJSON(request llm.Request) []byte {

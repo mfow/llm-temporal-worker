@@ -307,6 +307,12 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 		response, err := engine.dependencies.Results.Get(ctx, operation.ID)
 		if err == nil {
 			actual := pricing.MicroUSD(response.Cost.ActualMicroUSD)
+			if response.Cost.ActualCostUSD != nil {
+				actual, err = compatibilityActualMicroUSD(*response.Cost.ActualCostUSD)
+				if err != nil {
+					return nil, false, engineError(provider.CodeStateCorrupt, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "stored result cost is invalid", err)
+				}
+			}
 			if !actual.Valid() {
 				return nil, false, engineError(provider.CodeStateCorrupt, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "stored result cost is invalid", nil)
 			}
@@ -334,6 +340,17 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 	default:
 		return nil, false, engineError(provider.CodeStateCorrupt, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "operation state is unknown", nil)
 	}
+}
+
+func compatibilityActualMicroUSD(exact pricing.USD) (pricing.MicroUSD, error) {
+	actual, err := pricing.MicroFromUSD(exact)
+	if err != nil {
+		return 0, err
+	}
+	if actual == 0 && !exact.IsZero() {
+		return 1, nil
+	}
+	return actual, nil
 }
 
 func operationIdentity(request llm.Request, digest [32]byte) (string, string) {

@@ -44,7 +44,8 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		if err != nil {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "response usage could not be priced", err), candidate.estimate.MicroUSD)
 		}
-		response.Cost = llm.Cost{Status: llm.CostStatusKnown, Currency: actual.Currency, ReservedMicroUSD: int64(operation.ReservedMicroUSD), ActualMicroUSD: int64(actual.MicroUSD), Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
+		reservedUSD, _ := pricing.USDFromMicro(operation.ReservedMicroUSD)
+		response.Cost = llm.Cost{Status: llm.CostStatusKnown, ReservedCostUSD: &reservedUSD, ActualCostUSD: &actual.USD, Currency: actual.Currency, ReservedMicroUSD: int64(operation.ReservedMicroUSD), ActualMicroUSD: int64(actual.MicroUSD), Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
 	} else {
 		response.Cost = llm.Cost{Status: llm.CostStatusUnknown, ReservedMicroUSD: int64(operation.ReservedMicroUSD)}
 	}
@@ -92,6 +93,13 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 
 func actualCost(entry pricing.Entry, response llm.Response) (pricing.Cost, error) {
 	if response.Cost.Method != "" {
+		if response.Cost.ActualCostUSD != nil {
+			if err := response.Cost.ActualCostUSD.Validate(); err != nil {
+				return pricing.Cost{}, fmt.Errorf("provider-reported USD cost is invalid: %w", err)
+			}
+			legacy, _ := pricing.MicroFromUSD(*response.Cost.ActualCostUSD)
+			return pricing.Cost{USD: *response.Cost.ActualCostUSD, MicroUSD: legacy, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
+		}
 		actual := pricing.MicroUSD(response.Cost.ActualMicroUSD)
 		if !actual.Valid() {
 			return pricing.Cost{}, fmt.Errorf("provider-reported cost is outside safe range")
@@ -100,7 +108,11 @@ func actualCost(entry pricing.Entry, response llm.Response) (pricing.Cost, error
 		if currency == "" {
 			currency = entry.Currency
 		}
-		return pricing.Cost{MicroUSD: actual, Currency: currency, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
+		exact, err := pricing.USDFromMicro(actual)
+		if err != nil {
+			return pricing.Cost{}, err
+		}
+		return pricing.Cost{USD: exact, MicroUSD: actual, Currency: currency, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
 	}
 	return pricing.CostFromUsage(entry, pricing.Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ReasoningTokens: response.Usage.ReasoningTokens, CacheReadTokens: response.Usage.CacheReadTokens, CacheWriteTokens: response.Usage.CacheWriteTokens})
 }
