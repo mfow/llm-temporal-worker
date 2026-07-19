@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"time"
 )
 
 func requiredBool(fields map[string]json.RawMessage, name string) (bool, error) {
@@ -954,6 +955,109 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 			return fmt.Errorf("refresh_if_older_than_seconds is invalid")
 		}
 	}
+	if raw, ok := fields["availability"]; ok {
+		if err := validateQueryEnum(raw, "availability", "available", "degraded", "unavailable"); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["lifecycle"]; ok {
+		if err := validateQueryEnum(raw, "lifecycle", "available", "deprecated", "unavailable", "unknown"); err != nil {
+			return err
+		}
+	}
+	if kind == QuerySpendSummary {
+		var start, end time.Time
+		for _, name := range []string{"start_time", "end_time"} {
+			value, err := requiredString(fields, name)
+			if err != nil {
+				return err
+			}
+			if err := validateQueryTimestamp(name, value); err != nil {
+				return err
+			}
+			parsed, _ := time.Parse(time.RFC3339Nano, value)
+			if name == "start_time" {
+				start = parsed
+			} else {
+				end = parsed
+			}
+		}
+		if !end.After(start) {
+			return fmt.Errorf("spend summary end_time must be after start_time")
+		}
+		if raw, ok := fields["group_by"]; ok {
+			if err := validateQueryEnumArray(raw, "group_by", "operation_kind", "provider", "model"); err != nil {
+				return err
+			}
+		}
+		if raw, ok := fields["operation_kinds"]; ok {
+			if err := validateQueryEnumArray(raw, "operation_kinds", "generate", "compact", "query"); err != nil {
+				return err
+			}
+		}
+	}
+	if kind == QueryBudgetStatus {
+		if raw, ok := fields["active_at"]; ok {
+			value, err := requiredString(map[string]json.RawMessage{"active_at": raw}, "active_at")
+			if err != nil {
+				return err
+			}
+			if err := validateQueryTimestamp("active_at", value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateQueryEnum(raw json.RawMessage, field string, allowed ...string) error {
+	value, err := requiredString(map[string]json.RawMessage{field: raw}, field)
+	if err != nil {
+		return fmt.Errorf("%s must be a string: %w", field, err)
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s %q is invalid", field, value)
+}
+
+func validateQueryEnumArray(raw json.RawMessage, field string, allowed ...string) error {
+	if string(raw) == "null" {
+		return fmt.Errorf("%s must be an array of strings", field)
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return fmt.Errorf("%s must be an array of strings", field)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, duplicate := seen[value]; duplicate {
+			return fmt.Errorf("%s contains duplicate value %q", field, value)
+		}
+		seen[value] = struct{}{}
+		valid := false
+		for _, candidate := range allowed {
+			if value == candidate {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("%s value %q is invalid", field, value)
+		}
+	}
+	return nil
+}
+
+func validateQueryTimestamp(field, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+		return fmt.Errorf("%s must be an RFC3339 timestamp: %w", field, err)
+	}
 	return nil
 }
 
@@ -1011,6 +1115,9 @@ type QueryResponseV1 struct {
 func (response QueryResponseV1) MarshalJSON() ([]byte, error) {
 	if response.OperationKey == "" || response.QueryExecutionID == "" || !response.Kind.valid() || response.Result == nil || response.Result.queryResultKind() != response.Kind {
 		return nil, fmt.Errorf("query response kind/result mismatch")
+	}
+	if err := response.validate(); err != nil {
+		return nil, err
 	}
 	if err := response.Cost.validate(); err != nil {
 		return nil, err
@@ -1131,8 +1238,77 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 		}
 		responseValue.NextCursor = &value
 	}
+	if err := responseValue.validate(); err != nil {
+		return err
+	}
 	*response = responseValue
 	return nil
+}
+
+func (response QueryResponseV1) validate() error {
+	if err := validateQueryTimestamp("observed_at", response.ObservedAt); err != nil {
+		return err
+	}
+	switch response.Source {
+	case "persisted", "persisted_and_refreshed", "redis_budget_generation":
+	default:
+		return fmt.Errorf("query source %q is invalid", response.Source)
+	}
+	switch response.Freshness {
+	case "current", "stale", "unknown":
+	default:
+		return fmt.Errorf("query freshness %q is invalid", response.Freshness)
+	}
+	if response.NextCursor != nil && (len(*response.NextCursor) == 0 || len(*response.NextCursor) > 512) {
+		return fmt.Errorf("query next_cursor is invalid")
+	}
+	if response.Cost.Status == "exact" && response.Cost.Method != "control_query_zero" && response.Cost.Method != "provider_reported" && response.Cost.Method != "catalog_usage" {
+		return fmt.Errorf("query cost method %q is invalid", response.Cost.Method)
+	}
+	if response.Cost.Status == "exact" && response.Cost.Method == "control_query_zero" && response.Cost.ActualCostUSD != nil && !isZeroDecimal(*response.Cost.ActualCostUSD) {
+		return fmt.Errorf("control_query_zero requires zero actual cost")
+	}
+	switch response.Kind {
+	case QueryBudgetStatus:
+		budget, ok := response.Result.(BudgetStatus)
+		if !ok {
+			if pointer, pointerOK := response.Result.(*BudgetStatus); pointerOK && pointer != nil {
+				budget, ok = *pointer, true
+			}
+		}
+		if !ok {
+			return fmt.Errorf("budget status result has unexpected type")
+		}
+		if err := validateQueryTimestamp("budget active_at", budget.ActiveAt); err != nil {
+			return err
+		}
+	case QuerySpendSummary:
+		spend, ok := response.Result.(SpendSummary)
+		if !ok {
+			if pointer, pointerOK := response.Result.(*SpendSummary); pointerOK && pointer != nil {
+				spend, ok = *pointer, true
+			}
+		}
+		if !ok {
+			return fmt.Errorf("spend summary result has unexpected type")
+		}
+		if err := validateQueryTimestamp("spend start_time", spend.StartTime); err != nil {
+			return err
+		}
+		if err := validateQueryTimestamp("spend end_time", spend.EndTime); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isZeroDecimal(value string) bool {
+	for _, character := range value {
+		if character != '0' && character != '.' {
+			return false
+		}
+	}
+	return value != ""
 }
 
 // ValidateVariantTemperature applies the part of cache validation that is

@@ -2193,6 +2193,15 @@ and cursor contents bind query tag, scope, filters, sort key, snapshot horizon,
 expiry, and MAC. Unknown tags, mismatched result tags, unknown fields, or
 expired/tampered cursors are typed non-retryable errors.
 
+The Go wire boundary applies the same closed-world rule before any service
+dispatch: provider availability and inventory lifecycle filters (including
+the persisted `available`, `deprecated`, `unavailable`, and `unknown` states),
+spend dimensions and operation kinds, response source/freshness tags, and query
+cost methods are allow-listed. Query intervals and response observation times
+must be valid RFC3339 timestamps; malformed timestamps, duplicate dimensions,
+and unknown enum values are rejected rather than passed to storage or a
+provider management API.
+
 **refresh_if_older_than_seconds** is optional for provider/model/credit queries.
 Omission reads durable state only. When present, the worker may call a documented provider management/list
 API and then store the observation before answering. It never invokes an

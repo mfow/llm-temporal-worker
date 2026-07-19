@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,6 +72,68 @@ func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 	unknown = []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p"},"kind":"provider_status","query":{}}`)
 	if err := json.Unmarshal(unknown, &queryRequest); err == nil {
 		t.Fatal("incomplete query context accepted")
+	}
+}
+
+func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
+	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"provider_status","query":%s}`
+	for _, test := range []struct {
+		name  string
+		query string
+	}{
+		{name: "availability", query: `{"availability":"unknown"}`},
+		{name: "lifecycle", query: `{"lifecycle":"future"}`},
+		{name: "missing spend interval", query: `{}`},
+		{name: "malformed spend interval", query: `{"start_time":"not-a-time","end_time":"2026-07-19T00:00:00Z"}`},
+		{name: "empty spend interval", query: `{"start_time":"2026-07-19T00:00:00Z","end_time":"2026-07-19T00:00:00Z"}`},
+		{name: "inverted spend interval", query: `{"start_time":"2026-07-20T00:00:00Z","end_time":"2026-07-19T00:00:00Z"}`},
+		{name: "unknown group", query: `{"start_time":"2026-07-18T00:00:00Z","end_time":"2026-07-19T00:00:00Z","group_by":["region"]}`},
+		{name: "duplicate operation kind", query: `{"start_time":"2026-07-18T00:00:00Z","end_time":"2026-07-19T00:00:00Z","operation_kinds":["query","query"]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := fmt.Sprintf(base, test.query)
+			if test.name == "availability" || test.name == "lifecycle" {
+				kind := "provider_status"
+				if test.name == "lifecycle" {
+					kind = "model_inventory"
+				}
+				payload = fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":%q,"query":%s}`, kind, test.query)
+			} else {
+				payload = fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"spend_summary","query":%s}`, test.query)
+			}
+			var request llm.QueryRequestV1
+			if err := json.Unmarshal([]byte(payload), &request); err == nil {
+				t.Fatalf("invalid query %s was accepted", test.name)
+			}
+		})
+	}
+
+	valid := llm.QueryResponseV1{
+		OperationKey: "q", QueryExecutionID: "query-id", Kind: llm.QuerySpendSummary,
+		ObservedAt: "2026-07-19T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true,
+		Result: llm.SpendSummary{StartTime: "2026-07-18T00:00:00Z", EndTime: "2026-07-19T00:00:00Z"},
+		Cost:   llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
+	}
+	for _, test := range []struct {
+		name string
+		edit func(*llm.QueryResponseV1)
+	}{
+		{name: "observed timestamp", edit: func(response *llm.QueryResponseV1) { response.ObservedAt = "tomorrow" }},
+		{name: "source", edit: func(response *llm.QueryResponseV1) { response.Source = "provider" }},
+		{name: "freshness", edit: func(response *llm.QueryResponseV1) { response.Freshness = "fresh" }},
+		{name: "spend start timestamp", edit: func(response *llm.QueryResponseV1) {
+			response.Result = llm.SpendSummary{StartTime: "bad", EndTime: "2026-07-19T00:00:00Z"}
+		}},
+		{name: "cost method", edit: func(response *llm.QueryResponseV1) { response.Cost.Method = "estimate" }},
+		{name: "nonzero control cost", edit: func(response *llm.QueryResponseV1) { response.Cost.ActualCostUSD = stringPointer("0.1") }},
+	} {
+		t.Run("response_"+test.name, func(t *testing.T) {
+			candidate := valid
+			test.edit(&candidate)
+			if _, err := json.Marshal(candidate); err == nil {
+				t.Fatalf("invalid response %s was accepted", test.name)
+			}
+		})
 	}
 }
 
