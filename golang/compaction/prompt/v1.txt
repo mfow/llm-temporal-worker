@@ -1,0 +1,4 @@
+Summarize the durable conversation prefix for a later model turn.
+
+Preserve instructions, durable facts, open tasks, citations, and decisions.
+Do not invent facts. Do not call tools. Return bounded plain text only.
