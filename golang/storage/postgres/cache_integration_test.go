@@ -115,6 +115,33 @@ func TestResponseCacheFillLookupAndUseAccounting(t *testing.T) {
 	if useCount != 2 {
 		t.Fatalf("use_count=%d, want origin plus one logical hit", useCount)
 	}
+	uses, err := fixture.operations.Namespace.Render("response_cache_uses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var useRows int
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT count(*) FROM "+uses+" WHERE cache_entry_id=$1", published.ID).Scan(&useRows); err != nil {
+		t.Fatal(err)
+	}
+	if useRows != 2 {
+		t.Fatalf("cache use rows=%d, want origin plus one logical hit", useRows)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET use_count=2147483647 WHERE cache_entry_id=$1", published.ID); err != nil {
+		t.Fatal(err)
+	}
+	saturatingID := "cache-saturating-consumer-" + uuid.NewString()
+	if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: saturatingID, ScopeKey: "cache-integration-tenant/cache-integration-project", RequestDigest: admission.Digest([]byte(saturatingID)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if hit, err := fixture.repository.Lookup(fixture.ctx, CacheLookupRequest{Key: key, OperationID: saturatingID, MaxAge: time.Hour}); err != nil || !hit.Hit {
+		t.Fatalf("saturating cache hit=%#v err=%v", hit, err)
+	}
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT use_count FROM "+entries+" WHERE cache_entry_id=$1", published.ID).Scan(&useCount); err != nil {
+		t.Fatal(err)
+	}
+	if useCount != 2147483647 {
+		t.Fatalf("saturated use_count=%d, want max int32", useCount)
+	}
 	wrongRoute := key
 	wrongRoute.RouteIdentityHMAC = sha256.Sum256([]byte("different-route"))
 	miss, err := fixture.repository.Lookup(fixture.ctx, CacheLookupRequest{Key: wrongRoute, OperationID: "cache-route-miss-" + uuid.NewString(), MaxAge: time.Hour})
@@ -123,6 +150,61 @@ func TestResponseCacheFillLookupAndUseAccounting(t *testing.T) {
 	}
 	if miss.Hit {
 		t.Fatal("route-isolated cache entry crossed route identity")
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET state='tombstoned' WHERE cache_entry_id=$1", published.ID); err != nil {
+		t.Fatal(err)
+	}
+	takeoverID := "cache-tombstoned-takeover-" + uuid.NewString()
+	if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: takeoverID, ScopeKey: "cache-integration-tenant/cache-integration-project", RequestDigest: admission.Digest([]byte(takeoverID)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	takeover := CacheFillRequest{Key: key, OperationID: takeoverID, Lease: time.Minute}
+	if result, err := fixture.repository.BeginFill(fixture.ctx, takeover); err != nil || result.Status != CacheFillAcquired {
+		t.Fatalf("tombstoned entry takeover=%#v err=%v", result, err)
+	}
+	if err := fixture.repository.FailFill(fixture.ctx, takeover); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResponseCacheConcurrentFillAcquisition(t *testing.T) {
+	fixture := newResponseCacheFixture(t)
+	key := testCacheKey()
+	key.ScopeID = fixture.scope.ID
+	ids := []string{"cache-concurrent-fill-a-" + uuid.NewString(), "cache-concurrent-fill-b-" + uuid.NewString()}
+	for _, id := range ids {
+		if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: id, ScopeKey: "cache-integration-tenant/cache-integration-project", RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type fillResult struct {
+		result CacheFillResult
+		err    error
+	}
+	results := make(chan fillResult, len(ids))
+	for _, id := range ids {
+		go func(id string) {
+			result, err := fixture.repository.BeginFill(fixture.ctx, CacheFillRequest{Key: key, OperationID: id, Lease: time.Minute})
+			results <- fillResult{result: result, err: err}
+		}(id)
+	}
+	acquired, busy := 0, 0
+	for range ids {
+		outcome := <-results
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		switch outcome.result.Status {
+		case CacheFillAcquired:
+			acquired++
+		case CacheFillBusy:
+			busy++
+		default:
+			t.Fatalf("unexpected concurrent fill result=%#v", outcome.result)
+		}
+	}
+	if acquired != 1 || busy != 1 {
+		t.Fatalf("concurrent fill outcomes acquired=%d busy=%d, want one each", acquired, busy)
 	}
 }
 

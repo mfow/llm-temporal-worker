@@ -342,7 +342,7 @@ func (repository ResponseCacheRepository) Lookup(ctx context.Context, request Ca
 				return ErrCacheOperationReuse
 			}
 		} else {
-			if err := tx.QueryRow(ctx, "UPDATE "+entries+" SET use_count=LEAST(use_count + 1, $2), last_used_at=$3 WHERE cache_entry_id=$1 AND state='ready' RETURNING use_count, last_used_at", entry.ID, maxInt32, now).Scan(&entry.UseCount, &entry.LastUsedAt); err != nil {
+			if err := tx.QueryRow(ctx, "UPDATE "+entries+" SET use_count=CASE WHEN use_count >= $2 THEN $2 ELSE use_count + 1 END, last_used_at=$3 WHERE cache_entry_id=$1 AND state='ready' RETURNING use_count, last_used_at", entry.ID, maxInt32, now).Scan(&entry.UseCount, &entry.LastUsedAt); err != nil {
 				return redactPostgresError(fmt.Errorf("update PostgreSQL response cache use count: %w", err))
 			}
 		}
@@ -396,20 +396,33 @@ func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request
 		var state string
 		var existingLease time.Time
 		var existingEntry *uuid.UUID
-		err := tx.QueryRow(ctx, "SELECT owner_operation_id, state, lease_expires_at, cache_entry_id FROM "+fills+" WHERE scope_id=$1 AND fingerprint_version=$2 AND semantic_fingerprint_hmac=$3 AND variant=$4 AND cache_route_identity_hmac=$5 FOR UPDATE", request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:]).Scan(&existingOwner, &state, &existingLease, &existingEntry)
+		fillQuery := "SELECT owner_operation_id, state, lease_expires_at, cache_entry_id FROM " + fills + " WHERE scope_id=$1 AND fingerprint_version=$2 AND semantic_fingerprint_hmac=$3 AND variant=$4 AND cache_route_identity_hmac=$5 FOR UPDATE"
+		err := tx.QueryRow(ctx, fillQuery, request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:]).Scan(&existingOwner, &state, &existingLease, &existingEntry)
 		if errors.Is(err, pgx.ErrNoRows) {
-			if _, err := tx.Exec(ctx, "INSERT INTO "+fills+" (scope_id, fingerprint_version, semantic_fingerprint_hmac, variant, cache_route_identity_hmac, owner_operation_id, state, lease_expires_at) VALUES ($1,$2,$3,$4,$5,$6,'filling',$7)", request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:], owner, leaseUntil); err != nil {
+			inserted, err := tx.Exec(ctx, "INSERT INTO "+fills+" (scope_id, fingerprint_version, semantic_fingerprint_hmac, variant, cache_route_identity_hmac, owner_operation_id, state, lease_expires_at) VALUES ($1,$2,$3,$4,$5,$6,'filling',$7) ON CONFLICT DO NOTHING", request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:], owner, leaseUntil)
+			if err != nil {
 				return redactPostgresError(fmt.Errorf("create PostgreSQL response cache fill: %w", err))
 			}
-			result.Status, result.LeaseUntil = CacheFillAcquired, leaseUntil
-			return nil
+			if inserted.RowsAffected() > 0 {
+				result.Status, result.LeaseUntil = CacheFillAcquired, leaseUntil
+				return nil
+			}
+			if err := tx.QueryRow(ctx, fillQuery, request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:]).Scan(&existingOwner, &state, &existingLease, &existingEntry); err != nil {
+				return redactPostgresError(fmt.Errorf("reread PostgreSQL response cache fill: %w", err))
+			}
 		}
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("lock PostgreSQL response cache fill: %w", err))
 		}
 		if state == "completed" && existingEntry != nil {
-			result.Status, result.EntryID = CacheFillExisting, *existingEntry
-			return nil
+			var entryState string
+			if err := tx.QueryRow(ctx, "SELECT state FROM "+entries+" WHERE cache_entry_id=$1 FOR UPDATE", *existingEntry).Scan(&entryState); err != nil {
+				return redactPostgresError(fmt.Errorf("check PostgreSQL completed response cache entry: %w", err))
+			}
+			if entryState == "ready" {
+				result.Status, result.EntryID = CacheFillExisting, *existingEntry
+				return nil
+			}
 		}
 		if state == "filling" && existingLease.After(now) && existingOwner != owner {
 			result.Status, result.LeaseUntil = CacheFillBusy, existingLease
@@ -479,7 +492,7 @@ func (repository ResponseCacheRepository) Publish(ctx context.Context, request C
 	if err != nil {
 		return entry, err
 	}
-	entries, _, fills, err := repository.relations()
+	entries, uses, fills, err := repository.relations()
 	if err != nil {
 		return entry, err
 	}
@@ -522,6 +535,13 @@ func (repository ResponseCacheRepository) Publish(ctx context.Context, request C
 		insert := "INSERT INTO " + entries + " (cache_entry_id, scope_id, fingerprint_version, semantic_fingerprint_hmac, canonical_request_digest, canonical_request_jsonb, variant, cache_route_identity_hmac, semantic_profile_version, cache_epoch, response_inline_ciphertext, response_key_id, response_digest, origin_operation_id, origin_checkpoint_id, origin_provider, origin_endpoint_id, origin_resolved_model, created_at, completed_at, last_used_at, use_count, state) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,1,'ready')"
 		if _, err := tx.Exec(ctx, insert, entryID, request.Fill.Key.ScopeID, request.Fill.Key.FingerprintVersion, request.Fill.Key.SemanticFingerprintHMAC[:], canonicalDigest[:], manifest, request.Fill.Key.Variant, request.Fill.Key.RouteIdentityHMAC[:], request.SemanticProfileVersion, request.CacheEpoch, sealed.Ciphertext, sealed.KeyID, responseDigest[:], originOperation, request.OriginCheckpointID, request.OriginProvider, request.OriginEndpointID, request.OriginResolvedModel, created, completed); err != nil {
 			return redactPostgresError(fmt.Errorf("insert PostgreSQL response cache entry: %w", err))
+		}
+		used, err := tx.Exec(ctx, "INSERT INTO "+uses+" (cache_entry_id, operation_id, first_used_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING", entryID, originOperation, completed)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("record PostgreSQL response cache origin use: %w", err))
+		}
+		if used.RowsAffected() == 0 {
+			return ErrCacheOperationReuse
 		}
 		if _, err := tx.Exec(ctx, "UPDATE "+fills+" SET state='completed', cache_entry_id=$6, updated_at=$7 WHERE scope_id=$1 AND fingerprint_version=$2 AND semantic_fingerprint_hmac=$3 AND variant=$4 AND cache_route_identity_hmac=$5 AND owner_operation_id=$8 AND state='filling'", request.Fill.Key.ScopeID, request.Fill.Key.FingerprintVersion, request.Fill.Key.SemanticFingerprintHMAC[:], request.Fill.Key.Variant, request.Fill.Key.RouteIdentityHMAC[:], entryID, now, originOperation); err != nil {
 			return redactPostgresError(fmt.Errorf("complete PostgreSQL response cache fill: %w", err))

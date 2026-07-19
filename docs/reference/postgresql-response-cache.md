@@ -20,15 +20,19 @@ An opted-in lookup authenticates the envelope before recording a hit. A retry
 with the same operation ID does not increment `use_count`; a different
 operation increments it with signed 32-bit saturation. Reusing one operation
 ID against a different cache entry is rejected rather than silently changing
-the operation's cache provenance. A miss returns without a PostgreSQL budget
-read or provider dispatch decision.
+the operation's cache provenance. Publication records the origin operation in
+the same uses table, so the origin is included in the durable use count and
+cannot later consume a different cache entry. A miss returns without a
+PostgreSQL budget read or provider dispatch decision.
 
 ## Fill leases and bounded responses
 
 `BeginFill` acquires an expiring row-level lease keyed by the same route
 identity as the entry. An active lease is reported as busy only for that route,
-while a failed or expired lease may be taken over. `Publish` inserts the ready
-entry and marks the fill completed in one durable transaction. The response
+while a failed or expired lease may be taken over. A completed fill is reused
+only while its entry remains ready; tombstoned entries can acquire a fresh
+route-isolated lease. `Publish` inserts the ready entry and marks the fill
+completed in one durable transaction. The response
 template is authenticated envelope ciphertext and is capped by
 `DefaultResponseCacheMaxInlineBytes` (256 KiB by default). Responses above the
 cap require the future blob-backed publication path; this implementation does

@@ -12,11 +12,12 @@ import (
 )
 
 func testCacheKey() CacheKey {
+	suffix := uuid.NewString()
 	return CacheKey{
 		ScopeID:                 uuid.New(),
 		FingerprintVersion:      1,
-		SemanticFingerprintHMAC: sha256.Sum256([]byte("semantic")),
-		RouteIdentityHMAC:       sha256.Sum256([]byte("route")),
+		SemanticFingerprintHMAC: sha256.Sum256([]byte("semantic:" + suffix)),
+		RouteIdentityHMAC:       sha256.Sum256([]byte("route:" + suffix)),
 		Variant:                 0,
 	}
 }
