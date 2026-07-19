@@ -60,3 +60,23 @@ type StreamingAdapter interface {
 	Adapter
 	OpenStream(context.Context, Call, Observer) (StreamResult, error)
 }
+
+// ResumableAdapter is the optional provider boundary for APIs that accept an
+// operation and return a provider-owned identifier that can be polled. The
+// operation id is deliberately passed only to Poll; callers must persist it
+// before making that call and must never turn a pending result into Submit on
+// a retry. Providers that do not expose a documented idempotency lookup do not
+// implement RecoverByIdempotencyKey and an acceptance/persistence gap remains
+// ambiguous.
+type ResumableAdapter interface {
+	Adapter
+	Submit(context.Context, Call, Observer) (ResumableResult, error)
+	Poll(context.Context, Call, string, Observer) (ResumableResult, error)
+}
+
+// IdempotencyRecovery is an optional extension for providers that document a
+// lookup by the caller's operation key. Without it, an acceptance/persistence
+// gap is ambiguous and must not trigger a second Submit.
+type IdempotencyRecovery interface {
+	RecoverByIdempotencyKey(context.Context, Call, Observer) (ResumableResult, error)
+}
