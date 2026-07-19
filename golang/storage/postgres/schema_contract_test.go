@@ -87,3 +87,27 @@ func TestMigrationTemplateContract(t *testing.T) {
 		t.Fatal("rendered migration did not apply namespace")
 	}
 }
+
+func TestResponseCacheStorageIdentityIncludesRoute(t *testing.T) {
+	data, err := schemaFiles.ReadFile("schema/000001_worker_state.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(data)
+	indexStart := strings.Index(sql, "CREATE UNIQUE INDEX __PREFIX__response_cache_reusable_key_uidx")
+	if indexStart < 0 {
+		t.Fatal("response cache reusable index is missing")
+	}
+	indexEnd := strings.Index(sql[indexStart:], "WHERE state = 'ready';")
+	if indexEnd < 0 || !strings.Contains(sql[indexStart:indexStart+indexEnd], "cache_route_identity_hmac") {
+		t.Fatal("response cache reusable identity does not include route identity")
+	}
+	fillsStart := strings.Index(sql, "CREATE TABLE __SCHEMA__.__PREFIX__response_cache_fills")
+	if fillsStart < 0 {
+		t.Fatal("response cache fills table is missing")
+	}
+	fillsEnd := strings.Index(sql[fillsStart:], "CHECK (state <> 'completed' OR cache_entry_id IS NOT NULL)")
+	if fillsEnd < 0 || !strings.Contains(sql[fillsStart:fillsStart+fillsEnd], "cache_route_identity_hmac") {
+		t.Fatal("response cache fill identity does not include route identity")
+	}
+}

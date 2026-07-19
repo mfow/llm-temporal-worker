@@ -1063,7 +1063,8 @@ CREATE UNIQUE INDEX response_cache_reusable_key_uidx
         scope_id,
         fingerprint_version,
         semantic_fingerprint_hmac,
-        variant
+        variant,
+        cache_route_identity_hmac
     )
     WHERE state = 'ready';
 
@@ -1084,6 +1085,8 @@ CREATE TABLE llm_worker.response_cache_fills (
     semantic_fingerprint_hmac bytea NOT NULL
         CHECK (octet_length(semantic_fingerprint_hmac) = 32),
     variant integer NOT NULL CHECK (variant >= 0),
+    cache_route_identity_hmac bytea NOT NULL
+        CHECK (octet_length(cache_route_identity_hmac) = 32),
     owner_operation_id uuid NOT NULL
         REFERENCES llm_worker.operations(operation_id) ON DELETE RESTRICT,
     state text NOT NULL CHECK (state IN ('filling', 'completed', 'failed')),
@@ -1096,7 +1099,8 @@ CREATE TABLE llm_worker.response_cache_fills (
         scope_id,
         fingerprint_version,
         semantic_fingerprint_hmac,
-        variant
+        variant,
+        cache_route_identity_hmac
     ),
     CHECK (state <> 'completed' OR cache_entry_id IS NOT NULL)
 );
@@ -1217,11 +1221,12 @@ inserted logical use, not on polling or replay of the same operation.
 
 Cleanup first changes a ready entry to **tombstoned** and commits the outbox
 intent. The partial unique index then permits a new ready entry for the same
-fingerprint without rewriting the old origin/use provenance. Fill publication
-still serializes on **response_cache_fills** and tombstones any reusable
-predecessor before inserting the replacement in one transaction; physical blob
-deletion remains asynchronous. Fill acquisition locks the existing key row and,
-only when it is terminal and no reusable ready entry exists, replaces its owner,
+route-isolated fingerprint without rewriting the old origin/use provenance.
+Fill publication still serializes on **response_cache_fills** and tombstones any
+reusable predecessor before inserting the replacement in one transaction;
+physical blob deletion remains asynchronous. Fill acquisition locks the
+existing route-isolated key row and, only when it is terminal and no reusable
+ready entry exists, replaces its owner,
 lease, and state in place. The fill row is the reusable per-key mutex; a prior
 `completed` row therefore cannot block a later refill.
 
