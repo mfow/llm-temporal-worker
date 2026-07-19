@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.1
 	github.com/aws/smithy-go v1.27.3
+	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go/v3 v3.43.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
@@ -53,7 +54,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/mock v1.6.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect

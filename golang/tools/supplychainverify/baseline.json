@@ -3,6 +3,7 @@
   "allowed_licenses": [
     "Apache-2.0",
     "BSD-2-Clause",
+    "BSD-3-Clause",
     "MIT"
   ],
   "direct_modules": [
@@ -53,6 +54,12 @@
       "version": "v1.27.3",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/smithy-go"
+    },
+    {
+      "path": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/google/uuid"
     },
     {
       "path": "github.com/openai/openai-go/v3",

@@ -20,6 +20,7 @@ is the single status/authority index:
 
 - [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
 - [PostgreSQL state, cache, accounting, and control plane](architecture/postgresql-state-cache-and-control-plane.md)
+- [PostgreSQL repository foundation](reference/postgresql-repository-foundation.md)
 - [OCaml conversation and typed query client](architecture/ocaml-conversation-and-query-client.md)
 - [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 
