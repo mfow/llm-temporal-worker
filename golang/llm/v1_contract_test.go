@@ -68,6 +68,48 @@ func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 	if err := json.Unmarshal(unknown, &queryRequest); err == nil {
 		t.Fatal("unknown query field accepted")
 	}
+	unknown = []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p"},"kind":"provider_status","query":{}}`)
+	if err := json.Unmarshal(unknown, &queryRequest); err == nil {
+		t.Fatal("incomplete query context accepted")
+	}
+}
+
+func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
+	requestData := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"instructions":{"set":[{"kind":"parts","content":[{"kind":"text","text":"hello"}]}]},"tools":{"set":[{"name":"lookup","description":"lookup data","input_schema":{"type":"object"}}]},"output":{"set":{"max_tokens":32,"format":{"kind":"text"}}}}}`)
+	var request llm.GenerateRequestV1
+	if err := json.Unmarshal(requestData, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.SettingsPatch.Instructions.Set == nil || len(*request.SettingsPatch.Instructions.Set) != 1 || len((*request.SettingsPatch.Instructions.Set)[0].Content) != 1 {
+		t.Fatalf("parts instruction was not decoded: %#v", request.SettingsPatch.Instructions)
+	}
+	if request.SettingsPatch.Tools.Set == nil || len(*request.SettingsPatch.Tools.Set) != 1 || string((*request.SettingsPatch.Tools.Set)[0].InputSchema) != `{"type":"object"}` {
+		t.Fatalf("tool input schema was not decoded: %#v", request.SettingsPatch.Tools)
+	}
+	if request.SettingsPatch.Output.Set == nil || request.SettingsPatch.Output.Set.MaxTokens == nil || *request.SettingsPatch.Output.Set.MaxTokens != 32 {
+		t.Fatalf("output max_tokens was not decoded: %#v", request.SettingsPatch.Output)
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(readV1Fixture(t, "generate-response.json"), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["route"] = json.RawMessage(`{"route_id":"route-1","endpoint_id":"endpoint-1","api_family":"responses","requested_model":"gpt-test","resolved_model":"gpt-test-2026"}`)
+	envelope["usage"] = json.RawMessage(`{"input_tokens":10,"output_tokens":20,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5}`)
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response llm.GenerateResponseV1
+	if err := json.Unmarshal(data, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Route == nil || response.Route.RouteID != "route-1" || response.Route.ResolvedModel != "gpt-test-2026" {
+		t.Fatalf("route metadata was not decoded: %#v", response.Route)
+	}
+	if response.Usage == nil || response.Usage.InputTokens != 10 || response.Usage.CacheWriteTokens != 5 {
+		t.Fatalf("usage metadata was not decoded: %#v", response.Usage)
+	}
 }
 
 func TestV1VariantBoundariesAndTemperature(t *testing.T) {

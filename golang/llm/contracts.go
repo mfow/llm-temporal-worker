@@ -176,11 +176,45 @@ func decodePatch[T any](raw json.RawMessage, name string) (Patch[T], error) {
 		}
 		return Patch[T]{Clear: true}, nil
 	}
-	var value T
-	if err := json.Unmarshal(fields["set"], &value); err != nil {
-		return Patch[T]{}, fmt.Errorf("%s.set: %w", name, err)
+	value, err := decodePatchValue[T](fields["set"], name)
+	if err != nil {
+		return Patch[T]{}, err
 	}
 	return Patch[T]{Set: &value}, nil
+}
+
+// decodePatchValue routes polymorphic settings values through the same strict
+// wire decoders used by the provider-neutral request model. A plain
+// json.Unmarshal would silently ignore the snake_case fields and cannot
+// reconstruct the Part interface used by parts instructions.
+func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
+	var zero T
+	switch any(zero).(type) {
+	case []Instruction:
+		value, err := decodeInstructions(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
+	case []Tool:
+		value, err := decodeTools(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
+	case OutputSpec:
+		value, err := decodeOutput(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(*value).(T), nil
+	default:
+		value := zero
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return value, nil
+	}
 }
 
 func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
@@ -606,15 +640,15 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	}
 	result := GenerateResponseV1{APIVersion: version, OperationKey: key, OperationID: id, Status: status, Output: output, Checkpoint: checkpoint, Cache: cache, Cost: cost}
 	if raw, ok := fields["route"]; ok {
-		var route RouteFacts
-		if err := json.Unmarshal(raw, &route); err != nil {
+		route, err := decodeRouteFacts(raw)
+		if err != nil {
 			return err
 		}
 		result.Route = &route
 	}
 	if raw, ok := fields["usage"]; ok {
-		var usage Usage
-		if err := json.Unmarshal(raw, &usage); err != nil {
+		usage, err := decodeUsage(raw)
+		if err != nil {
 			return err
 		}
 		result.Usage = &usage
@@ -872,6 +906,9 @@ func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
 	context, err := decodeRequestContext(contextRaw)
 	if err != nil {
 		return err
+	}
+	if context.Tenant == "" || context.Project == "" || context.Actor == "" {
+		return fmt.Errorf("context requires tenant, project, and actor")
 	}
 	query, err := requireField(fields, "query")
 	if err != nil || !validObjectJSON(query) {
