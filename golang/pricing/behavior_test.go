@@ -27,7 +27,7 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 			CacheReadPerMillion:  MustDecimalUSD("0.000003"),
 			CacheWritePerMillion: MustDecimalUSD("0.000004"),
 			ReasoningPerMillion:  MustDecimalUSD("0.000005"),
-			PerRequest:           MustDecimalUSD("100000"),
+			PerRequest:           MustDecimalUSD("0.10"),
 		},
 		Version: "entry-v1",
 	}
