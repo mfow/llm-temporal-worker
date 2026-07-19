@@ -5,6 +5,13 @@ adapter observation and the durable PostgreSQL projections described in the
 [control-plane design](../architecture/postgresql-state-cache-and-control-plane.md#provider-status-credit-state-and-inventory).
 It is intentionally independent of provider SDKs and database clients.
 
+This package is the normalization and projection-invariant slice of Task 13.
+It does not open a database, append an event, update a PostgreSQL projection,
+call a provider management API, or register a query Activity. Those durable
+repositories and adapters are a follow-up Task 13/14 change. Keeping that
+boundary explicit prevents an in-memory `RouteStatus` or `InventorySnapshot`
+from being mistaken for persisted production state.
+
 ## Status and credit
 
 Adapters convert inference, startup, management, and operator observations to
@@ -38,3 +45,11 @@ reviewed configuration snapshot and capability entry.
 refresh preserves the last valid snapshot for stale reads while returning the
 refresh error, allowing query callers to report stale provenance instead of
 silently presenting a fabricated current result.
+
+## Persistence hand-off
+
+The future PostgreSQL repository should consume `StatusEvent` values in one
+transaction: append the event and update the route current projection, then
+persist `InventorySnapshot` rows and their bounded model rows. The domain
+package supplies validation, safe fields, deterministic digests, and sticky
+incident rules; it does not claim that this hand-off is implemented yet.
