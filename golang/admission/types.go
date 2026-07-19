@@ -11,12 +11,13 @@ import (
 type OperationState string
 
 const (
-	StateReserved       OperationState = "reserved"
-	StateDispatching    OperationState = "dispatching"
-	StateCompleted      OperationState = "completed"
-	StateDefiniteFailed OperationState = "definite_failed"
-	StateAmbiguous      OperationState = "ambiguous"
-	StateCanceled       OperationState = "canceled"
+	StateReserved        OperationState = "reserved"
+	StateDispatching     OperationState = "dispatching"
+	StateProviderPending OperationState = "provider_pending"
+	StateCompleted       OperationState = "completed"
+	StateDefiniteFailed  OperationState = "definite_failed"
+	StateAmbiguous       OperationState = "ambiguous"
+	StateCanceled        OperationState = "canceled"
 )
 
 func (state OperationState) Terminal() bool {
@@ -97,6 +98,14 @@ type BeginRequest struct {
 	PriceVersion   string
 	LeaseUntil     time.Time
 	ExpiresAt      time.Time
+	// Durable operation metadata. Legacy stores may ignore these optional
+	// fields; the PostgreSQL store persists them as the normalized request
+	// envelope required for replay.
+	OperationKind        string
+	APIVersion           string
+	RequestSchemaVersion int
+	RequestManifest      []byte
+	ConfigDigest         [32]byte
 }
 
 type BeginResult struct {
@@ -122,6 +131,19 @@ type DispatchRequest struct {
 	DispatchToken string
 	Attempt       AttemptFacts
 	LeaseUntil    time.Time
+}
+
+// ProviderPendingRequest records a provider-assigned operation before the
+// worker returns from an activity. It is intentionally separate from the
+// dispatch request so adapters cannot accidentally mark a local submission
+// as durable provider state.
+type ProviderPendingRequest struct {
+	OperationID         string
+	DispatchToken       string
+	ProviderOperationID string
+	EndpointID          string
+	Provider            string
+	PollAfter           time.Time
 }
 
 type AttemptOutcome struct {
@@ -155,6 +177,9 @@ type CompleteRequest struct {
 	ActualCostUSD pricing.USD
 	ResultRef     *state.BlobRef
 	Attempt       AttemptFacts
+	CostStatus    string
+	CostMethod    string
+	UnknownReason string
 }
 
 type FailRequest struct {

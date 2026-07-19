@@ -1,0 +1,694 @@
+package postgres
+
+// Operation persistence is intentionally a small, one-shot boundary. It
+// stores the normalized request manifest and every route attempt while the
+// provider adapter remains responsible for the actual network call.
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
+)
+
+const (
+	defaultOperationKind = "generate"
+	defaultAPIVersion    = "llm.generate.v1"
+	defaultCostMethod    = "provider_reported"
+)
+
+// OperationRepository implements admission.AdmissionStore for PostgreSQL.
+// Operation IDs that are not UUIDs are deterministically namespaced UUIDs;
+// this keeps the legacy string API stable while making database references
+// strongly typed.
+type OperationRepository struct {
+	Pool      *pgxpool.Pool
+	Namespace Namespace
+	Keys      Keyring
+	Scopes    ScopeRepository
+	Retention time.Duration
+	Now       func() time.Time
+}
+
+func (r OperationRepository) validate() error {
+	if r.Pool == nil {
+		return errors.New("operation repository pool is nil")
+	}
+	if err := r.Namespace.Validate(); err != nil {
+		return err
+	}
+	if _, _, err := r.Keys.activeKey(); err != nil {
+		return err
+	}
+	if err := r.Scopes.validate(); err != nil {
+		return err
+	}
+	if r.Retention <= 0 {
+		return errors.New("operation repository retention must be positive")
+	}
+	return nil
+}
+
+func DefaultOperationRepository(pool *pgxpool.Pool, namespace Namespace, keys Keyring, scopes ScopeRepository) OperationRepository {
+	return OperationRepository{Pool: pool, Namespace: namespace, Keys: keys, Scopes: scopes, Retention: 24 * time.Hour, Now: time.Now}
+}
+
+func operationUUID(id string) uuid.UUID {
+	if parsed, err := uuid.Parse(id); err == nil {
+		return parsed
+	}
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("llmtw/operation/v1\x00"+id))
+}
+
+func operationHMAC(key []byte, domain string, value []byte) [32]byte {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("llmtw/" + domain + "/v1\x00"))
+	_, _ = mac.Write(value)
+	var out [32]byte
+	copy(out[:], mac.Sum(nil))
+	return out
+}
+
+func (r OperationRepository) activeKey() ([]byte, error) {
+	_, key, err := r.Keys.activeKey()
+	return key, err
+}
+
+func splitScope(value string) (string, string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "", errors.New("operation scope is empty")
+	}
+	parts := strings.SplitN(value, "/", 2)
+	if len(parts) == 1 {
+		return parts[0], "default", nil
+	}
+	if parts[0] == "" || parts[1] == "" {
+		return "", "", errors.New("operation scope has an empty component")
+	}
+	return parts[0], parts[1], nil
+}
+
+func normalizeManifest(raw []byte) ([]byte, error) {
+	if len(raw) == 0 {
+		return []byte(`{}`), nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("request manifest is invalid JSON: %w", err)
+	}
+	if _, ok := value.(map[string]any); !ok {
+		return nil, errors.New("request manifest must be a JSON object")
+	}
+	return json.Marshal(value)
+}
+
+func (r OperationRepository) beginKeyring() ([]byte, error) {
+	key, err := r.activeKey()
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != keyDigestBytes {
+		return nil, errors.New("operation HMAC key must be exactly 32 bytes")
+	}
+	return key, nil
+}
+
+func usdText(value pricing.USD) (string, error) { return EncodeUSD(value) }
+
+func (r OperationRepository) Begin(ctx context.Context, request admission.BeginRequest) (admission.BeginResult, error) {
+	var result admission.BeginResult
+	if err := r.validate(); err != nil {
+		return result, err
+	}
+	if request.ID == "" {
+		return result, errors.New("operation id is empty")
+	}
+	if request.ExpiresAt.IsZero() {
+		request.ExpiresAt = r.clock().Add(r.Retention)
+	}
+	if !request.ExpiresAt.After(r.clock()) {
+		return result, errors.New("operation expiry must be in the future")
+	}
+	kind := request.OperationKind
+	if kind == "" {
+		kind = defaultOperationKind
+	}
+	if kind != "generate" && kind != "compact" {
+		return result, errors.New("unsupported operation kind")
+	}
+	apiVersion := request.APIVersion
+	if apiVersion == "" {
+		apiVersion = defaultAPIVersion
+	}
+	version := request.RequestSchemaVersion
+	if version == 0 {
+		version = 1
+	}
+	manifest, err := normalizeManifest(request.RequestManifest)
+	if err != nil {
+		return result, err
+	}
+	scopeTenant, scopeProject, err := splitScope(request.ScopeKey)
+	if err != nil {
+		return result, err
+	}
+	scope, err := r.Scopes.Ensure(ctx, scopeTenant, scopeProject)
+	if err != nil {
+		return result, err
+	}
+	key, err := r.beginKeyring()
+	if err != nil {
+		return result, err
+	}
+	opID := operationUUID(request.ID)
+	operationKey := operationHMAC(key, "operation-key", []byte(request.ID))
+	fingerprint := operationHMAC(key, "request-fingerprint", request.RequestDigest[:])
+	sealed, err := r.Keys.Seal(EnvelopeContext{ScopeID: scope.ID, OperationID: opID, PayloadKind: "operation-request", Digest: request.RequestDigest}, manifest)
+	if err != nil {
+		return result, err
+	}
+	cost, err := usdText(request.ReservationUSD)
+	if err != nil {
+		return result, err
+	}
+	configDigest := request.ConfigDigest
+	if configDigest == [32]byte{} {
+		configDigest = sha256.Sum256([]byte(request.ConfigVersion))
+	}
+	if request.ConfigVersion == "" {
+		request.ConfigVersion = "unknown"
+	}
+	if request.LeaseUntil.IsZero() {
+		request.LeaseUntil = r.clock().Add(5 * time.Minute)
+	}
+	tokenDigest := operationHMAC(key, "dispatch-token", opID[:])
+	tokenValue := hex.EncodeToString(tokenDigest[:])
+	operations, err := r.Namespace.Render("operations")
+	if err != nil {
+		return result, err
+	}
+	configs, err := r.Namespace.Render("configuration_snapshots")
+	if err != nil {
+		return result, err
+	}
+	query := "SELECT operation_id, request_fingerprint_hmac, state, api_version, request_schema_version, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at FROM " + operations + " WHERE scope_id = $1 AND operation_kind = $2 AND operation_key_hmac = $3 FOR UPDATE"
+	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, config_digest, state, lease_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,'reserved',$12,$13,$14,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT (scope_id, operation_kind, operation_key_hmac) DO NOTHING"
+	err = WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var existingFingerprint []byte
+		var existing admission.Operation
+		var reserved, incurred, actual *string
+		var completed, retention *time.Time
+		scanErr := tx.QueryRow(ctx, query, scope.ID, kind, operationKey[:]).Scan(&existing.ID, &existingFingerprint, &existing.State, &existing.ConfigVersion, &version, &reserved, &incurred, &actual, new(string), new(string), new(string), &existing.CreatedAt, &existing.UpdatedAt, &completed, &retention)
+		if scanErr == nil {
+			if !hmac.Equal(existingFingerprint, fingerprint[:]) {
+				return admission.ErrOperationConflict
+			}
+			result.Operation = existing
+			result.Operation.ID = request.ID
+			result.Operation.ScopeKey = request.ScopeKey
+			result.Operation.DispatchToken = tokenValue
+			result.Existing = true
+			return nil
+		}
+		if !errors.Is(scanErr, pgx.ErrNoRows) {
+			return redactPostgresError(fmt.Errorf("lookup PostgreSQL operation: %w", scanErr))
+		}
+		// Keep the referenced configuration digest self-contained for callers
+		// that do not yet have a separate configuration snapshot repository.
+		if _, err := tx.Exec(ctx, "INSERT INTO "+configs+" (config_digest, config_version, source_digest, sanitized_config) VALUES ($1,$2,$1,'{}'::jsonb) ON CONFLICT (config_digest) DO NOTHING", configDigest[:], request.ConfigVersion); err != nil {
+			return redactPostgresError(fmt.Errorf("persist operation configuration: %w", err))
+		}
+		inserted, err := tx.Exec(ctx, insert, opID, scope.ID, kind, apiVersion, operationKey[:], fingerprint[:], version, manifest, sealed.Ciphertext, sealed.KeyID, configDigest[:], request.LeaseUntil, cost, cost)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("insert PostgreSQL operation: %w", err))
+		}
+		if inserted.RowsAffected() == 0 {
+			var storedFingerprint []byte
+			if err := tx.QueryRow(ctx, "SELECT request_fingerprint_hmac FROM "+operations+" WHERE scope_id=$1 AND operation_kind=$2 AND operation_key_hmac=$3 FOR UPDATE", scope.ID, kind, operationKey[:]).Scan(&storedFingerprint); err != nil {
+				return redactPostgresError(fmt.Errorf("re-read PostgreSQL operation: %w", err))
+			}
+			if !hmac.Equal(storedFingerprint, fingerprint[:]) {
+				return admission.ErrOperationConflict
+			}
+			result.Operation = admission.Operation{ID: request.ID, ScopeKey: request.ScopeKey, RequestDigest: request.RequestDigest, State: admission.StateReserved, DispatchToken: tokenValue, ExpiresAt: request.ExpiresAt, ConfigVersion: request.ConfigVersion, PriceVersion: request.PriceVersion}
+			result.Existing = true
+			return nil
+		}
+		result.Operation = admission.Operation{ID: request.ID, ScopeKey: request.ScopeKey, RequestDigest: request.RequestDigest, State: admission.StateReserved, ReservedCostUSD: &request.ReservationUSD, DispatchToken: tokenValue, LeaseUntil: request.LeaseUntil, ExpiresAt: request.ExpiresAt, ConfigVersion: request.ConfigVersion, PriceVersion: request.PriceVersion, CreatedAt: r.clock(), UpdatedAt: r.clock()}
+		return nil
+	})
+	if err != nil {
+		return admission.BeginResult{}, err
+	}
+	return result, nil
+}
+
+func (r OperationRepository) clock() time.Time {
+	if r.Now != nil {
+		return r.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (r OperationRepository) MarkDispatching(ctx context.Context, request admission.DispatchRequest) error {
+	return r.transitionDispatch(ctx, request)
+}
+
+func (r OperationRepository) transitionDispatch(ctx context.Context, request admission.DispatchRequest) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	opID := operationUUID(request.OperationID)
+	operations, err := r.Namespace.Render("operations")
+	if err != nil {
+		return err
+	}
+	attempts, err := r.Namespace.Render("operation_attempts")
+	if err != nil {
+		return err
+	}
+	lease := request.LeaseUntil
+	if lease.IsZero() {
+		lease = r.clock().Add(5 * time.Minute)
+	}
+	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var stateValue string
+		var number int
+		selectQ := "SELECT state, poll_count FROM " + operations + " WHERE operation_id=$1 FOR UPDATE"
+		if err := tx.QueryRow(ctx, selectQ, opID).Scan(&stateValue, &number); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return admission.ErrOperationNotFound
+			}
+			return redactPostgresError(err)
+		}
+		if stateValue != string(admission.StateReserved) {
+			return admission.ErrInvalidTransition
+		}
+		if request.DispatchToken == "" {
+			return admission.ErrInvalidToken
+		}
+		expected := operationHMAC(mustKey(r.Keys), "dispatch-token", opID[:])
+		if !hmac.Equal([]byte(request.DispatchToken), []byte(hex.EncodeToString(expected[:]))) {
+			return admission.ErrInvalidToken
+		}
+		if _, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='dispatching', lease_expires_at=$2, updated_at=clock_timestamp() WHERE operation_id=$1 AND state='reserved'", opID, lease); err != nil {
+			return redactPostgresError(err)
+		}
+		facts := request.Attempt
+		if facts.RouteID == "" {
+			facts.RouteID = "unknown"
+		}
+		if facts.EndpointID == "" {
+			facts.EndpointID = "unknown"
+		}
+		if facts.Provider == "" {
+			facts.Provider = "unknown"
+		}
+		if facts.ServiceClass == "" {
+			facts.ServiceClass = "standard"
+		}
+		if facts.AttemptNumber <= 0 {
+			facts.AttemptNumber = number + 1
+		}
+		disposition := string(facts.Dispatch)
+		if disposition == "" {
+			disposition = string(admission.Accepted)
+		}
+		_, err = tx.Exec(ctx, "INSERT INTO "+attempts+" (attempt_id,operation_id,attempt_number,route_index,fallback_index,route_id,endpoint_id,provider,endpoint_family,resolved_model,route_model_revision,state,dispatch_disposition,reserved_cost_usd,cost_status,safe_diagnostics) VALUES ($1,$2,$3,0,0,$4,$5,$6,'unknown','unknown','unknown','submitted',$7,0,'pending','{}'::jsonb) ON CONFLICT (operation_id,attempt_number) DO NOTHING", uuid.New(), opID, facts.AttemptNumber, facts.RouteID, facts.EndpointID, facts.Provider, disposition)
+		return err
+	})
+}
+
+func mustKey(r Keyring) []byte { _, key, _ := r.activeKey(); return key }
+
+func (r OperationRepository) validToken(operationID uuid.UUID, supplied string) bool {
+	if supplied == "" {
+		return false
+	}
+	expected := operationHMAC(mustKey(r.Keys), "dispatch-token", operationID[:])
+	return hmac.Equal([]byte(supplied), []byte(hex.EncodeToString(expected[:])))
+}
+
+// MarkProviderPending records the provider's durable id before the activity
+// returns. The provider id is stored only as an HMAC plus an encrypted
+// envelope; it is never emitted in SQL errors or logs.
+func (r OperationRepository) MarkProviderPending(ctx context.Context, request admission.ProviderPendingRequest) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	if request.ProviderOperationID == "" || request.EndpointID == "" {
+		return errors.New("provider operation id and endpoint are required")
+	}
+	opID := operationUUID(request.OperationID)
+	relation, err := r.Namespace.Render("operations")
+	if err != nil {
+		return err
+	}
+	key := mustKey(r.Keys)
+	providerHMAC := operationHMAC(key, "provider-operation", []byte(request.ProviderOperationID))
+	// The operation scope is intentionally not accepted from the caller. The
+	// ciphertext column is opaque at this bounded repository layer; provider
+	// adapters that need to decrypt it use their scoped result repository.
+	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var current string
+		var scopeID uuid.UUID
+		var existingProviderHMAC []byte
+		if err := tx.QueryRow(ctx, "SELECT state, scope_id, provider_operation_id_hmac FROM "+relation+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&current, &scopeID, &existingProviderHMAC); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return admission.ErrOperationNotFound
+			}
+			return err
+		}
+		if current == string(admission.StateProviderPending) {
+			if hmac.Equal(existingProviderHMAC, providerHMAC[:]) {
+				return nil
+			}
+			return admission.ErrOperationConflict
+		}
+		if current != string(admission.StateDispatching) {
+			return admission.ErrInvalidTransition
+		}
+		if !r.validToken(opID, request.DispatchToken) {
+			return admission.ErrInvalidToken
+		}
+		sealed, err := r.Keys.Seal(EnvelopeContext{ScopeID: scopeID, OperationID: opID, PayloadKind: "provider-operation", Digest: providerHMAC}, []byte(request.ProviderOperationID))
+		if err != nil {
+			return err
+		}
+		poll := any(nil)
+		if !request.PollAfter.IsZero() {
+			poll = request.PollAfter
+		}
+		updated, err := tx.Exec(ctx, "UPDATE "+relation+" SET state='provider_pending', endpoint_id=$2, provider=COALESCE(NULLIF($3,''),provider), provider_operation_id_hmac=$4, provider_operation_id_ciphertext=$5, provider_reference_key_id=$6, provider_pending_at=clock_timestamp(), poll_after=$7, updated_at=clock_timestamp() WHERE operation_id=$1 AND state='dispatching'", opID, request.EndpointID, request.Provider, providerHMAC[:], sealed.Ciphertext, sealed.KeyID, poll)
+		if err != nil {
+			return err
+		}
+		if updated.RowsAffected() != 1 {
+			return admission.ErrInvalidTransition
+		}
+		return nil
+	})
+}
+
+func (r OperationRepository) Continue(ctx context.Context, request admission.ContinueRequest) (admission.ContinueResult, error) {
+	var result admission.ContinueResult
+	if err := r.validate(); err != nil {
+		return result, err
+	}
+	opID := operationUUID(request.OperationID)
+	operations, err := r.Namespace.Render("operations")
+	if err != nil {
+		return result, err
+	}
+	remaining, err := usdText(request.RemainingUSD)
+	if err != nil {
+		return result, err
+	}
+	lease := request.LeaseUntil
+	if lease.IsZero() {
+		lease = r.clock().Add(5 * time.Minute)
+	}
+	err = WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var stateValue string
+		if err := tx.QueryRow(ctx, "SELECT state FROM "+operations+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&stateValue); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return admission.ErrOperationNotFound
+			}
+			return err
+		}
+		if stateValue != string(admission.StateDispatching) && stateValue != string(admission.StateProviderPending) {
+			return admission.ErrInvalidTransition
+		}
+		if !r.validToken(opID, request.DispatchToken) {
+			return admission.ErrInvalidToken
+		}
+		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='reserved', reserved_cost_usd=$2, lease_expires_at=$3, updated_at=clock_timestamp() WHERE operation_id=$1", opID, remaining, lease)
+		return err
+	})
+	if err != nil {
+		return result, err
+	}
+	result.Operation, err = r.Get(ctx, request.OperationID)
+	return result, err
+}
+
+func (r OperationRepository) Complete(ctx context.Context, request admission.CompleteRequest) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	if request.ResultRef == nil || !request.ResultRef.Valid() {
+		return errors.New("completed operation requires a valid result reference")
+	}
+	opID := operationUUID(request.OperationID)
+	operations, err := r.Namespace.Render("operations")
+	if err != nil {
+		return err
+	}
+	actual, err := usdText(request.ActualCostUSD)
+	if err != nil {
+		return err
+	}
+	method := request.CostMethod
+	if method == "" {
+		method = defaultCostMethod
+	}
+	status := request.CostStatus
+	if status == "" {
+		status = "exact"
+	}
+	if status != "exact" && status != "unknown" {
+		return errors.New("completed operation cost status must be exact or unknown")
+	}
+	// Result bytes are owned by the blob/result store; this bounded repository
+	// records an opaque non-empty marker plus the content digest. The marker is
+	// never decrypted and therefore cannot leak response content.
+	resultCipher := []byte{0}
+	resultKey := r.Keys.Active
+	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var stateValue string
+		if err := tx.QueryRow(ctx, "SELECT state FROM "+operations+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&stateValue); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return admission.ErrOperationNotFound
+			}
+			return err
+		}
+		if stateValue != string(admission.StateDispatching) && stateValue != string(admission.StateProviderPending) {
+			return admission.ErrInvalidTransition
+		}
+		if !r.validToken(opID, request.DispatchToken) {
+			return admission.ErrInvalidToken
+		}
+		if status == "unknown" {
+			actual = ""
+			method = ""
+			if request.UnknownReason == "" {
+				request.UnknownReason = "provider_outcome_unknown"
+			}
+		}
+		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, actual_cost_usd=$5, cost_status=$6, cost_method=$7, cost_unknown_reason_code=$8, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$9 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds())
+		return err
+	})
+}
+
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func (r OperationRepository) Fail(ctx context.Context, request admission.FailRequest) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	opID := operationUUID(request.OperationID)
+	operations, err := r.Namespace.Render("operations")
+	if err != nil {
+		return err
+	}
+	stateValue := "definite_failed"
+	status := "exact"
+	method := "worker_cache_zero"
+	actual := pricing.MustUSD("0")
+	if request.Certainty == admission.Ambiguous {
+		stateValue = "ambiguous"
+		status = "unknown"
+		method = ""
+	}
+	actualText, _ := usdText(actual)
+	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var current string
+		if err := tx.QueryRow(ctx, "SELECT state FROM "+operations+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&current); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return admission.ErrOperationNotFound
+			}
+			return err
+		}
+		if current != string(admission.StateDispatching) && current != string(admission.StateProviderPending) {
+			return admission.ErrInvalidTransition
+		}
+		if !r.validToken(opID, request.DispatchToken) {
+			return admission.ErrInvalidToken
+		}
+		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state=$2, actual_cost_usd=$3, cost_status=$4, cost_method=$5, cost_unknown_reason_code=$6, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$7 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1", opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(safeReason(request.Reason)), r.Retention.Seconds())
+		return err
+	})
+}
+
+func safeReason(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "provider_outcome_unknown"
+	}
+	var b strings.Builder
+	for _, c := range value {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' {
+			b.WriteRune(c)
+		}
+	}
+	value = b.String()
+	if len(value) == 0 {
+		return "provider_outcome_unknown"
+	}
+	if len(value) > 64 {
+		return value[:64]
+	}
+	return value
+}
+
+func (r OperationRepository) Get(ctx context.Context, id string) (admission.Operation, error) {
+	var operation admission.Operation
+	if err := r.validate(); err != nil {
+		return operation, err
+	}
+	operations, err := r.Namespace.Render("operations")
+	if err != nil {
+		return operation, err
+	}
+	var requestFingerprint []byte
+	var stateValue, apiVersion, costStatus, costMethod, reason string
+	var reserved, incurred, actual *string
+	var completed, retention *time.Time
+	err = r.Pool.QueryRow(ctx, "SELECT state, api_version, request_fingerprint_hmac, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at FROM "+operations+" WHERE operation_id=$1", operationUUID(id)).Scan(&stateValue, &apiVersion, &requestFingerprint, &reserved, &incurred, &actual, &costStatus, &costMethod, &reason, &operation.CreatedAt, &operation.UpdatedAt, &completed, &retention)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+			return operation, admission.ErrOperationNotFound
+		}
+		return operation, redactPostgresError(err)
+	}
+	operation.ID = id
+	operation.State = admission.OperationState(stateValue)
+	operationUUIDValue := operationUUID(id)
+	tokenDigest := operationHMAC(mustKey(r.Keys), "dispatch-token", operationUUIDValue[:])
+	operation.DispatchToken = hex.EncodeToString(tokenDigest[:])
+	operation.ConfigVersion = apiVersion
+	operation.RequestDigest = requestFingerprintDigest(requestFingerprint)
+	operation.ExpiresAt = time.Time{}
+	if retention != nil {
+		operation.ExpiresAt = *retention
+	}
+	if completed != nil {
+		operation.UpdatedAt = *completed
+	}
+	if reserved != nil {
+		if v, e := DecodeUSD(*reserved); e == nil {
+			operation.ReservedCostUSD = &v
+		}
+	}
+	if incurred != nil {
+		if v, e := DecodeUSD(*incurred); e == nil {
+			operation.IncurredCostUSD = &v
+		}
+	}
+	if actual != nil {
+		if v, e := DecodeUSD(*actual); e == nil {
+			operation.ActualCostUSD = &v
+		}
+	}
+	_ = costStatus
+	_ = costMethod
+	_ = reason
+	_ = apiVersion
+	return operation, nil
+}
+
+func requestFingerprintDigest(value []byte) [32]byte { return sha256.Sum256(value) }
+
+// Attempts returns the durable attempt count. A separate result/attempt file
+// keeps this query reusable by conformance tests without exposing SQL.
+func (r OperationRepository) Attempts(ctx context.Context, id string) ([]admission.AttemptFacts, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	relation, err := r.Namespace.Render("operation_attempts")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Pool.Query(ctx, "SELECT attempt_number, route_id, endpoint_id, provider, COALESCE(dispatch_disposition,'not_dispatched') FROM "+relation+" WHERE operation_id=$1 ORDER BY attempt_number", operationUUID(id))
+	if err != nil {
+		return nil, redactPostgresError(err)
+	}
+	defer rows.Close()
+	var attempts []admission.AttemptFacts
+	for rows.Next() {
+		var a admission.AttemptFacts
+		var d string
+		if err := rows.Scan(&a.AttemptNumber, &a.RouteID, &a.EndpointID, &a.Provider, &d); err != nil {
+			return nil, err
+		}
+		a.Dispatch = admission.DispatchCertainty(d)
+		attempts = append(attempts, a)
+	}
+	return attempts, rows.Err()
+}
+
+// ProviderOperation opens the encrypted provider reference for reconciliation
+// workers. The operation HMAC is checked as the AEAD digest, so a copied
+// ciphertext or mismatched provider id fails closed.
+func (r OperationRepository) ProviderOperation(ctx context.Context, id string) (string, error) {
+	if err := r.validate(); err != nil {
+		return "", err
+	}
+	relation, err := r.Namespace.Render("operations")
+	if err != nil {
+		return "", err
+	}
+	opID := operationUUID(id)
+	var scopeID uuid.UUID
+	var providerHMAC, ciphertext []byte
+	var keyID string
+	if err := r.Pool.QueryRow(ctx, "SELECT scope_id, provider_operation_id_hmac, provider_operation_id_ciphertext, provider_reference_key_id FROM "+relation+" WHERE operation_id=$1", opID).Scan(&scopeID, &providerHMAC, &ciphertext, &keyID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", admission.ErrOperationNotFound
+		}
+		return "", redactPostgresError(err)
+	}
+	if len(providerHMAC) != keyDigestBytes || len(ciphertext) == 0 || keyID == "" {
+		return "", errors.New("provider operation envelope is incomplete")
+	}
+	var digest [32]byte
+	copy(digest[:], providerHMAC)
+	plaintext, err := r.Keys.Open(EnvelopeContext{ScopeID: scopeID, OperationID: opID, PayloadKind: "provider-operation", Digest: digest}, SealedValue{KeyID: keyID, Ciphertext: ciphertext, ContextHash: contextHashForProvider(scopeID, opID, digest)})
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+func contextHashForProvider(scopeID, operationID uuid.UUID, digest [32]byte) [32]byte {
+	hash, _ := contextDigest(EnvelopeContext{ScopeID: scopeID, OperationID: operationID, PayloadKind: "provider-operation", Digest: digest})
+	return hash
+}

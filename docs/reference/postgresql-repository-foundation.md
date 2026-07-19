@@ -1,11 +1,10 @@
 # PostgreSQL repository foundation
 
-The first PostgreSQL repository slice is implemented in
+The PostgreSQL repository slices are implemented in
 [`golang/storage/postgres`](../../golang/storage/postgres). It is intentionally
-limited to the connection, namespace, scope, encrypted-locator, and exact USD
-codec boundaries. Operation replay, attempts, checkpoints, budgets, and cache
-repositories are separate delivery slices and are not represented as complete
-by this package.
+limited to the connection, namespace, scope, encrypted-locator, exact USD
+codec, and one-shot operation/attempt/result boundaries. Checkpoints, budgets,
+and cache repositories remain separate delivery slices.
 
 ## Connection and transaction boundary
 
