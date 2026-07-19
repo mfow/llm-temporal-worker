@@ -633,7 +633,8 @@ CREATE UNIQUE INDEX __PREFIX__response_cache_reusable_key_uidx
         scope_id,
         fingerprint_version,
         semantic_fingerprint_hmac,
-        variant
+        variant,
+        cache_route_identity_hmac
     )
     WHERE state = 'ready';
 
@@ -654,6 +655,8 @@ CREATE TABLE __SCHEMA__.__PREFIX__response_cache_fills (
     semantic_fingerprint_hmac bytea NOT NULL
         CHECK (octet_length(semantic_fingerprint_hmac) = 32),
     variant integer NOT NULL CHECK (variant >= 0),
+    cache_route_identity_hmac bytea NOT NULL
+        CHECK (octet_length(cache_route_identity_hmac) = 32),
     owner_operation_id uuid NOT NULL
         REFERENCES __SCHEMA__.__PREFIX__operations(operation_id) ON DELETE RESTRICT,
     state text NOT NULL CHECK (state IN ('filling', 'completed', 'failed')),
@@ -666,7 +669,8 @@ CREATE TABLE __SCHEMA__.__PREFIX__response_cache_fills (
         scope_id,
         fingerprint_version,
         semantic_fingerprint_hmac,
-        variant
+        variant,
+        cache_route_identity_hmac
     ),
     CHECK (state <> 'completed' OR cache_entry_id IS NOT NULL)
 );

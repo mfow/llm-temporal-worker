@@ -43,3 +43,9 @@ preserve unknown cost as SQL `NULL`; unknown is never coerced to numeric zero.
 All identifiers are generated through the validated namespace and all values
 are positional SQL parameters. This package does not use `search_path`, broad
 JSONB lookup, raw provider IDs, or streaming APIs.
+
+The first response-cache slice is implemented by
+[`ResponseCacheRepository`](postgresql-response-cache.md). It provides
+route-isolated, age-bounded inline cache lookup/use accounting plus durable fill
+leases and publication; checkpoint materialization and blob-backed cache
+publication remain separate delivery slices.
