@@ -113,6 +113,26 @@ func TestCanonicalizationIgnoresMapInsertionOrder(t *testing.T) {
 	}
 }
 
+func TestCanonicalizationPreservesLargeIntegerSeeds(t *testing.T) {
+	first := testInput()
+	seedA := int64(9007199254740992)
+	first.Request.Sampling = &llm.SamplingSpec{Seed: &seedA}
+	second := testInput()
+	seedB := int64(9007199254740993)
+	second.Request.Sampling = &llm.SamplingSpec{Seed: &seedB}
+	firstFingerprint, err := Compute([]byte("secret"), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondFingerprint, err := Compute([]byte("secret"), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstFingerprint == secondFingerprint {
+		t.Fatal("distinct int64 sampling seeds must not share a fingerprint")
+	}
+}
+
 func TestCompactRejectsPositiveVariant(t *testing.T) {
 	input := testInput()
 	input.Operation = OperationCompact

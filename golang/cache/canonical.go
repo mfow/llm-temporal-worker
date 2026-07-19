@@ -1,8 +1,10 @@
 package cache
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -92,8 +94,16 @@ func (input Input) Canonical() ([]byte, error) {
 		return nil, fmt.Errorf("marshal cache request: %w", err)
 	}
 	var request map[string]any
-	if err := json.Unmarshal(raw, &request); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&request); err != nil {
 		return nil, fmt.Errorf("decode cache request: %w", err)
+	}
+	if token, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("cache request has trailing value %v", token)
+		}
+		return nil, fmt.Errorf("cache request trailing input: %w", err)
 	}
 	namespace := input.Namespace
 	if context, ok := request["context"].(map[string]any); ok {
