@@ -16,6 +16,10 @@ transitions performed inside a read-committed transaction. Dispatch tokens are
 deterministic HMACs of the operation UUID, so a worker restart can safely
 reconstruct the token without persisting a bearer secret.
 
+Replay results are hydrated from the durable row after the fingerprint check,
+including the request digest, lease, expiry, and reserved-cost metadata. This
+keeps an idempotent `Begin` replay equivalent to a restart recovery read.
+
 Each retry derives its attempt number from the durable attempt rows while the
 operation row is locked. Provider-accepted or ambiguous failures persist an
 unknown cost with a null exact amount; only rejected/not-dispatched failures
