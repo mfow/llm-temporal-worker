@@ -52,6 +52,10 @@ func TestNormalizeCacheManifestIsObjectAndCanonical(t *testing.T) {
 	if err != nil || string(got) != `{"a":1,"b":2}` {
 		t.Fatalf("manifest=%s err=%v", got, err)
 	}
+	large, err := normalizeCacheManifest([]byte(`{"seed":9007199254740993}`))
+	if err != nil || string(large) != `{"seed":9007199254740993}` {
+		t.Fatalf("large numeric manifest=%s err=%v", large, err)
+	}
 	for _, raw := range []string{"[1]", `{"a":`, "null"} {
 		if _, err := normalizeCacheManifest([]byte(raw)); err == nil {
 			t.Fatalf("manifest %q unexpectedly accepted", raw)

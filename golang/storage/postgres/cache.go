@@ -8,11 +8,13 @@ package postgres
 // unbounded response in PostgreSQL.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -208,7 +210,16 @@ func normalizeCacheManifest(raw []byte) ([]byte, error) {
 		return []byte(`{}`), nil
 	}
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("cache request manifest is invalid JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("cache request manifest must contain one JSON value")
+		}
 		return nil, fmt.Errorf("cache request manifest is invalid JSON: %w", err)
 	}
 	if _, ok := value.(map[string]any); !ok {
