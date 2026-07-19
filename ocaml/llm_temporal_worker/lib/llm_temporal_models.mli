@@ -67,6 +67,8 @@ type output_spec = { max_tokens : int option; format : output_format }
 type sampling = { temperature : float option; top_p : float option; top_k : int option; seed : int64 option; presence_penalty : float option; frequency_penalty : float option; stop_sequences : string list option }
 type reasoning = { mode : reasoning_mode; effort : reasoning_effort; token_budget : int option; summary : reasoning_summary }
 type continuation = { handle : Continuation_handle.t; endpoint_id : Endpoint_id.t option; model : Resolved_model_id.t option; expires_at : string option; pinned : bool; provider_state : provider_state list option }
+(* Legacy pre-checkpoint request; use [generate_request] for the exact v1 wire
+   contract. *)
 type request = { operation_key : Operation_key.t; context : request_context option; model : Model_selector.t; service_class : service_class; service_class_fallbacks : service_class list; portability : portability; instructions : instruction list; input : item list; tools : function_tool list; tool_policy : tool_policy; output : output_spec option; sampling : sampling option; reasoning : reasoning option; continuation : continuation option; extensions : (string * Yojson.Safe.t) list }
 module Request : sig
   type t = request
@@ -92,11 +94,15 @@ end
 type route = { route_id : Route_id.t option; endpoint_id : Endpoint_id.t option; api_family : Api_family.t option; requested_model : Model_selector.t option; resolved_model : Resolved_model_id.t option }
 type service = { requested : service_class; attempted : service_class; actual : service_class option; provider_value : string option; fallback_index : int }
 type usage = { input_tokens : int64; output_tokens : int64; reasoning_tokens : int64; cache_read_tokens : int64; cache_write_tokens : int64; provider_raw : (string * Yojson.Safe.t) list option }
+(* Legacy pre-Task-17 response shape; new v1 APIs use [settled_cost] and
+   [Usd_decimal.t]. Retained only for the unreleased compatibility surface. *)
 type cost = { status : cost_status option; currency : string; reserved_microusd : int64; actual_microusd : int64; method_ : string; catalog_version : Cost_catalog_version.t }
 type provider = { response_id : Provider_response_id.t option; request_id : Provider_request_id.t option; generation_id : Provider_generation_id.t option; finish_reason : string option; raw : (string * Yojson.Safe.t) list }
 type diagnostic_severity = Info | Warning | Diagnostic_error
 type diagnostic = { code : Diagnostic_code.t; message : string; severity : diagnostic_severity; path : string option; details : (string * string) list option }
 type response_metadata = { operation_id : Operation_id.t option }
+(* Legacy pre-checkpoint response; use [generate_response] or
+   [compaction_response], whose costs use [settled_cost]. *)
 type response = { operation_key : Operation_key.t; operation_id : Operation_id.t option; status : response_status; output : item list; route : route; service : service; usage : usage; cost : cost; provider : provider; continuation : continuation option; diagnostics : diagnostic list; metadata : response_metadata }
 
 module Usd_decimal : module type of Llm_temporal_usd_decimal
