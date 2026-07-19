@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
 const (
@@ -90,6 +91,17 @@ func splitScope(value string) (string, string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", "", errors.New("operation scope is empty")
+	}
+	// The engine's canonical scope key is tenant + NUL + operation key.
+	// Preserve that format while deriving the HMAC lookup components; passing
+	// the complete key as a tenant would be rejected by ScopeHMAC because it
+	// contains a control character.
+	if strings.Contains(value, "\x00") {
+		parts := strings.SplitN(value, "\x00", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", "", errors.New("operation scope has an empty component")
+		}
+		return parts[0], parts[1], nil
 	}
 	parts := strings.SplitN(value, "/", 2)
 	if len(parts) == 1 {
@@ -180,6 +192,13 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 	if err != nil {
 		return result, err
 	}
+	// Bind the encrypted scope key to the deterministic operation identity so
+	// readers can reopen it without retaining the caller's raw scope key.
+	scopeDigest := operationHMAC(key, "scope-key", opID[:])
+	scopeSealed, err := r.Keys.Seal(EnvelopeContext{ScopeID: scope.ID, OperationID: opID, PayloadKind: "operation-scope-key", Digest: scopeDigest}, []byte(request.ScopeKey))
+	if err != nil {
+		return result, err
+	}
 	cost, err := usdText(request.ReservationUSD)
 	if err != nil {
 		return result, err
@@ -205,7 +224,7 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		return result, err
 	}
 	query := "SELECT operation_id, request_fingerprint_hmac, state, api_version, request_schema_version, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at FROM " + operations + " WHERE scope_id = $1 AND operation_kind = $2 AND operation_key_hmac = $3 FOR UPDATE"
-	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, config_digest, state, lease_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,'reserved',$12,$13,$14,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT (scope_id, operation_kind, operation_key_hmac) DO NOTHING"
+	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_digest, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest, config_digest, state, lease_expires_at, operation_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$19,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT (scope_id, operation_kind, operation_key_hmac) DO NOTHING"
 	err = WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var existingFingerprint []byte
 		var existing admission.Operation
@@ -231,7 +250,7 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		if _, err := tx.Exec(ctx, "INSERT INTO "+configs+" (config_digest, config_version, source_digest, sanitized_config) VALUES ($1,$2,$1,'{}'::jsonb) ON CONFLICT (config_digest) DO NOTHING", configDigest[:], request.ConfigVersion); err != nil {
 			return redactPostgresError(fmt.Errorf("persist operation configuration: %w", err))
 		}
-		inserted, err := tx.Exec(ctx, insert, opID, scope.ID, kind, apiVersion, operationKey[:], fingerprint[:], version, manifest, sealed.Ciphertext, sealed.KeyID, configDigest[:], request.LeaseUntil, cost, cost)
+		inserted, err := tx.Exec(ctx, insert, opID, scope.ID, kind, apiVersion, operationKey[:], fingerprint[:], request.RequestDigest[:], version, manifest, sealed.Ciphertext, sealed.KeyID, scopeSealed.Ciphertext, scopeSealed.KeyID, scopeSealed.ContextHash[:], configDigest[:], request.LeaseUntil, request.ExpiresAt, cost, cost)
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("insert PostgreSQL operation: %w", err))
 		}
@@ -498,7 +517,7 @@ func (r OperationRepository) Complete(ctx context.Context, request admission.Com
 				request.UnknownReason = "provider_outcome_unknown"
 			}
 		}
-		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, actual_cost_usd=$5, cost_status=$6, cost_method=$7, cost_unknown_reason_code=$8, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$9 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds())
+		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, result_byte_length=$5, result_media_type=$6, actual_cost_usd=$7, cost_status=$8, cost_method=$9, cost_unknown_reason_code=$10, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$11 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], request.ResultRef.Size, request.ResultRef.Media, nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds())
 		return err
 	})
 }
@@ -519,15 +538,8 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 	if err != nil {
 		return err
 	}
-	stateValue := "definite_failed"
-	status := "exact"
-	method := "worker_cache_zero"
+	stateValue, status, method := failurePersistence(request.Certainty)
 	actual := pricing.MustUSD("0")
-	if request.Certainty == admission.Ambiguous {
-		stateValue = "ambiguous"
-		status = "unknown"
-		method = ""
-	}
 	actualText, _ := usdText(actual)
 	return WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var current string
@@ -546,6 +558,13 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state=$2, actual_cost_usd=$3, cost_status=$4, cost_method=$5, cost_unknown_reason_code=$6, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$7 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1", opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(safeReason(request.Reason)), r.Retention.Seconds())
 		return err
 	})
+}
+
+func failurePersistence(certainty admission.DispatchCertainty) (stateValue, status, method string) {
+	if certainty == admission.Accepted || certainty == admission.Ambiguous {
+		return "ambiguous", "unknown", ""
+	}
+	return "definite_failed", "exact", "worker_cache_zero"
 }
 
 func safeReason(value string) string {
@@ -578,11 +597,16 @@ func (r OperationRepository) Get(ctx context.Context, id string) (admission.Oper
 	if err != nil {
 		return operation, err
 	}
-	var requestFingerprint []byte
+	var scopeID uuid.UUID
+	var requestFingerprint, requestDigest, resultDigest, scopeCiphertext, scopeContextHash []byte
 	var stateValue, apiVersion, costStatus, costMethod, reason string
+	var scopeKeyID *string
 	var reserved, incurred, actual *string
-	var completed, retention *time.Time
-	err = r.Pool.QueryRow(ctx, "SELECT state, api_version, request_fingerprint_hmac, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at FROM "+operations+" WHERE operation_id=$1", operationUUID(id)).Scan(&stateValue, &apiVersion, &requestFingerprint, &reserved, &incurred, &actual, &costStatus, &costMethod, &reason, &operation.CreatedAt, &operation.UpdatedAt, &completed, &retention)
+	var completed, retention, lease, operationExpiry *time.Time
+	var resultSize *int64
+	var resultMedia *string
+	opID := operationUUID(id)
+	err = r.Pool.QueryRow(ctx, "SELECT scope_id, state, api_version, request_fingerprint_hmac, request_digest, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at, lease_expires_at, operation_expires_at, result_digest, result_byte_length, result_media_type, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest FROM "+operations+" WHERE operation_id=$1", opID).Scan(&scopeID, &stateValue, &apiVersion, &requestFingerprint, &requestDigest, &reserved, &incurred, &actual, &costStatus, &costMethod, &reason, &operation.CreatedAt, &operation.UpdatedAt, &completed, &retention, &lease, &operationExpiry, &resultDigest, &resultSize, &resultMedia, &scopeCiphertext, &scopeKeyID, &scopeContextHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
 			return operation, admission.ErrOperationNotFound
@@ -595,10 +619,18 @@ func (r OperationRepository) Get(ctx context.Context, id string) (admission.Oper
 	tokenDigest := operationHMAC(mustKey(r.Keys), "dispatch-token", operationUUIDValue[:])
 	operation.DispatchToken = hex.EncodeToString(tokenDigest[:])
 	operation.ConfigVersion = apiVersion
-	operation.RequestDigest = requestFingerprintDigest(requestFingerprint)
-	operation.ExpiresAt = time.Time{}
+	if len(requestDigest) == len(operation.RequestDigest) {
+		copy(operation.RequestDigest[:], requestDigest)
+	} else {
+		operation.RequestDigest = requestFingerprintDigest(requestFingerprint)
+	}
+	if lease != nil {
+		operation.LeaseUntil = *lease
+	}
 	if retention != nil {
 		operation.ExpiresAt = *retention
+	} else if operationExpiry != nil {
+		operation.ExpiresAt = *operationExpiry
 	}
 	if completed != nil {
 		operation.UpdatedAt = *completed
@@ -618,11 +650,30 @@ func (r OperationRepository) Get(ctx context.Context, id string) (admission.Oper
 			operation.ActualCostUSD = &v
 		}
 	}
+	if len(resultDigest) == len(operation.RequestDigest) && resultSize != nil && resultMedia != nil && *resultMedia != "" {
+		var digest [32]byte
+		copy(digest[:], resultDigest)
+		operation.ResultRef = &state.BlobRef{Digest: digest, Size: *resultSize, Media: *resultMedia}
+	}
+	if scopeID != uuid.Nil && len(scopeCiphertext) != 0 && scopeKeyID != nil && *scopeKeyID != "" && len(scopeContextHash) == len(operation.RequestDigest) {
+		scopeDigest := operationHMAC(mustKey(r.Keys), "scope-key", opID[:])
+		plaintext, openErr := r.Keys.Open(EnvelopeContext{ScopeID: scopeID, OperationID: opID, PayloadKind: "operation-scope-key", Digest: scopeDigest}, SealedValue{KeyID: *scopeKeyID, Ciphertext: scopeCiphertext, ContextHash: bytesToDigest(scopeContextHash)})
+		if openErr != nil {
+			return admission.Operation{}, redactPostgresError(fmt.Errorf("open operation scope key: %w", openErr))
+		}
+		operation.ScopeKey = string(plaintext)
+	}
 	_ = costStatus
 	_ = costMethod
 	_ = reason
 	_ = apiVersion
 	return operation, nil
+}
+
+func bytesToDigest(value []byte) [32]byte {
+	var digest [32]byte
+	copy(digest[:], value)
+	return digest
 }
 
 func requestFingerprintDigest(value []byte) [32]byte { return sha256.Sum256(value) }

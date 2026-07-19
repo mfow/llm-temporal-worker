@@ -71,6 +71,13 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	if err := repository.Complete(ctx, admission.CompleteRequest{OperationID: id, DispatchToken: first.Operation.DispatchToken, ResultRef: ref, ActualCostUSD: pricing.MustUSD("0")}); err != nil {
 		t.Fatal(err)
 	}
+	completed, err := repository.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.ScopeKey != request.ScopeKey || completed.ExpiresAt.IsZero() || completed.ResultRef == nil || *completed.ResultRef != *ref {
+		t.Fatalf("hydrated operation metadata = %#v", completed)
+	}
 	attempts, err := repository.Attempts(ctx, id)
 	if err != nil || len(attempts) != 1 {
 		t.Fatalf("attempts=%#v err=%v", attempts, err)

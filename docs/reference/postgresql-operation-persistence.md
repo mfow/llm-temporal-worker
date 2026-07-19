@@ -16,6 +16,11 @@ transitions performed inside a read-committed transaction. Dispatch tokens are
 deterministic HMACs of the operation UUID, so a worker restart can safely
 reconstruct the token without persisting a bearer secret.
 
+The engine's `tenant\x00operation-key` scope format is split only for keyed
+scope lookup; the original scope key is retained in an authenticated encrypted
+column. Reads hydrate the scope, lease/operation expiry, request digest, and
+result reference metadata needed by the result store after a worker restart.
+
 Provider identifiers and request/result payloads are never logged or embedded
 in SQL text. The operation row stores HMACs and opaque encrypted markers; the
 blob/result repository remains responsible for payload bytes.
@@ -37,4 +42,3 @@ The PostgreSQL integration tests are opt-in through the existing
 stable HMAC/UUID derivation, safe reason normalization, and exact money
 encoding. `OperationRepository.Attempts` and `AttemptRepository.List` expose
 all persisted attempts for release conformance and operational inspection.
-

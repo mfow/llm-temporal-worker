@@ -151,7 +151,10 @@ func (results *BlobResultStore) Get(ctx context.Context, operationID string) (ll
 
 func tenantFromScope(scope string) (string, error) {
 	parts := strings.SplitN(scope, "\x00", 2)
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+	if len(parts) == 1 {
+		parts = strings.SplitN(scope, "/", 2)
+	}
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
 		return "", fmt.Errorf("result operation scope has no tenant")
 	}
 	return parts[0], nil

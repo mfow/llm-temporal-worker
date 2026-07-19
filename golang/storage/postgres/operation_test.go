@@ -4,8 +4,26 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
+
+func TestSplitScopePreservesEngineKeyComponents(t *testing.T) {
+	for _, test := range []struct {
+		input, tenant, project string
+	}{
+		{input: "tenant/project", tenant: "tenant", project: "project"},
+		{input: "tenant\x00operation-key", tenant: "tenant", project: "operation-key"},
+	} {
+		tenant, project, err := splitScope(test.input)
+		if err != nil || tenant != test.tenant || project != test.project {
+			t.Fatalf("splitScope(%q) = %q, %q, %v", test.input, tenant, project, err)
+		}
+	}
+	if _, _, err := splitScope("tenant\x00"); err == nil {
+		t.Fatal("empty engine scope component unexpectedly accepted")
+	}
+}
 
 func TestNormalizeManifestRequiresObject(t *testing.T) {
 	if got, err := normalizeManifest(nil); err != nil || string(got) != "{}" {
@@ -40,5 +58,16 @@ func TestSafeReasonAndExactMoney(t *testing.T) {
 	}
 	if _, err := EncodeUSD(pricing.MustUSD("1.000000000000000000")); err != nil {
 		t.Fatalf("exact USD encoding failed: %v", err)
+	}
+}
+
+func TestAcceptedFailureRemainsAmbiguous(t *testing.T) {
+	stateValue, status, method := failurePersistence(admission.Accepted)
+	if stateValue != "ambiguous" || status != "unknown" || method != "" {
+		t.Fatalf("accepted failure persistence = %q, %q, %q", stateValue, status, method)
+	}
+	stateValue, status, method = failurePersistence(admission.Rejected)
+	if stateValue != "definite_failed" || status != "exact" || method != "worker_cache_zero" {
+		t.Fatalf("rejected failure persistence = %q, %q, %q", stateValue, status, method)
 	}
 }
