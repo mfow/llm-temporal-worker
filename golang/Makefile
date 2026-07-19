@@ -223,6 +223,9 @@ compose-smoke:
 # removes only the project resources, generated continuation key, temporary Go
 # cache, and images it creates. It never sends a provider request: the Temporal
 # recovery test injects a content-free adapter in the Go test process.
+# The Compose wait timeout is five minutes: the Temporal and worker
+# healthchecks allow up to 212s (20s start period plus 24 checks at 5s
+# intervals with 3s timeouts), so a slow but healthy CI runner is not cut off.
 compose-live-integration:
 	@if [ "$${LLMTW_COMPOSE_LIVE:-0}" != "1" ]; then \
 		echo "compose-live-integration requires LLMTW_COMPOSE_LIVE=1; it starts local Docker services and is intentionally opt-in" >&2; \
@@ -269,7 +272,7 @@ compose-live-integration:
 	chmod 0444 "$$key"; \
 	export COMPOSE_PROJECT_NAME="$$project" LLMTW_CONTINUATION_KEY_FILE="$$key" LLMTW_WORKER_IMAGE="$$worker_image" LLMTW_PROVIDER_MOCK_IMAGE="$$mock_image" LLMTW_COMPOSE_TEMPORAL_PORT="$$temporal_port" LLMTW_COMPOSE_TEMPORAL_UI_PORT="$$temporal_ui_port" LLMTW_COMPOSE_REDIS_PORT="$$redis_port" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" LLMTW_POSTGRES_PASSWORD="$$postgres_password" LLMTW_COMPOSE_HEALTH_PORT="$$health_port" LLMTW_COMPOSE_METRICS_PORT="$$metrics_port"; \
 	$(COMPOSE) --profile worker build --no-cache --quiet worker provider-mock; \
-	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 180; then \
+	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 300; then \
 		echo "compose-live-integration Temporal healthcheck output (redacted):" >&2; \
 		temporal_container="$$( $(COMPOSE) ps -q temporal 2>/dev/null || true )"; \
 		if [ -n "$$temporal_container" ]; then \

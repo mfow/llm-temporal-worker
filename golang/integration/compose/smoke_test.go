@@ -426,6 +426,7 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"set -e;",
 		"--profile worker",
 		"build --no-cache --quiet",
+		"up --wait --wait-timeout 300",
 		"temporal_port=0",
 		"temporal_ui_port=0",
 		"redis_port=0",
@@ -468,6 +469,9 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		if strings.Contains(string(data), fixedPort) {
 			t.Errorf("compose live integration target retains fixed host port %q", fixedPort)
 		}
+	}
+	if strings.Contains(string(data), "up --wait --wait-timeout 180") {
+		t.Error("compose live integration retains a wait timeout shorter than the manifest healthcheck bound")
 	}
 }
 
