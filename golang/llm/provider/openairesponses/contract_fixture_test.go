@@ -14,6 +14,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
+	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -75,6 +76,72 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 
 			want := loadContractSemanticResponseFixture(t, profile.id, "response.semantic.json")
 			assertOpaqueReasoningState(t, lifted, want)
+		})
+	}
+}
+
+func TestResponsesContractFixturesVerifySemanticRoundTrip(t *testing.T) {
+	for _, profile := range responsesFixtureProfiles {
+		t.Run(profile.id, func(t *testing.T) {
+			requestSemantic := readContractFixture(t, profile.id, "request.semantic.json")
+			responseSemantic := readContractFixture(t, profile.id, "response.semantic.json")
+			semantic, err := json.Marshal(struct {
+				Request  json.RawMessage `json:"request"`
+				Response json.RawMessage `json:"response"`
+			}{Request: requestSemantic, Response: responseSemantic})
+			if err != nil {
+				t.Fatal(err)
+			}
+			metadata := loadContractFixtureMetadata(t, profile.id)
+			responseWire := readContractFixture(t, profile.id, "response.completed.json")
+			if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+				var fixture struct {
+					Request  json.RawMessage `json:"request"`
+					Response json.RawMessage `json:"response"`
+				}
+				if err := json.Unmarshal(semantic, &fixture); err != nil {
+					return nil, err
+				}
+				var request llm.Request
+				if err := json.Unmarshal(fixture.Request, &request); err != nil {
+					return nil, err
+				}
+				normalized, err := llm.NormalizeRequest(request)
+				if err != nil {
+					return nil, err
+				}
+				serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+				if err != nil {
+					return nil, err
+				}
+				params, err := lowerRequest(normalized, serviceClass)
+				if err != nil {
+					return nil, err
+				}
+				var response responses.Response
+				if err := json.Unmarshal(responseWire, &response); err != nil {
+					return nil, err
+				}
+				call := provider.Call{
+					EndpointID:   profile.endpoint,
+					Family:       provider.FamilyOpenAIResponses,
+					Model:        string(response.Model),
+					OperationKey: normalized.OperationKey,
+					ServiceClass: serviceClass,
+					SDKParams:    params,
+				}
+				lifted, err := liftResponse(call, &response, profile.requestID)
+				if err != nil {
+					return nil, err
+				}
+				fixture.Response, err = json.Marshal(lifted)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(fixture)
+			}, metadata.GeneratedFieldExemptions); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -531,6 +598,15 @@ func loadContractResponseFixture(t *testing.T, profile, name string) responses.R
 		t.Fatal(err)
 	}
 	return response
+}
+
+func loadContractFixtureMetadata(t *testing.T, profile string) contracttest.Metadata {
+	t.Helper()
+	var metadata contracttest.Metadata
+	if err := yaml.Unmarshal(readContractFixture(t, profile, "metadata.yaml"), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
 }
 
 func loadContractSemanticResponseFixture(t *testing.T, profile, name string) llm.Response {

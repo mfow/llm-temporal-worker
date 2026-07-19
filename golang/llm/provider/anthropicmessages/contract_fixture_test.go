@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -77,6 +78,64 @@ func TestAnthropicDirectContractFixturesMatchCurrentLoweringAndLifting(t *testin
 		t.Fatal(err)
 	}
 	assertCanonicalAnthropicDirectFixture(t, gotSemantic, "response.semantic.json")
+}
+
+func TestAnthropicDirectContractFixturesVerifySemanticRoundTrip(t *testing.T) {
+	profile := anthropicDirectFixtureProfile(t)
+	requestSemantic := readAnthropicDirectFixture(t, "request.semantic.json")
+	responseSemantic := readAnthropicDirectFixture(t, "response.semantic.json")
+	semantic, err := json.Marshal(struct {
+		Request  json.RawMessage `json:"request"`
+		Response json.RawMessage `json:"response"`
+	}{Request: requestSemantic, Response: responseSemantic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := loadAnthropicDirectFixtureMetadata(t)
+	responseWire := readAnthropicDirectFixture(t, "response.completed.json")
+	if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+		var fixture struct {
+			Request  json.RawMessage `json:"request"`
+			Response json.RawMessage `json:"response"`
+		}
+		if err := json.Unmarshal(semantic, &fixture); err != nil {
+			return nil, err
+		}
+		var request llm.Request
+		if err := json.Unmarshal(fixture.Request, &request); err != nil {
+			return nil, err
+		}
+		normalized, err := llm.NormalizeRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+		if err != nil {
+			return nil, err
+		}
+		tier, err := profile.providerTier(serviceClass)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := lowerRequest(normalized, profile, tier); err != nil {
+			return nil, err
+		}
+		var response anthropic.Message
+		if err := json.Unmarshal(responseWire, &response); err != nil {
+			return nil, err
+		}
+		lifted, err := profile.liftResponse(anthropicDirectFixtureCall(normalized, serviceClass), &response, "req-fixture")
+		if err != nil {
+			return nil, err
+		}
+		fixture.Response, err = json.Marshal(lifted)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(fixture)
+	}, metadata.GeneratedFieldExemptions); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAnthropicDirectContractFixturesCoverUsageClassesLossErrorsAndContinuation(t *testing.T) {
@@ -247,6 +306,15 @@ func loadAnthropicDirectFixtureResponse(t *testing.T, name string) anthropic.Mes
 		t.Fatal(err)
 	}
 	return response
+}
+
+func loadAnthropicDirectFixtureMetadata(t *testing.T) contracttest.Metadata {
+	t.Helper()
+	var metadata contracttest.Metadata
+	if err := yaml.Unmarshal(readAnthropicDirectFixture(t, "metadata.yaml"), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
 }
 
 func readAnthropicDirectFixture(t *testing.T, name string) []byte {
