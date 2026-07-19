@@ -8,7 +8,9 @@ type UnitPrices struct {
 	CacheReadPerMillion  DecimalUSD
 	CacheWritePerMillion DecimalUSD
 	ReasoningPerMillion  DecimalUSD
-	PerRequest           DecimalUSD
+	// PerRequest is the absolute USD charge applied once per invocation. It
+	// intentionally does not use the per-million token denominator.
+	PerRequest DecimalUSD
 }
 
 type Entry struct {

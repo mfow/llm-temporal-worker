@@ -4,16 +4,20 @@ import "fmt"
 
 func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 	components := []struct {
-		price DecimalUSD
-		units int64
-		name  string
+		price         DecimalUSD
+		units         int64
+		unitsPerPrice int64
+		name          string
 	}{
-		{entry.Prices.InputPerMillion, usage.InputTokens, "input"},
-		{entry.Prices.OutputPerMillion, usage.OutputTokens, "output"},
-		{entry.Prices.CacheReadPerMillion, usage.CacheReadTokens, "cache_read"},
-		{entry.Prices.CacheWritePerMillion, usage.CacheWriteTokens, "cache_write"},
-		{entry.Prices.ReasoningPerMillion, usage.ReasoningTokens, "reasoning"},
-		{entry.Prices.PerRequest, 1, "per_request"},
+		{entry.Prices.InputPerMillion, usage.InputTokens, 1_000_000, "input"},
+		{entry.Prices.OutputPerMillion, usage.OutputTokens, 1_000_000, "output"},
+		{entry.Prices.CacheReadPerMillion, usage.CacheReadTokens, 1_000_000, "cache_read"},
+		{entry.Prices.CacheWritePerMillion, usage.CacheWriteTokens, 1_000_000, "cache_write"},
+		{entry.Prices.ReasoningPerMillion, usage.ReasoningTokens, 1_000_000, "reasoning"},
+		// PerRequest is an absolute USD charge for one invocation, not a
+		// per-million-unit price. Keep its denominator at one so a catalog
+		// value such as 0.10 is charged as ten cents.
+		{entry.Prices.PerRequest, 1, 1, "per_request"},
 	}
 	totalUSD := MustUSD("0")
 	legacyTotal := MicroUSD(0)
@@ -21,7 +25,7 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 		if component.units < 0 {
 			return Cost{}, fmt.Errorf("usage %s is negative", component.name)
 		}
-		value, err := CeilUSD(component.price, component.units, 1_000_000)
+		value, err := CeilUSD(component.price, component.units, component.unitsPerPrice)
 		if err != nil {
 			return Cost{}, fmt.Errorf("usage %s: %w", component.name, err)
 		}
@@ -29,7 +33,7 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 		if err != nil {
 			return Cost{}, err
 		}
-		if legacy, legacyErr := CeilMicroUSD(component.price, component.units, 1_000_000); legacyErr == nil {
+		if legacy, legacyErr := CeilMicroUSD(component.price, component.units, component.unitsPerPrice); legacyErr == nil {
 			legacyTotal, _ = legacyTotal.Add(legacy)
 		}
 	}

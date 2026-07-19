@@ -26,6 +26,24 @@ func TestEstimatePlanUsesMaximumAuthorizedCandidate(t *testing.T) {
 	}
 }
 
+func TestEstimateCandidateChargesPerRequestInUSD(t *testing.T) {
+	request := llm.Request{
+		OperationKey: "estimate",
+		Model:        "logical",
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
+	}
+	estimate, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, pricing.Entry{
+		Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.10")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.CostUSD.String() != "0.100000000000000000" || estimate.MicroUSD != 100000 {
+		t.Fatalf("per-request estimate = %#v", estimate)
+	}
+}
+
 func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 	request := llm.Request{Model: "logical", ServiceClass: llm.ServiceClassStandard}
 	context := ContextFor(request, routing.Candidate{EndpointID: "ep", AttemptedClass: llm.ServiceClassPriority}, "prod")
