@@ -261,6 +261,19 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		if inserted.RowsAffected() == 0 {
 			var storedFingerprint []byte
 			if err := tx.QueryRow(ctx, "SELECT request_fingerprint_hmac FROM "+operations+" WHERE scope_id=$1 AND operation_kind=$2 AND operation_key_hmac=$3 FOR UPDATE", scope.ID, kind, operationKey[:]).Scan(&storedFingerprint); err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return redactPostgresError(fmt.Errorf("re-read PostgreSQL operation: %w", err))
+				}
+				// A deterministic operation UUID is globally unique even when the
+				// caller reuses its ID with a different scope or operation kind.
+				// Classify that primary-key conflict explicitly instead of leaking
+				// the failed idempotency-key reread as a retryable database error.
+				var storedID uuid.UUID
+				if idErr := tx.QueryRow(ctx, "SELECT operation_id FROM "+operations+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&storedID); idErr == nil {
+					return admission.ErrOperationConflict
+				} else if !errors.Is(idErr, pgx.ErrNoRows) {
+					return redactPostgresError(fmt.Errorf("classify PostgreSQL operation conflict: %w", idErr))
+				}
 				return redactPostgresError(fmt.Errorf("re-read PostgreSQL operation: %w", err))
 			}
 			if !hmac.Equal(storedFingerprint, fingerprint[:]) {

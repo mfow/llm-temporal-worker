@@ -61,6 +61,11 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 		t.Fatalf("conflict=%v", err)
 	}
 	request.RequestDigest = admission.Digest([]byte("request"))
+	request.ScopeKey = "other/project"
+	if _, err := repository.Begin(ctx, request); !errors.Is(err, admission.ErrOperationConflict) {
+		t.Fatalf("operation-id conflict=%v", err)
+	}
+	request.ScopeKey = "integration/project"
 	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "primary", EndpointID: "test", Provider: "fixture"}}); err != nil {
 		t.Fatal(err)
 	}
