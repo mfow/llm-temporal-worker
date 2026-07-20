@@ -1,6 +1,7 @@
 package llm_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -196,6 +197,27 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	}
 	if request.SettingsPatch.Output.Set == nil || request.SettingsPatch.Output.Set.MaxTokens == nil || *request.SettingsPatch.Output.Set.MaxTokens != 32 {
 		t.Fatalf("output max_tokens was not decoded: %#v", request.SettingsPatch.Output)
+	}
+	canonicalTemperature := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":"0.7000"}}}`)
+	var decimalRequest llm.GenerateRequestV1
+	if err := json.Unmarshal(canonicalTemperature, &decimalRequest); err != nil {
+		t.Fatalf("decimal temperature was not decoded: %v", err)
+	}
+	encodedDecimal, err := json.Marshal(decimalRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encodedDecimal, []byte(`"temperature":{"set":"0.7"}`)) {
+		t.Fatalf("temperature was not canonically re-encoded as a string: %s", encodedDecimal)
+	}
+	legacyNumeric := bytes.Replace(canonicalTemperature, []byte(`"0.7000"`), []byte(`0.7`), 1)
+	var legacyRequest llm.GenerateRequestV1
+	if err := json.Unmarshal(legacyNumeric, &legacyRequest); err != nil {
+		t.Fatalf("legacy numeric temperature was not accepted during compatibility window: %v", err)
+	}
+	invalidDecimal := bytes.Replace(canonicalTemperature, []byte(`"0.7000"`), []byte(`"1.0000000000000000001"`), 1)
+	if err := json.Unmarshal(invalidDecimal, &legacyRequest); err == nil {
+		t.Fatal("temperature with excessive precision was accepted")
 	}
 
 	var envelope map[string]json.RawMessage

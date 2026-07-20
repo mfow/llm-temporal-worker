@@ -127,6 +127,11 @@ constructors and records. There is no **currency** value, string, or enum in
 the Go wire model or OCaml facade. A field named **actual_cost_usd** is known
 to be USD.
 
+For `settings_patch.temperature`, the v1 wire spelling is the same canonical
+decimal string in both clients. The Go decoder retains a bounded compatibility
+window for older numeric producers, but Go re-encoding always emits the string
+form; new producers must never emit a JSON number.
+
 The repository still contains the pre-Task-17 `request`/`response` compatibility
 records because the unreleased legacy wrapper and Conversation tests use them.
 Those records are not accepted by, or emitted from, any `llm.temporal/*/v1`
