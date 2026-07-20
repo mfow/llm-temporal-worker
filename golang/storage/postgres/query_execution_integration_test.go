@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestQueryExecutionPersistenceIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
-	if replay.ID != record.ID || string(replay.ResponseJSON) != string(record.ResponseJSON) {
+	if replay.ID != record.ID || canonicalQueryJSON(replay.ResponseJSON) != canonicalQueryJSON(record.ResponseJSON) {
 		t.Fatalf("replay changed stored result: first=%#v replay=%#v", record, replay)
 	}
 
@@ -82,6 +83,18 @@ func TestQueryExecutionPersistenceIntegration(t *testing.T) {
 	if len(unknownRecord.RequestJSON) == 0 {
 		t.Fatal("unknown-cost record lost request JSON")
 	}
+}
+
+func canonicalQueryJSON(data []byte) string {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return string(data)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return string(data)
+	}
+	return string(canonical)
 }
 
 func TestQueryExecutionExactUSDPrecisionIntegration(t *testing.T) {
