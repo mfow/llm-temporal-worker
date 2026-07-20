@@ -5,6 +5,9 @@ open Llm_temporal_models
 module Settings : sig
   type t
 
+  (** The v1 facade exposes only settings represented by the one-shot
+      Generate v1 patch. Legacy sampling and reasoning records are kept on
+      the lower-level request API and cannot be silently dropped here. *)
   val make :
     ?service_class:service_class ->
     ?service_class_fallbacks:service_class list ->
@@ -14,8 +17,6 @@ module Settings : sig
     ?tool_policy:tool_policy ->
     ?output:output_spec ->
     ?temperature:Usd_decimal.t ->
-    ?sampling:sampling ->
-    ?reasoning:reasoning ->
     ?extensions:(string * Yojson.Safe.t) list ->
     unit -> t
 

@@ -7,8 +7,8 @@ schedules exactly one activity attempt.
 
 The public API mirrors the v1 request and response records: service classes
 are exactly `Economy | Standard | Priority`; request controls include
-portability, instructions, items, tools, output, sampling, reasoning,
-continuation, and extensions; responses retain route, service, usage, cost,
+portability, instructions, items, tools, output, temperature, reasoning
+effort/summary, and extensions; responses retain route, service, usage, cost,
 provider, continuation, and diagnostics. Only deliberately open contract
 leaves (schemas, tool arguments, extension/provider metadata) use
 `Yojson.Safe.t`.

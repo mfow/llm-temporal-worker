@@ -10,8 +10,6 @@ module Settings = struct
     tool_policy : tool_policy;
     output : output_spec option;
     temperature : Usd_decimal.t option;
-    sampling : sampling option;
-    reasoning : reasoning option;
     extensions : (string * Yojson.Safe.t) list;
   }
 
@@ -24,12 +22,10 @@ module Settings = struct
       ?(tool_policy = { choice = Auto; parallel = false })
       ?output
       ?temperature
-      ?sampling
-      ?reasoning
       ?(extensions = [])
       () =
     { service_class; service_class_fallbacks; portability; instructions; tools;
-      tool_policy; output; temperature; sampling; reasoning; extensions }
+      tool_policy; output; temperature; extensions }
 
   let default = make ()
 
@@ -130,12 +126,6 @@ let patch_override (base : settings_patch) (override : settings_patch) : setting
     compaction_policy = choose base.compaction_policy override.compaction_policy;
     extensions = choose base.extensions override.extensions }
 
-let reasoning_effort settings =
-  match settings.Settings.reasoning with None -> Keep | Some value -> Set value.effort
-
-let reasoning_summary settings =
-  match settings.Settings.reasoning with None -> Keep | Some value -> Set value.summary
-
 let initial_patch conversation : settings_patch =
   let settings = conversation.settings in
   { model = (match conversation.model with None -> Keep | Some value -> Set value);
@@ -147,8 +137,8 @@ let initial_patch conversation : settings_patch =
     tool_policy = Set settings.tool_policy;
     output = (match settings.output with None -> Clear | Some value -> Set value);
     temperature = (match settings.temperature with None -> Keep | Some value -> Set value);
-    reasoning_effort = reasoning_effort settings;
-    reasoning_summary = reasoning_summary settings;
+    reasoning_effort = Keep;
+    reasoning_summary = Keep;
     compaction_policy = Keep;
     extensions = Set settings.extensions }
 
@@ -160,29 +150,17 @@ let restore_patch conversation : settings_patch =
     output = (match settings.output with None -> Clear | Some value -> Set value) }
 
 let apply_patch (settings : Settings.t) (patch : settings_patch) =
-  let value_or current = function Keep -> current | Set value -> value | Clear -> current in
+  let value_or ~cleared current = function Keep -> current | Set value -> value | Clear -> cleared in
   let option_or current = function Keep -> current | Set value -> Some value | Clear -> None in
-  let reasoning =
-    let current = match settings.Settings.reasoning with
-      | Some value -> value
-      | None -> { mode = Provider_default; effort = Effort_default; token_budget = None; summary = Summary_default }
-    in
-    let effort = value_or current.effort patch.reasoning_effort in
-    let summary = value_or current.summary patch.reasoning_summary in
-    if patch.reasoning_effort = Keep && patch.reasoning_summary = Keep then settings.reasoning
-    else Some { current with effort; summary }
-  in
-  ({ service_class = value_or settings.service_class patch.service_class;
-    service_class_fallbacks = value_or settings.service_class_fallbacks patch.service_class_fallbacks;
-    portability = value_or settings.portability patch.portability;
-    instructions = value_or settings.instructions patch.instructions;
-    tools = value_or settings.tools patch.tools;
-    tool_policy = value_or settings.tool_policy patch.tool_policy;
+  ({ service_class = value_or ~cleared:Standard settings.service_class patch.service_class;
+    service_class_fallbacks = value_or ~cleared:[] settings.service_class_fallbacks patch.service_class_fallbacks;
+    portability = value_or ~cleared:Strict settings.portability patch.portability;
+    instructions = value_or ~cleared:[] settings.instructions patch.instructions;
+    tools = value_or ~cleared:[] settings.tools patch.tools;
+    tool_policy = value_or ~cleared:{ choice = Auto; parallel = false } settings.tool_policy patch.tool_policy;
     output = option_or settings.output patch.output;
     temperature = option_or settings.temperature patch.temperature;
-    sampling = settings.sampling;
-    reasoning;
-    extensions = value_or settings.extensions patch.extensions } : Settings.t)
+    extensions = value_or ~cleared:[] settings.extensions patch.extensions } : Settings.t)
 
 let request_patch conversation (explicit : settings_patch option) : settings_patch =
   let base =
@@ -244,8 +222,12 @@ let compact_request ?policy ?cache ~operation_key conversation =
   match conversation.checkpoint with
   | None -> Error (Temporal.Error.codec ~message:"cannot compact a conversation without a checkpoint")
   | Some parent ->
-      Ok { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key;
-           context = conversation.context; parent; policy; cache }
+      (match cache with
+       | Some cache when Cache_policy.variant cache <> 0l ->
+           Error (Temporal.Error.codec ~message:"compact cache variant must be zero")
+       | _ ->
+           Ok { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key;
+                context = conversation.context; parent; policy; cache })
 
 let compact_with ?task_queue ~dispatch ?policy ?cache ~operation_key conversation =
   match compact_request ?policy ?cache ~operation_key conversation with
