@@ -381,7 +381,8 @@ resolved credentials.
 
 ## State namespace selection
 
-**state.kind** is **durable** or **memory**. Durable is the production default
+**state.kind** is **durable** or the legacy development-only **redis** fixture.
+Durable is the production default
 and requires both **state.redis** and **state.postgres**: PostgreSQL is the
 system of record, while Redis provides the active budget/throttle materialization
 and cross-worker coordination optimization.
@@ -396,10 +397,14 @@ shutdown. Schema installation remains a deployment concern (`postgres.Install`)
 and is never performed by a worker during readiness probing.
 
 `state.kind: redis` is retained only as a development/test fixture for the
-legacy Redis-only composition and is rejected in production. `state.kind:
-memory` is likewise development-only and never provides durable recovery.
+legacy Redis-only composition and is rejected in production. A memory store is
+not accepted yet: the production factory does not have a memory-store
+composition, so configuration validation keeps `state.kind: memory` rejected
+until that implementation is available.
 
-Memory mode is an explicitly non-durable single-process development mode:
+The planned memory mode is an explicitly non-durable single-process
+development mode, but it is not currently runnable through the production
+runtime factory:
 
 ~~~yaml
 environment: development

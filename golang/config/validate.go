@@ -153,9 +153,7 @@ func (state StateConfig) validate(environment string) error {
 			return fmt.Errorf("state.kind redis is not permitted in production; use durable")
 		}
 	case StateKindMemory:
-		if environment == "production" {
-			return fmt.Errorf("state.kind memory is not permitted in production")
-		}
+		return fmt.Errorf("state.kind memory is not supported by the production runtime yet")
 	default:
 		return fmt.Errorf("state.kind %q is unsupported", state.Kind)
 	}

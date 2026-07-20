@@ -133,7 +133,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["kind", "operation_terminal_retention", "ambiguous_retention", "continuation_retention", "reservation_lease"],
       "properties": {
-        "kind": { "enum": ["durable", "memory", "redis"] },
+        "kind": { "enum": ["durable", "redis"] },
         "operation_terminal_retention": { "$ref": "#/$defs/duration" },
         "ambiguous_retention": { "$ref": "#/$defs/duration" },
         "continuation_retention": { "$ref": "#/$defs/duration" },

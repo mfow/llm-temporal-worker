@@ -17,7 +17,7 @@ func TestDurableStateRequiresPostgresNamespaceAndCredentials(t *testing.T) {
 	}
 }
 
-func TestMemoryStateDoesNotRequireRedisOrPostgres(t *testing.T) {
+func TestMemoryStateRemainsRejectedUntilFactorySupport(t *testing.T) {
 	state := StateConfig{
 		Kind:                       StateKindMemory,
 		OperationTerminalRetention: 24,
@@ -26,8 +26,8 @@ func TestMemoryStateDoesNotRequireRedisOrPostgres(t *testing.T) {
 		ReservationLease:           1,
 		Postgres:                   PostgresConfig{Database: "worker_db", Schema: "worker_state", MaxConnections: 1, DialTimeout: 1, StatementTimeout: 1, LockTimeout: 1},
 	}
-	if err := state.validate("development"); err != nil {
-		t.Fatalf("memory state should not require external stores: %v", err)
+	if err := state.validate("development"); err == nil {
+		t.Fatal("memory state was accepted before the production factory supports memory stores")
 	}
 }
 
