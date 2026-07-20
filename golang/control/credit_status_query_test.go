@@ -1,0 +1,60 @@
+package control
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestNewCreditStatusMapsSafeProviderEvidence(t *testing.T) {
+	status, err := NewCreditStatus("openai", "primary", CreditExhausted, BillingIssue, time.Unix(10, 0), SourceInference, "", "insufficient_quota")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.EvidenceSource != CreditEvidenceProviderAPI || status.SafeEvidenceCode != "insufficient_quota" {
+		t.Fatalf("status = %#v", status)
+	}
+	if status.BillingWireState() != "blocked" {
+		t.Fatalf("billing wire state = %q, want blocked", status.BillingWireState())
+	}
+}
+
+func TestNewCreditStatusMapsOperatorAndUnknownEvidence(t *testing.T) {
+	operator, err := NewCreditStatus("provider", "operator-endpoint", CreditLow, BillingUnknown, time.Time{}, SourceOperator, "credit_low", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operator.EvidenceSource != CreditEvidenceOperator || operator.SafeEvidenceCode != "credit_low" || !operator.ConfirmedAt.IsZero() {
+		t.Fatalf("operator status = %#v", operator)
+	}
+
+	unknown, err := NewCreditStatus("provider", "inference-endpoint", CreditOK, BillingOK, time.Time{}, SourceInference, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown.EvidenceSource != CreditEvidenceUnknown || unknown.SafeEvidenceCode != "" {
+		t.Fatalf("unknown status = %#v", unknown)
+	}
+}
+
+func TestCreditStatusValidationRejectsUnsafeAndUnorderedPages(t *testing.T) {
+	if _, err := NewCreditStatus(" provider", "endpoint", CreditOK, BillingOK, time.Time{}, SourceInference, "", ""); err == nil {
+		t.Fatal("unsafe provider accepted")
+	}
+	if _, err := NewCreditStatus("provider", "endpoint", CreditState("future"), BillingOK, time.Time{}, SourceInference, "", ""); err == nil {
+		t.Fatal("unknown credit state accepted")
+	}
+	page := CreditStatusPage{Endpoints: []CreditStatus{
+		{Provider: "provider", EndpointID: "endpoint-b", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
+		{Provider: "provider", EndpointID: "endpoint-a", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
+	}}
+	if err := page.Validate(); err == nil || !strings.Contains(err.Error(), "sorted") {
+		t.Fatalf("unordered page error = %v", err)
+	}
+	if page := (CreditStatusPage{Endpoints: []CreditStatus{
+		{Provider: "provider-a", EndpointID: "endpoint", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
+		{Provider: "provider-b", EndpointID: "endpoint", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
+	}}); page.Validate() != nil {
+		t.Fatal("same endpoint id from different providers should have distinct ordering keys")
+	}
+}
