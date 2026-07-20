@@ -9,3 +9,7 @@
 (test
  (name test_v1_protocol)
  (libraries llm_temporal temporal-sdk yojson ptime))
+
+(test
+ (name test_query)
+ (libraries llm_temporal temporal-sdk yojson ptime))

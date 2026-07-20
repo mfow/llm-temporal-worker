@@ -94,6 +94,33 @@ typed Query v1 records, Yojson codecs, and the `llm.compact.v1`/`llm.query.v1`
 Activity descriptors; these low-level records stay separate from the
 ergonomic conversation facade.
 
+## Typed query facade
+
+`Llm_temporal.Query` adds a closed GADT over the five query Activities. Each
+constructor carries its filter and fixes the result type, so pagination and
+result handling remain associated at the call site:
+
+```ocaml
+let query =
+  Llm_temporal.Query.Budget_status {
+    policy_key = None; active_at = None; include_windows = true;
+  }
+
+match Llm_temporal.Query.execute
+        ~operation_key:(Llm_temporal.Operation_key.of_string "budget-check")
+        ~context query with
+| Ok { value = budget; cost; _ } -> inspect_budget budget cost
+| Error error -> handle_temporal_error error
+```
+
+The `Provider_status`, `Model_inventory`, `Credit_status`, `Budget_status`,
+and `Spend_summary` constructors are exhaustive. The facade validates that
+the closed result tag matches the requested constructor and returns a codec
+`Temporal.Error.t` for mismatches or unknown future tags; it never uses an
+unchecked JSON cast or `Obj.magic`. `Query.start` returns a workflow-owned
+Temporal future, while `Query.execute_with` is available for deterministic
+dispatch injection in tests.
+
 Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
 enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
 `Provider_request_id.t` cannot be interchanged, while `of_string` and
