@@ -25,3 +25,23 @@ func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 		t.Fatalf("cost = %#v %v", price, err)
 	}
 }
+
+func TestCostFromUsageRejectsUnknownCatalogComponent(t *testing.T) {
+	entry := Entry{
+		Prices:            UnitPrices{InputPerMillion: MustDecimalUSD("1")},
+		UnknownComponents: []PriceComponent{PriceComponentInput},
+	}
+	if _, err := CostFromUsage(entry, Usage{InputTokens: 1}); err == nil {
+		t.Fatal("CostFromUsage accepted an omitted input price as known zero")
+	}
+	if _, err := CostFromUsage(entry, Usage{}); err != nil {
+		t.Fatalf("zero usage should not require an unknown input price: %v", err)
+	}
+}
+
+func TestCompileUSDRejectsInvalidUnknownComponent(t *testing.T) {
+	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard", UnknownComponents: []PriceComponent{"future"}}
+	if _, err := CompileUSD("catalog-v1", []Entry{entry}); err == nil {
+		t.Fatal("CompileUSD accepted an unknown price component")
+	}
+}

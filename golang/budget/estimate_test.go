@@ -44,6 +44,22 @@ func TestEstimateCandidateChargesPerRequestInUSD(t *testing.T) {
 	}
 }
 
+func TestEstimateCandidateRejectsUnknownCatalogComponent(t *testing.T) {
+	request := llm.Request{
+		OperationKey: "estimate",
+		Model:        "logical",
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
+	}
+	entry := pricing.Entry{
+		Prices:            pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1")},
+		UnknownComponents: []pricing.PriceComponent{pricing.PriceComponentInput},
+	}
+	if _, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, entry); err == nil {
+		t.Fatal("EstimateCandidate accepted an omitted input price as known zero")
+	}
+}
+
 func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 	request := llm.Request{Model: "logical", ServiceClass: llm.ServiceClassStandard}
 	context := ContextFor(request, routing.Candidate{EndpointID: "ep", AttemptedClass: llm.ServiceClassPriority}, "prod")

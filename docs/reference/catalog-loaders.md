@@ -88,3 +88,11 @@ is rejected; there is no FX adapter or rate schema. Neither configuration nor
 downstream Go/JSON/OCaml records carry a currency discriminator. This is a
 pre-release replacement, so old integer-microUSD and generic-currency response
 fields are rejected rather than dual-read or converted.
+
+An omitted component is not a zero-dollar quote. The loader retains the
+component as `unknown` on the compiled pricing entry (the zero value remains
+reserved for an explicitly quoted free component). `pricing.CostFromUsage` and
+the budget estimator fail closed when a request needs an unknown component, so
+partial catalogs cannot silently undercharge. A later durable catalog schema
+will persist the same distinction as nullable USD columns and an explicit
+partial/unknown status.

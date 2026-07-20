@@ -13,18 +13,55 @@ type UnitPrices struct {
 	PerRequest DecimalUSD
 }
 
+// PriceComponent identifies one independently quoted catalog component.
+// Unknown components are preserved by the catalog loader instead of being
+// represented by DecimalUSD's zero value, because zero is a known-free price.
+type PriceComponent string
+
+const (
+	PriceComponentInput      PriceComponent = "input"
+	PriceComponentOutput     PriceComponent = "output"
+	PriceComponentCacheRead  PriceComponent = "cache_read"
+	PriceComponentCacheWrite PriceComponent = "cache_write"
+	PriceComponentReasoning  PriceComponent = "reasoning"
+	PriceComponentPerRequest PriceComponent = "per_request"
+)
+
+func (component PriceComponent) Valid() bool {
+	switch component {
+	case PriceComponentInput, PriceComponentOutput, PriceComponentCacheRead,
+		PriceComponentCacheWrite, PriceComponentReasoning, PriceComponentPerRequest:
+		return true
+	default:
+		return false
+	}
+}
+
 type Entry struct {
-	Provider       string
-	Family         string
-	EndpointID     string
-	Region         string
-	Model          string
-	ProviderTier   string
-	Prices         UnitPrices
-	EffectiveFrom  time.Time
-	EffectiveUntil time.Time
-	Provenance     string
-	Version        string
+	Provider     string
+	Family       string
+	EndpointID   string
+	Region       string
+	Model        string
+	ProviderTier string
+	Prices       UnitPrices
+	// UnknownComponents records omitted source prices. It is deliberately
+	// separate from UnitPrices so a missing value cannot be confused with a
+	// known-free zero. Cost and estimate callers fail closed when they need one.
+	UnknownComponents []PriceComponent
+	EffectiveFrom     time.Time
+	EffectiveUntil    time.Time
+	Provenance        string
+	Version           string
+}
+
+func (entry Entry) ComponentUnknown(component PriceComponent) bool {
+	for _, unknown := range entry.UnknownComponents {
+		if unknown == component {
+			return true
+		}
+	}
+	return false
 }
 
 func (entry Entry) Active(now time.Time) bool {

@@ -94,6 +94,12 @@ Unknown catalog components and actual costs are NULL with an explicit
 status/reason, while exact zero means known free. Known spend totals exclude
 NULLs and separately report unknown operation counts.
 
+The current YAML loader carries omitted components as an `unknown` marker on
+the compiled pricing entry. Costing and reservation estimation fail closed if
+the request needs that component; omission is never decoded as a free USD
+price. The marker is the in-memory boundary for the nullable/partial catalog
+state described above and will map directly to the durable NULL/status fields.
+
 ## Estimation
 
 The estimate is an upper bound for one candidate:

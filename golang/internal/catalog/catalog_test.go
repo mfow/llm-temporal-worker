@@ -5,11 +5,13 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 func TestLoadCapabilitiesConvertsStrictEntries(t *testing.T) {
@@ -145,6 +147,34 @@ entries:
 `)
 	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "currency must be USD") {
 		t.Fatalf("LoadPricing() error = %v, want a non-USD rejection", err)
+	}
+}
+
+func TestLoadPricingPreservesOmittedComponentsAsUnknown(t *testing.T) {
+	ref := writeCatalog(t, `version: llmtw-prices/v1
+id: catalog-partial
+currency: USD
+entries:
+  - provider: openai
+    endpoint_id: openai-production
+    endpoint_family: openai_responses
+    region: global
+    model: gpt-example
+    provider_tier: standard
+    input_per_million: "1.250000"
+    output_per_million: "10.000000"
+`)
+	catalog, err := LoadPricing(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := catalog.Catalog.Entries[0]
+	want := []pricing.PriceComponent{pricing.PriceComponentCacheRead, pricing.PriceComponentCacheWrite, pricing.PriceComponentPerRequest, pricing.PriceComponentReasoning}
+	if !reflect.DeepEqual(entry.UnknownComponents, want) {
+		t.Fatalf("unknown components = %#v, want %#v", entry.UnknownComponents, want)
+	}
+	if _, err := pricing.CostFromUsage(entry, pricing.Usage{CacheReadTokens: 1}); err == nil {
+		t.Fatal("CostFromUsage accepted omitted cache price as known zero")
 	}
 }
 
