@@ -15,6 +15,7 @@ func TestMigrationIndexesRemainExplicit(t *testing.T) {
 		"operations_completed_brin_idx",
 		"budget_journal_time_brin_idx",
 		"provider_status_event_brin_idx",
+		"provider_route_query_idx",
 		"response_cache_reusable_key_uidx",
 		"operations_provider_operation_uidx",
 		"query_executions_unknown_cost_idx",

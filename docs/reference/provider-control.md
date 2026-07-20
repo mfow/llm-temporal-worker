@@ -72,3 +72,19 @@ loaded rows and `OpenCursor` authenticates the cursor before returning it.
 The repositories do not register provider management adapters or a query
 Activity. Those runtime/query integrations remain explicit follow-up work,
 and discovered models remain informational rather than routable.
+
+### Persisted status pages
+
+`ProviderStatusRepository.ListRouteStatuses` is the bounded read side for a
+provider-status query. It reads the current `provider_route_status` projection
+with one set-based SQL statement, applies provider/endpoint/availability
+filters, excludes healthy routes unless requested, and returns deterministic
+`route_id` keyset pages. The returned `NextRouteID` is an unsigned storage
+position, not a public cursor: the query service must bind its signed cursor
+to the authorized scope, tag, filter, and snapshot horizon before reusing it.
+
+The page contains only normalized projection fields. It never scans the
+append-only event ledger, invokes a provider API, or exposes raw provider
+responses and credentials. Staleness is represented by the persisted
+`stale_after` timestamp so the query layer can report current versus stale
+provenance without changing the stored projection.
