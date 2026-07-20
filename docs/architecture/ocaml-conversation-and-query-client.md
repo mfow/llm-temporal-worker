@@ -22,9 +22,10 @@ final Go contract.
 
 The protocol layer now contains the Task 17 Generate, Compact, and Query v1
 wire records, closed Yojson codecs, exact decimal-cost representation, and
-their three Temporal Activity descriptors. The ergonomic immutable conversation
-and GADT query facades remain subsequent layers and do not change this wire
-boundary.
+their three Temporal Activity descriptors. The public `Llm_temporal.Query`
+module now adds the five-constructor GADT over those closed query records;
+immutable Conversation state remains a subsequent layer and does not change
+this wire boundary.
 
 Delivery follows the shared phase order: the rebuilt Generate facade is Phase
 A, Compact and Redis budget materialization are Phase B, the opt-in exact cache
@@ -641,9 +642,15 @@ module Query : sig
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
-    ('a response, Temporal.Error.t) Temporal.Future.t
+    (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 end
 ~~~
+
+`start` keeps the Activity's Temporal error as the Future error and returns
+the protocol-kind matcher result as its successful value. This preserves a
+typed error for a mismatched closed result without raising from a workflow
+callback; the current Temporal SDK intentionally exposes no public operation
+for converting a successful Future value into a Future error.
 
 Call-site type inference prevents asking a provider-status query and treating
 the answer as a spend summary:
