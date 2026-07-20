@@ -224,7 +224,11 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		return result, err
 	}
 	query := "SELECT operation_id, request_fingerprint_hmac, state, api_version, request_schema_version, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at FROM " + operations + " WHERE scope_id = $1 AND operation_kind = $2 AND operation_key_hmac = $3 FOR UPDATE"
-	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_digest, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest, config_digest, state, lease_expires_at, operation_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$19,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT (scope_id, operation_kind, operation_key_hmac) DO NOTHING"
+	// The operation key is the normal idempotency constraint, but operation_id
+	// is also unique. Concurrent Begins for the same caller ID can race before
+	// either lookup sees the row, so handle conflicts from both constraints and
+	// let the reread below classify the winning request.
+	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_digest, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest, config_digest, state, lease_expires_at, operation_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$19,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT DO NOTHING"
 	err = WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var existingFingerprint []byte
 		var existing admission.Operation

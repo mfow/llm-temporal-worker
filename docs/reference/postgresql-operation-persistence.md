@@ -20,6 +20,11 @@ Replay results are hydrated from the durable row after the fingerprint check,
 including the request digest, lease, expiry, and reserved-cost metadata. This
 keeps an idempotent `Begin` replay equivalent to a restart recovery read.
 
+Concurrent `Begin` calls use a conflict-safe insert covering both the
+idempotency key and the deterministic operation UUID. Exactly one caller
+creates the row; the others reread it and follow the normal replay or conflict
+path instead of surfacing a database duplicate-key error.
+
 Each retry derives its attempt number from the durable attempt rows while the
 operation row is locked. Provider-accepted or ambiguous failures persist an
 unknown cost with a null exact amount; only rejected/not-dispatched failures
