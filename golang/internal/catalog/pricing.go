@@ -169,17 +169,37 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 	if entryVersion == "" {
 		entryVersion = catalogID
 	}
+	unknownComponents := make([]pricing.PriceComponent, 0, 6)
+	if !fileEntry.Input.set {
+		unknownComponents = append(unknownComponents, pricing.PriceComponentInput)
+	}
+	if !fileEntry.Output.set {
+		unknownComponents = append(unknownComponents, pricing.PriceComponentOutput)
+	}
+	if !fileEntry.CacheRead.set {
+		unknownComponents = append(unknownComponents, pricing.PriceComponentCacheRead)
+	}
+	if !fileEntry.CacheWrite.set {
+		unknownComponents = append(unknownComponents, pricing.PriceComponentCacheWrite)
+	}
+	if !fileEntry.Reasoning.set {
+		unknownComponents = append(unknownComponents, pricing.PriceComponentReasoning)
+	}
+	if !fileEntry.PerRequest.set {
+		unknownComponents = append(unknownComponents, pricing.PriceComponentPerRequest)
+	}
 	return pricing.Entry{
-		Provider:       providerName,
-		Family:         string(family),
-		EndpointID:     endpointID,
-		Region:         fileEntry.Region,
-		Model:          fileEntry.Model,
-		ProviderTier:   providerTier,
-		Prices:         pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
-		EffectiveFrom:  fileEntry.EffectiveFrom,
-		EffectiveUntil: fileEntry.EffectiveUntil,
-		Provenance:     provenance,
-		Version:        entryVersion,
+		Provider:          providerName,
+		Family:            string(family),
+		EndpointID:        endpointID,
+		Region:            fileEntry.Region,
+		Model:             fileEntry.Model,
+		ProviderTier:      providerTier,
+		Prices:            pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
+		UnknownComponents: unknownComponents,
+		EffectiveFrom:     fileEntry.EffectiveFrom,
+		EffectiveUntil:    fileEntry.EffectiveUntil,
+		Provenance:        provenance,
+		Version:           entryVersion,
 	}, nil
 }

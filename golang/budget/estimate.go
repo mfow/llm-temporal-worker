@@ -52,22 +52,26 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	}
 	cacheWrite := inputTokens
 	components := []struct {
+		component     pricing.PriceComponent
 		price         pricing.DecimalUSD
 		units         int64
 		unitsPerPrice int64
 		name          string
 	}{
-		{entry.Prices.InputPerMillion, inputTokens, 1_000_000, "input"},
-		{entry.Prices.OutputPerMillion, outputTokens, 1_000_000, "output"},
-		{entry.Prices.ReasoningPerMillion, reasoningTokens, 1_000_000, "reasoning"},
-		{entry.Prices.CacheWritePerMillion, cacheWrite, 1_000_000, "cache_write"},
+		{pricing.PriceComponentInput, entry.Prices.InputPerMillion, inputTokens, 1_000_000, "input"},
+		{pricing.PriceComponentOutput, entry.Prices.OutputPerMillion, outputTokens, 1_000_000, "output"},
+		{pricing.PriceComponentReasoning, entry.Prices.ReasoningPerMillion, reasoningTokens, 1_000_000, "reasoning"},
+		{pricing.PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion, cacheWrite, 1_000_000, "cache_write"},
 		// PerRequest is already an amount in USD for this invocation. It is
 		// not quoted per million units like the token components.
-		{entry.Prices.PerRequest, 1, 1, "per_request"},
+		{pricing.PriceComponentPerRequest, entry.Prices.PerRequest, 1, 1, "per_request"},
 	}
 	totalUSD := pricing.MustUSD("0")
 	legacyTotal := pricing.MicroUSD(0)
 	for _, component := range components {
+		if component.units > 0 && entry.ComponentUnknown(component.component) {
+			return Estimate{}, fmt.Errorf("estimate %s has no known USD catalog price", component.name)
+		}
 		value, err := pricing.CeilUSD(component.price, component.units, component.unitsPerPrice)
 		if err != nil {
 			return Estimate{}, fmt.Errorf("estimate %s: %w", component.name, err)

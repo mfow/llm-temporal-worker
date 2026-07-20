@@ -9,6 +9,10 @@ entries:
     provider_tier: flex
     input_per_million: "0"
     output_per_million: "0"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
   - endpoint: provider-mock
     family: openai_chat
     region: local
@@ -16,6 +20,10 @@ entries:
     service_class: standard
     input_per_million: "0"
     output_per_million: "0"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
   - endpoint: provider-mock
     family: openai_chat
     region: local
@@ -23,3 +31,7 @@ entries:
     service_class: priority
     input_per_million: "0"
     output_per_million: "0"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"

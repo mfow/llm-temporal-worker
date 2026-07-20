@@ -40,6 +40,20 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 				return Catalog{}, fmt.Errorf("pricing entry %d %s: %w", index, name, err)
 			}
 		}
+		seenUnknown := make(map[PriceComponent]struct{}, len(entry.UnknownComponents))
+		for _, component := range entry.UnknownComponents {
+			if !component.Valid() {
+				return Catalog{}, fmt.Errorf("pricing entry %d has unknown component %q", index, component)
+			}
+			if _, exists := seenUnknown[component]; exists {
+				return Catalog{}, fmt.Errorf("pricing entry %d repeats unknown component %q", index, component)
+			}
+			seenUnknown[component] = struct{}{}
+		}
+		if len(entry.UnknownComponents) > 1 {
+			entry.UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
+			sort.Slice(entry.UnknownComponents, func(i, j int) bool { return entry.UnknownComponents[i] < entry.UnknownComponents[j] })
+		}
 		if !entry.EffectiveFrom.IsZero() && !entry.EffectiveUntil.IsZero() && !entry.EffectiveUntil.After(entry.EffectiveFrom) {
 			return Catalog{}, fmt.Errorf("pricing entry %d effective interval is empty", index)
 		}
