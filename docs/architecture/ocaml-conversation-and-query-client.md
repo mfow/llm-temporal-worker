@@ -23,9 +23,11 @@ final Go contract.
 The protocol layer now contains the Task 17 Generate, Compact, and Query v1
 wire records, closed Yojson codecs, exact decimal-cost representation, and
 their three Temporal Activity descriptors. The public `Llm_temporal.Query`
-module now adds the five-constructor GADT over those closed query records;
-immutable Conversation state remains a subsequent layer and does not change
-this wire boundary.
+module now adds the five-constructor GADT over those closed query records. The
+companion `Llm_temporal.Conversation` facade now provides immutable v1
+checkpoint roots, forks, Generate/Compact helpers, and persistent
+`Settings.Patch`/`Cache_policy` builders. It remains a thin wrapper over the
+descriptors below: no streaming or mutable conversation head is introduced.
 
 Delivery follows the shared phase order: the rebuilt Generate facade is Phase
 A, Compact and Redis budget materialization are Phase B, the opt-in exact cache
