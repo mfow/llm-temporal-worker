@@ -5,14 +5,16 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 type resumableEngineAdapter struct {
-	mu      sync.Mutex
-	submits int
-	polls   int
+	mu       sync.Mutex
+	submits  int
+	polls    int
+	terminal bool
 }
 
 func (adapter *resumableEngineAdapter) Name() string { return "resumable-fixture" }
@@ -46,6 +48,9 @@ func (adapter *resumableEngineAdapter) Poll(_ context.Context, _ provider.Call, 
 	adapter.mu.Unlock()
 	if id != "fixture-provider-operation" {
 		return provider.ResumableResult{}, provider.NewError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "unexpected fixture provider id")
+	}
+	if adapter.terminal {
+		return provider.ResumableResult{State: provider.ResumableNotFound, Dispatch: provider.DispatchAmbiguous}, nil
 	}
 	if poll == 1 {
 		// Simulate a worker/activity interruption after the durable ID was
@@ -88,6 +93,22 @@ func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	}
 	if polls != 2 {
 		t.Fatalf("Poll calls = %d, want 2", polls)
+	}
+}
+
+func TestGenerateFinalizesTerminalFirstPollOutcome(t *testing.T) {
+	adapter := &resumableEngineAdapter{terminal: true}
+	harness := newHarness(t, adapter)
+	request := baseRequest("resumable-terminal-poll")
+	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
+		t.Fatal("terminal poll unexpectedly completed")
+	}
+	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.State != admission.StateAmbiguous {
+		t.Fatalf("operation state after terminal poll = %q, want ambiguous", operation.State)
 	}
 }
 

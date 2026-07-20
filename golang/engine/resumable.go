@@ -59,7 +59,15 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 		}
 		result, pollErr := PollProviderOperation(ctx, resumable, call, outcome.ProviderOperationID, observer, ProviderPollOptions{})
 		if pollErr != nil {
-			return provider.Result{}, pollErr, true
+			mapped := pendingPollError(pollErr)
+			if mapped.Retry != provider.RetrySameOperation && mapped.Code != provider.CodeCanceled {
+				// A terminal poll outcome (for example provider not-found or a
+				// provider-declared failure) must pass through the normal ledger
+				// finalization path rather than strand the reservation in
+				// provider_pending.
+				return provider.Result{}, mapped, false
+			}
+			return provider.Result{}, mapped, true
 		}
 		return result, nil, false
 	default:
