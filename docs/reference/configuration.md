@@ -404,7 +404,9 @@ until that implementation is available.
 
 The planned memory mode is an explicitly non-durable single-process
 development mode, but it is not currently runnable through the production
-runtime factory:
+runtime factory. Configuration validation rejects `state.kind: memory` in
+every environment until the factory has a memory-store composition. The
+following is the intended shape once that support lands:
 
 ~~~yaml
 environment: development
@@ -418,15 +420,16 @@ blob_store:
   kind: memory
 ~~~
 
-It uses bounded process memory for operations, checkpoints, query audit,
-budget/throttle state, and blobs. Restart loses everything; provider-pending
+When implemented, it will use bounded process memory for operations,
+checkpoints, query audit, budget/throttle state, and blobs. Restart loses
+everything; provider-pending
 jobs cannot be recovered after process loss. Validation rejects **memory** when
-`environment` is production, configured worker replicas exceed one, a durable
-continuation/recovery guarantee is required, or an external blob-store kind is
-mixed with the memory state. Redis/PostgreSQL addresses and credentials are
-omitted and are not dialled. The mode shares semantic conformance tests with
-durable implementations but is never evidence for crash recovery, multi-replica
-admission, backups, or production readiness.
+the mode is eventually enabled for development, and it must continue to reject
+configurations that request durable continuation/recovery guarantees or mix an
+external blob-store kind with memory state. Redis/PostgreSQL addresses and
+credentials will be omitted and not dialled. The mode will share semantic
+conformance tests with durable implementations but will never be evidence for
+crash recovery, multi-replica admission, backups, or production readiness.
 
 **state.redis.key_prefix** has a
 default of **llmtw**. The optional **LLMTW_REDIS_KEY_PREFIX** environment
