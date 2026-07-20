@@ -47,3 +47,8 @@ the architecture; this slice only provides the durable cache boundary.
 
 Integration tests are opt-in through `LLMTW_POSTGRES_ADDR`, using the same
 clean PostgreSQL 17 schema gate as the operation repository.
+
+The concurrent-fill integration test repeats two simultaneous lease attempts
+to cover the unique-conflict reread path. One caller must acquire the lease and
+the other must receive `busy`; a database `no rows` error is never a valid
+concurrency outcome.
