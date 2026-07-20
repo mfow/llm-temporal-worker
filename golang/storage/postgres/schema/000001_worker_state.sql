@@ -1355,6 +1355,14 @@ CREATE INDEX __PREFIX__provider_route_query_idx
         stale_after
     );
 
+-- Credit-status Query Activities collapse route projections by provider and
+-- endpoint, selecting the newest observation. Keep that DISTINCT ON shape
+-- indexable and include the event join/state columns used by the bounded read.
+CREATE INDEX __PREFIX__provider_route_credit_query_idx
+    ON __SCHEMA__.__PREFIX__provider_route_status
+        (config_digest, provider, endpoint_id, observed_at DESC, route_id DESC)
+    INCLUDE (credit_state, billing_state, credit_confirmed_at, last_event_id);
+
 CREATE INDEX __PREFIX__provider_inventory_latest_idx
     ON __SCHEMA__.__PREFIX__provider_inventory_snapshots
         (config_digest, endpoint_id, observed_at DESC, inventory_snapshot_id)
