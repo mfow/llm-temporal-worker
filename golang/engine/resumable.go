@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -52,6 +53,7 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 			OperationID: operation.ID, DispatchToken: operation.DispatchToken,
 			ProviderOperationID: outcome.ProviderOperationID,
 			EndpointID:          candidate.EndpointID, Provider: candidate.Provider,
+			PollAfter: providerPollAfter(engine.dependencies.Clock, outcome.NextPollAfter),
 		}); err != nil {
 			return provider.Result{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "provider operation persistence failed", err), false
 		}
@@ -63,6 +65,13 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 	default:
 		return provider.Result{}, fmt.Errorf("resumable provider state %q was not handled", outcome.State), false
 	}
+}
+
+func providerPollAfter(now func() time.Time, delay time.Duration) time.Time {
+	if delay <= 0 || now == nil {
+		return time.Time{}
+	}
+	return now().Add(delay)
 }
 
 func (engine *Engine) resumeProviderPending(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation) (llm.Response, error) {
