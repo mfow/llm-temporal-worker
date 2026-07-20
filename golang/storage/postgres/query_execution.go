@@ -324,13 +324,28 @@ func (repository QueryExecutionRepository) Record(ctx context.Context, request Q
 	if err != nil {
 		return record, err
 	}
-	insert := "INSERT INTO " + queryExecutions + " (query_execution_id, scope_id, api_version, operation_key_hmac, request_fingerprint_hmac, query_kind, request_jsonb, response_jsonb, response_digest, source, actual_cost_usd, cost_status, cost_method, cost_unknown_reason_code, started_at, completed_at, retention_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,''),$15,$16,$17) ON CONFLICT (scope_id, operation_key_hmac) DO NOTHING RETURNING query_execution_id"
+	insert := "INSERT INTO " + queryExecutions + " (query_execution_id, scope_id, api_version, operation_key_hmac, request_fingerprint_hmac, query_kind, request_jsonb, response_jsonb, response_digest, source, actual_cost_usd, cost_status, cost_method, cost_unknown_reason_code, started_at, completed_at, retention_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,NULLIF($13,''),NULLIF($14,''),$15,$16,$17) ON CONFLICT (scope_id, operation_key_hmac) DO NOTHING RETURNING query_execution_id, request_jsonb::text, response_jsonb::text"
 	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var insertedID uuid.UUID
-		err := tx.QueryRow(ctx, insert, newID, scope.ID, request.APIVersion, operationKeyHMAC[:], requestFingerprintHMAC[:], request.Kind, request.RequestJSON, request.ResponseJSON, request.ResponseDigest[:], request.Source, actualCost, request.CostStatus, request.CostMethod, request.CostUnknownReasonCode, request.StartedAt.UTC(), request.CompletedAt.UTC(), request.RetentionExpiresAt.UTC()).Scan(&insertedID)
+		var storedRequestJSON, storedResponseJSON string
+		err := tx.QueryRow(ctx, insert, newID, scope.ID, request.APIVersion, operationKeyHMAC[:], requestFingerprintHMAC[:], request.Kind, request.RequestJSON, request.ResponseJSON, request.ResponseDigest[:], request.Source, actualCost, request.CostStatus, request.CostMethod, request.CostUnknownReasonCode, request.StartedAt.UTC(), request.CompletedAt.UTC(), request.RetentionExpiresAt.UTC()).Scan(&insertedID, &storedRequestJSON, &storedResponseJSON)
 		if err == nil {
 			if insertedID != newID {
 				return errors.New("PostgreSQL query execution identity changed")
+			}
+			canonicalRequest, err := canonicalQueryExecutionJSON("inserted request", []byte(storedRequestJSON))
+			if err != nil {
+				return err
+			}
+			canonicalResponse, err := canonicalQueryExecutionJSON("inserted response", []byte(storedResponseJSON))
+			if err != nil {
+				return err
+			}
+			request.RequestJSON = canonicalRequest
+			request.ResponseJSON = canonicalResponse
+			request.ResponseDigest = sha256.Sum256(canonicalResponse)
+			if _, err := tx.Exec(ctx, "UPDATE "+queryExecutions+" SET response_digest=$1 WHERE query_execution_id=$2", request.ResponseDigest[:], insertedID); err != nil {
+				return redactPostgresError(fmt.Errorf("update query execution response digest: %w", err))
 			}
 			record = queryExecutionRecordFromRequest(newID, scope.ID, operationKeyHMAC, requestFingerprintHMAC, request)
 			return nil
