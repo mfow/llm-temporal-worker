@@ -399,9 +399,9 @@ func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request
 		fillQuery := "SELECT owner_operation_id, state, lease_expires_at, cache_entry_id FROM " + fills + " WHERE scope_id=$1 AND fingerprint_version=$2 AND semantic_fingerprint_hmac=$3 AND variant=$4 AND cache_route_identity_hmac=$5 FOR UPDATE"
 		err := tx.QueryRow(ctx, fillQuery, request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:]).Scan(&existingOwner, &state, &existingLease, &existingEntry)
 		if errors.Is(err, pgx.ErrNoRows) {
-			inserted, err := tx.Exec(ctx, "INSERT INTO "+fills+" (scope_id, fingerprint_version, semantic_fingerprint_hmac, variant, cache_route_identity_hmac, owner_operation_id, state, lease_expires_at) VALUES ($1,$2,$3,$4,$5,$6,'filling',$7) ON CONFLICT DO NOTHING", request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:], owner, leaseUntil)
-			if err != nil {
-				return redactPostgresError(fmt.Errorf("create PostgreSQL response cache fill: %w", err))
+			inserted, insertErr := tx.Exec(ctx, "INSERT INTO "+fills+" (scope_id, fingerprint_version, semantic_fingerprint_hmac, variant, cache_route_identity_hmac, owner_operation_id, state, lease_expires_at) VALUES ($1,$2,$3,$4,$5,$6,'filling',$7) ON CONFLICT DO NOTHING", request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:], owner, leaseUntil)
+			if insertErr != nil {
+				return redactPostgresError(fmt.Errorf("create PostgreSQL response cache fill: %w", insertErr))
 			}
 			if inserted.RowsAffected() > 0 {
 				result.Status, result.LeaseUntil = CacheFillAcquired, leaseUntil
@@ -412,10 +412,9 @@ func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request
 			}
 			// The initial SELECT legitimately observed no row. Once the
 			// conflict-safe INSERT has completed, the reread supplies the
-			// lock result; clear the stale ErrNoRows before evaluating it
-			// below. Without this assignment, the successful conflict path
-			// was incorrectly reported as a lock failure under concurrent
-			// BeginFill calls.
+			// lock result; clear the outer lookup error before evaluating it
+			// below. Keep the INSERT error in a separate variable so this
+			// assignment cannot be shadowed by a short declaration.
 			err = nil
 		}
 		if err != nil {

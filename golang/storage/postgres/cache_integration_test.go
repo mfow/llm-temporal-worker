@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"testing"
 	"time"
 
@@ -169,42 +170,51 @@ func TestResponseCacheFillLookupAndUseAccounting(t *testing.T) {
 
 func TestResponseCacheConcurrentFillAcquisition(t *testing.T) {
 	fixture := newResponseCacheFixture(t)
-	key := testCacheKey()
-	key.ScopeID = fixture.scope.ID
-	ids := []string{"cache-concurrent-fill-a-" + uuid.NewString(), "cache-concurrent-fill-b-" + uuid.NewString()}
-	for _, id := range ids {
-		if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: id, ScopeKey: "cache-integration-tenant/cache-integration-project", RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}); err != nil {
-			t.Fatal(err)
+	// Repeat the race so the conflict-safe INSERT ... ON CONFLICT DO
+	// NOTHING reread path is exercised consistently rather than relying on
+	// one scheduler interleaving.
+	for attempt := 0; attempt < 8; attempt++ {
+		key := testCacheKey()
+		key.ScopeID = fixture.scope.ID
+		key.SemanticFingerprintHMAC = sha256.Sum256([]byte(fmt.Sprintf("cache-concurrent-fill-%d", attempt)))
+		ids := []string{"cache-concurrent-fill-a-" + uuid.NewString(), "cache-concurrent-fill-b-" + uuid.NewString()}
+		for _, id := range ids {
+			if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: id, ScopeKey: "cache-integration-tenant/cache-integration-project", RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	type fillResult struct {
-		result CacheFillResult
-		err    error
-	}
-	results := make(chan fillResult, len(ids))
-	for _, id := range ids {
-		go func(id string) {
-			result, err := fixture.repository.BeginFill(fixture.ctx, CacheFillRequest{Key: key, OperationID: id, Lease: time.Minute})
-			results <- fillResult{result: result, err: err}
-		}(id)
-	}
-	acquired, busy := 0, 0
-	for range ids {
-		outcome := <-results
-		if outcome.err != nil {
-			t.Fatal(outcome.err)
+		type fillResult struct {
+			result CacheFillResult
+			err    error
 		}
-		switch outcome.result.Status {
-		case CacheFillAcquired:
-			acquired++
-		case CacheFillBusy:
-			busy++
-		default:
-			t.Fatalf("unexpected concurrent fill result=%#v", outcome.result)
+		start := make(chan struct{})
+		results := make(chan fillResult, len(ids))
+		for _, id := range ids {
+			go func(id string) {
+				<-start
+				result, err := fixture.repository.BeginFill(fixture.ctx, CacheFillRequest{Key: key, OperationID: id, Lease: time.Minute})
+				results <- fillResult{result: result, err: err}
+			}(id)
 		}
-	}
-	if acquired != 1 || busy != 1 {
-		t.Fatalf("concurrent fill outcomes acquired=%d busy=%d, want one each", acquired, busy)
+		close(start)
+		acquired, busy := 0, 0
+		for range ids {
+			outcome := <-results
+			if outcome.err != nil {
+				t.Fatal(outcome.err)
+			}
+			switch outcome.result.Status {
+			case CacheFillAcquired:
+				acquired++
+			case CacheFillBusy:
+				busy++
+			default:
+				t.Fatalf("unexpected concurrent fill result=%#v", outcome.result)
+			}
+		}
+		if acquired != 1 || busy != 1 {
+			t.Fatalf("concurrent fill outcomes acquired=%d busy=%d, want one each", acquired, busy)
+		}
 	}
 }
 
