@@ -61,7 +61,7 @@ jobs:
           push: false
           tags: llm-temporal-worker:master-${{ github.run_number }}
           cache-from: type=gha,scope=llmtw-master
-          cache-to: type=gha,mode=max,scope=llmtw-master
+          cache-to: type=gha,mode=max,scope=llmtw-master,ignore-error=true
           build-args: |
             VERSION=${{ steps.metadata.outputs.version }}
             REVISION=${{ steps.metadata.outputs.revision }}

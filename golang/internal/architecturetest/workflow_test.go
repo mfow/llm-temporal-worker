@@ -66,7 +66,7 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		assertJobUsesAction(t, workflow, "container", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c")
 		assertJobUsesAction(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf")
 		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-from", "type=gha,scope="+test.scope)
-		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-to", "type=gha,mode=max,scope="+test.scope)
+		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-to", "type=gha,mode=max,scope="+test.scope+",ignore-error=true")
 		if !strings.Contains(workflow.raw, "go-version: stable") {
 			t.Fatalf("%s container build does not use the latest stable Go toolchain", workflow.name)
 		}
