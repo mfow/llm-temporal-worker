@@ -1,9 +1,9 @@
 package postgres
 
 // This file contains the endpoint-level credit/billing read side. It reads
-// only the current provider-route projection and the event referenced by each
-// projection row. Provider refreshes, inference calls, cursor signing, and
-// wire serialization remain outside the PostgreSQL repository.
+// only the current provider-route projection and the newest matching incident
+// event for each route. Provider refreshes, inference calls, cursor signing,
+// and wire serialization remain outside the PostgreSQL repository.
 
 import (
 	"context"
@@ -69,8 +69,9 @@ func (options *CreditStatusListOptions) normalize() error {
 // identity in stable key order. The DISTINCT ON ordering is deliberate: when a
 // configuration has several routes for one endpoint, the newest observed
 // projection wins and route_id provides a deterministic tie-breaker. Healthy
-// rows are omitted unless IncludeOK is true. The event join exposes only the
-// bounded source/code fields required for safe credit evidence.
+// rows are omitted unless IncludeOK is true. The incident lookup exposes only
+// bounded source/code fields required for safe credit evidence and does not
+// trust a later non-authoritative event referenced by last_event_id.
 func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Context, options CreditStatusListOptions) (control.CreditStatusPage, error) {
 	var page control.CreditStatusPage
 	if err := repository.validate(); err != nil {
