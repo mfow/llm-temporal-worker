@@ -70,12 +70,14 @@ Add opaque wrappers for values that must not be interchanged:
 module Checkpoint : sig
   type t
   val of_string : string -> (t, validation_error) result
+  val of_string_exn : string -> t
   val to_string : t -> string
 end
 
 module Query_cursor : sig
   type t
   val of_string : string -> (t, validation_error) result
+  val of_string_exn : string -> t
   val to_string : t -> string
 end
 
@@ -86,12 +88,14 @@ module Budget_generation_id : Identifier
 module Budget_stream_id : sig
   type t
   val of_string : string -> (t, validation_error) result
+  val of_string_exn : string -> t
   val to_string : t -> string
 end
 
 module Sha256_digest : sig
   type t
   val of_hex : string -> (t, validation_error) result
+  val of_hex_exn : string -> t
   val to_hex : t -> string
 end
 ~~~
@@ -122,6 +126,14 @@ representation or a checked coefficient plus scale; **float** is absent from
 constructors and records. There is no **currency** value, string, or enum in
 the Go wire model or OCaml facade. A field named **actual_cost_usd** is known
 to be USD.
+
+The repository still contains the pre-Task-17 `request`/`response` compatibility
+records because the unreleased legacy wrapper and Conversation tests use them.
+Those records are not accepted by, or emitted from, any `llm.temporal/*/v1`
+codec and are outside the public v1 boundary; new callers must use
+`generate_request`, `generate_response`, `compact_request`,
+`compaction_response`, and the query records below. Their old cost fields are
+therefore deliberately absent from every v1 model and fixture.
 
 Unknown is represented structurally, not by a sentinel decimal. A catalog unit
 price or actual cost that the worker cannot establish is JSON null at the wire
@@ -155,7 +167,7 @@ type settings_patch = {
   tools : tool list patch;
   tool_policy : tool_policy patch;
   output : output_config patch;
-  temperature : Decimal.t patch;
+  temperature : Usd_decimal.t patch;
   reasoning_effort : reasoning_effort patch;
   reasoning_summary : reasoning_summary patch;
   compaction_policy : compaction_policy patch;

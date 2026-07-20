@@ -8,7 +8,8 @@
 
 (test
  (name test_v1_protocol)
- (libraries llm_temporal temporal-sdk yojson ptime))
+ (libraries llm_temporal temporal-sdk yojson ptime)
+ (deps (source_tree fixtures)))
 
 (test
  (name test_query)

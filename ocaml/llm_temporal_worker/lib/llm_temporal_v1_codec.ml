@@ -34,6 +34,11 @@ let string context = function
   | `String value -> Ok value
   | _ -> Error (errorf "%s must be a string" context)
 
+let validated context parse value =
+  match parse value with
+  | Ok value -> Ok value
+  | Error message -> Error (errorf "%s: %s" context message)
+
 let bool context = function
   | `Bool value -> Ok value
   | _ -> Error (errorf "%s must be a boolean" context)
@@ -213,7 +218,7 @@ let settings_patch_to_json (value : settings_patch) =
   let fields = add "tools" (fun values -> `List (List.map tool_to_json values)) value.tools fields in
   let fields = add "tool_policy" Llm_temporal_codec.policy_to_json value.tool_policy fields in
   let fields = add "output" output_to_json value.output fields in
-  let fields = add "temperature" (fun value -> `Float value) value.temperature fields in
+  let fields = add "temperature" usd_to_json value.temperature fields in
   let fields = add "reasoning_effort" (fun value -> `String (match value with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Maximum -> "maximum")) value.reasoning_effort fields in
   let fields = add "reasoning_summary" (fun value -> `String (match value with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed")) value.reasoning_summary fields in
   let fields = add "compaction_policy" (fun value -> value) value.compaction_policy fields in
@@ -231,7 +236,7 @@ let settings_patch_of_json value =
   let* tools = get "tools" (fun context value -> list context value >>= map_result (fun value -> Llm_temporal_codec.tool_of_json value)) in
   let* tool_policy = get "tool_policy" (fun _ value -> Llm_temporal_codec.policy_of_json value) in
   let* output = get "output" (fun _ value -> Llm_temporal_codec.output_of_json value) in
-  let* temperature = get "temperature" (fun context value -> match value with `Float value when Float.is_finite value && value >= 0. -> Ok value | `Int value when value >= 0 -> Ok (float_of_int value) | _ -> Error (errorf "%s must be a finite non-negative number" context)) in
+  let* temperature = get "temperature" (fun context value -> usd_of_json context value) in
   let effort context = function `String "provider_default" -> Ok Effort_default | `String "minimal" -> Ok Minimal | `String "low" -> Ok Low | `String "medium" -> Ok Medium | `String "high" -> Ok High | `String "maximum" -> Ok Maximum | _ -> Error (errorf "%s has an invalid reasoning effort" context) in
   let summary context = function `String "provider_default" -> Ok Summary_default | `String "none" -> Ok Summary_none | `String "auto" -> Ok Summary_auto | `String "concise" -> Ok Concise | `String "detailed" -> Ok Detailed | _ -> Error (errorf "%s has an invalid reasoning summary" context) in
   let* reasoning_effort = get "reasoning_effort" effort in
@@ -251,8 +256,9 @@ let checkpoint_of_json context value =
   let* kind = required context "kind" fields >>= checkpoint_kind_of_json (context ^ ".kind") in
   let* depth = required context "depth" fields >>= int32 (context ^ ".depth") in
   let* () = nonnegative (context ^ ".depth") (Int64.of_int32 depth) in
-  let* parent = match optional "parent" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".parent") value in let* value = nonempty (context ^ ".parent") value in Ok (Some (Checkpoint.of_string value)) in
-  Ok { handle = Checkpoint.of_string handle; parent; kind; depth }
+  let* parent = match optional "parent" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".parent") value in let* value = validated (context ^ ".parent") Checkpoint.of_string value in Ok (Some value) in
+  let* handle = validated (context ^ ".handle") Checkpoint.of_string handle in
+  Ok { handle; parent; kind; depth }
 
 let usage_to_json (value : usage) =
   `Assoc ["input_tokens", `Intlit (Int64.to_string value.input_tokens); "output_tokens", `Intlit (Int64.to_string value.output_tokens); "reasoning_tokens", `Intlit (Int64.to_string value.reasoning_tokens); "cache_read_tokens", `Intlit (Int64.to_string value.cache_read_tokens); "cache_write_tokens", `Intlit (Int64.to_string value.cache_write_tokens)]
@@ -297,7 +303,7 @@ let generate_request_of_json value =
   let* () = if version = generate_api_version then Ok () else Error (errorf "unsupported generate api_version %S" version) in
   let* operation_key = required "generate request" "operation_key" fields >>= string "generate request.operation_key" >>= fun value -> nonempty "generate request.operation_key" value in
   let* context = required "generate request" "context" fields >>= context_of_v1_json in
-  let* parent = match optional "parent" fields with None | Some `Null -> Ok None | Some value -> let* value = string "generate request.parent" value in let* value = nonempty "generate request.parent" value in Ok (Some (Checkpoint.of_string value)) in
+  let* parent = match optional "parent" fields with None | Some `Null -> Ok None | Some value -> let* value = string "generate request.parent" value in let* value = validated "generate request.parent" Checkpoint.of_string value in Ok (Some value) in
   let* append = required "generate request" "append" fields >>= list "generate request.append" >>= map_result (fun value -> Llm_temporal_codec.item_of_json value) in
   let* settings_patch = match optional "settings_patch" fields with None -> Ok empty_settings_patch | Some value -> settings_patch_of_json value in
   let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "generate request.cache" value in Ok (Some value) in
@@ -356,7 +362,8 @@ let compact_request_of_json value =
   let* parent = required "compact request" "parent" fields >>= string "compact request.parent" >>= fun value -> nonempty "compact request.parent" value in
   let* policy = match optional "policy" fields with None | Some `Null -> Ok None | Some value -> let* value = policy_of_json "compact request.policy" value in Ok (Some value) in
   let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "compact request.cache" value in let* () = if value.variant = 0l then Ok () else Error (errorf "compact cache variant must be zero") in Ok (Some value) in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent = Checkpoint.of_string parent; policy; cache }
+  let* parent = validated "compact request.parent" Checkpoint.of_string parent in
+  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; policy; cache }
 
 let provenance_to_json (value : provenance) =
   `Assoc (["source", `String (match value.source with Provider_provenance -> "provider" | Worker_cache_provenance -> "worker_cache")] @ option_field "origin_operation_id" (fun value -> `String (Operation_id.to_string value)) value.origin_operation_id @ option_field "policy" (fun value -> `String value) value.policy)
@@ -456,7 +463,7 @@ let query_request_of_json value =
   let* query = required "query request" "query" fields in
   let page context fields =
     let* page_size = match optional "page_size" fields with None -> Ok 100 | Some value -> int64 (context ^ ".page_size") value >>= fun value -> if value < 1L || value > 1000L then Error (errorf "%s.page_size is out of bounds" context) else Ok (Int64.to_int value) in
-    let* cursor = match optional "cursor" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".cursor") value in let* value = nonempty (context ^ ".cursor") value in Ok (Some (Query_cursor.of_string value)) in
+    let* cursor = match optional "cursor" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".cursor") value in let* value = validated (context ^ ".cursor") Query_cursor.of_string value in Ok (Some value) in
     Ok (page_size, cursor)
   in
   let optional_provider _context fields = optional_id_field "provider" Provider_id.of_string fields in
@@ -619,7 +626,9 @@ let budget_of_json context value =
   let* manifest_digest = required context "manifest_digest" fields >>= string (context ^ ".manifest_digest") in
   let* stream_high_water_mark = required context "stream_high_water_mark" fields >>= string (context ^ ".stream_high_water_mark") in
   let* windows = required context "windows" fields >>= list (context ^ ".windows") >>= map_result (window_of_json (context ^ ".window")) in
-  Ok { active_at; generation_id = Budget_generation_id.of_string generation_id; manifest_digest = Sha256_digest.of_hex manifest_digest; stream_high_water_mark = Budget_stream_id.of_string stream_high_water_mark; windows }
+  let* manifest_digest = validated "query response.manifest_digest" Sha256_digest.of_hex manifest_digest in
+  let* stream_high_water_mark = validated "query response.stream_high_water_mark" Budget_stream_id.of_string stream_high_water_mark in
+  Ok { active_at; generation_id = Budget_generation_id.of_string generation_id; manifest_digest; stream_high_water_mark; windows }
 
 let spend_group_to_json (value : spend_group_key) = `Assoc (id_option "operation_kind" (fun value -> operation_kind_to_string value) value.operation_kind @ id_option "provider" Provider_id.to_string value.provider @ id_option "model" Model_selector.to_string value.model)
 let spend_bucket_to_json (value : spend_bucket) = `Assoc (["group", spend_group_to_json value.group; "known_actual_cost_usd", usd_json value.known_actual_cost_usd; "exact_operation_count", `Intlit (Int64.to_string value.exact_operation_count); "unknown_operation_count", `Intlit (Int64.to_string value.unknown_operation_count); "completeness", `String (completeness_to_string value.completeness)])
@@ -675,7 +684,7 @@ let query_response_of_json value =
   let* source = required "query response" "source" fields >>= string "query response.source" >>= source_of_string "query response.source" in
   let* freshness = required "query response" "freshness" fields >>= string "query response.freshness" >>= freshness_of_string "query response.freshness" in
   let* complete = required "query response" "complete" fields >>= bool "query response.complete" in
-  let* next_cursor = match optional "next_cursor" fields with None | Some `Null -> Ok None | Some value -> string "query response.next_cursor" value >>= fun value -> Ok (Some (Query_cursor.of_string value)) in
+  let* next_cursor = match optional "next_cursor" fields with None | Some `Null -> Ok None | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" Query_cursor.of_string value >>= fun value -> Ok (Some value) in
   let* result_value = required "query response" "result" fields in
   let* result = match kind with
     | "provider_status" -> provider_page_of_json "query response.provider_status" result_value >>= fun value -> Ok (Provider_status_result value)

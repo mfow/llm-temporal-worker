@@ -48,19 +48,26 @@ module Window_key = Make_nonempty ()
 
 module Checkpoint = struct
   type t = string
-  let of_string value = if value = "" then invalid_arg "checkpoint must not be empty" else value
+  let of_string value = if value = "" then Error "checkpoint must not be empty" else Ok value
+  let of_string_exn value = match of_string value with Ok value -> value | Error message -> invalid_arg message
   let to_string value = value
 end
 
 module Query_cursor = struct
   type t = string
-  let of_string value = if value = "" then invalid_arg "query cursor must not be empty" else value
+  let of_string value = if value = "" then Error "query cursor must not be empty" else Ok value
+  let of_string_exn value = match of_string value with Ok value -> value | Error message -> invalid_arg message
   let to_string value = value
 end
 
 module Budget_stream_id = struct
   type t = string
-  let of_string value = if value = "" then invalid_arg "budget stream id must not be empty" else value
+  let unsigned value = value <> "" && String.for_all (fun c -> c >= '0' && c <= '9') value
+  let of_string value =
+    match String.split_on_char '-' value with
+    | [milliseconds; sequence] when unsigned milliseconds && unsigned sequence -> Ok value
+    | _ -> Error "budget stream id must use unsigned milliseconds-sequence spelling"
+  let of_string_exn value = match of_string value with Ok value -> value | Error message -> invalid_arg message
   let to_string value = value
 end
 
@@ -68,7 +75,8 @@ module Sha256_digest = struct
   type t = string
   let of_hex value =
     if String.length value <> 64 || String.exists (fun c -> not ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) value then
-      invalid_arg "sha256 digest must be 64 lowercase hexadecimal characters"
-    else value
+      Error "sha256 digest must be 64 lowercase hexadecimal characters"
+    else Ok value
+  let of_hex_exn value = match of_hex value with Ok value -> value | Error message -> invalid_arg message
   let to_hex value = value
 end

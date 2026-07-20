@@ -777,15 +777,18 @@ directory unless a command explicitly says otherwise.
 - Modify: **ocaml/llm_temporal_worker/lib/dune**
 - Test: **ocaml/llm_temporal_worker/test/test_wrapper.ml**
 
-- [ ] Retain landed PR 109 validation and its nominal ID/error conventions.
-- [ ] Implement exact **Usd_decimal.t**, exact/unknown settled-cost variants,
+- [x] Retain landed PR 109 validation and its nominal ID/error conventions.
+- [x] Implement exact **Usd_decimal.t**, exact/unknown settled-cost variants,
   checkpoint, cursor, and query-execution IDs,
   patch/cache/Generate/Compact records, and every Query wire variant/result.
-- [ ] Remove public currency/microUSD fields. Prohibit float in money API.
-- [ ] Encode Keep by omission, Set/Clear distinctly, decimal as string, variant
+- [x] Remove public currency/microUSD fields from v1 models. Prohibit float in
+  the v1 money/temperature API; the pre-v1 compatibility record remains
+  explicitly outside the v1 boundary.
+- [x] Encode Keep by omission, Set/Clear distinctly, decimal as string, variant
   as int32, and all query tags closed.
 - [ ] Add three exact Activity descriptors and low-level invoke functions.
-- [ ] Consume Go golden fixtures for every positive/negative shape and assert
+- [x] Consume Go golden fixtures for the bounded Generate/Compact/Query
+  positive/negative shapes and assert
   canonical round trips.
 - [ ] Run Dune build/test with the pinned Temporal SDK.
 - [ ] Commit: **feat(ocaml): add conversation compact query and usd protocols**.
