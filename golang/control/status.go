@@ -212,6 +212,7 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	if status.RouteID != "" && (status.EndpointAccountHMAC != event.EndpointAccountHMAC || status.Provider != event.Provider) {
 		return false
 	}
+	rawCredit := event.Credit
 	if status.Credit == CreditLow || status.Credit == CreditExhausted {
 		if !(event.canClearIncident() && event.Credit == CreditOK) {
 			event.Credit = status.Credit
@@ -234,7 +235,14 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	}
 	status.LastEventDigest, status.ObservedAt, status.StaleAfter = event.EventDigest, event.ObservedAt, event.ExpiresAt
 	if status.Credit == CreditLow || status.Credit == CreditExhausted {
-		status.CreditConfirmedAt = event.ObservedAt
+		// Keep the authoritative confirmation timestamp across ordinary
+		// inference/startup observations. A provider code is explicit incident
+		// evidence even when it was observed on an inference path; without one,
+		// the sticky projection must not turn a health observation into a new
+		// confirmation.
+		if event.hasAuthoritativeCreditIncident(rawCredit) {
+			status.CreditConfirmedAt = event.ObservedAt
+		}
 	} else if status.Credit == CreditOK && event.canClearIncident() {
 		status.CreditConfirmedAt = time.Time{}
 	}
@@ -245,6 +253,13 @@ func (status RouteStatus) ConfigDigestIsZero() bool { return status.ConfigDigest
 
 func (event StatusEvent) canClearIncident() bool {
 	return (event.Source == SourceManagementAPI || event.Source == SourceOperator) && event.ConfigEpoch != ""
+}
+
+func (event StatusEvent) hasAuthoritativeCreditIncident(rawCredit CreditState) bool {
+	if rawCredit != CreditLow && rawCredit != CreditExhausted {
+		return false
+	}
+	return event.Source == SourceManagementAPI || event.Source == SourceOperator || event.ProviderCode != ""
 }
 
 func (status RouteStatus) StaleAt(now time.Time) bool {
