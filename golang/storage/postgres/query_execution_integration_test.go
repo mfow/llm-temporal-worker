@@ -20,6 +20,8 @@ func TestQueryExecutionPersistenceIntegration(t *testing.T) {
 	repository.Now = func() time.Time { return time.Date(2026, time.July, 20, 8, 0, 0, 0, time.UTC) }
 	request := validQueryExecutionRequest(repository.Now())
 	request.Tenant = "query-ledger-" + time.Now().UTC().Format("150405.000000000")
+	request.ResponseJSON = []byte(`{"routes": [], "kind": "provider_status", "api_version": "llm.temporal/query/v1"}`)
+	request.ResponseDigest = sha256.Sum256([]byte(canonicalQueryJSON(request.ResponseJSON)))
 	record, err := repository.Record(ctx, request)
 	if err != nil {
 		t.Fatalf("record query execution: %v", err)
@@ -38,7 +40,7 @@ func TestQueryExecutionPersistenceIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
-	if replay.ID != record.ID || canonicalQueryJSON(replay.ResponseJSON) != canonicalQueryJSON(record.ResponseJSON) {
+	if replay.ID != record.ID || canonicalQueryJSON(replay.ResponseJSON) != canonicalQueryJSON(record.ResponseJSON) || sha256.Sum256(replay.ResponseJSON) != replay.ResponseDigest {
 		t.Fatalf("replay changed stored result: first=%#v replay=%#v", record, replay)
 	}
 

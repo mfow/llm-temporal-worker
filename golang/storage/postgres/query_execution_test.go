@@ -107,3 +107,28 @@ func TestValidateQueryExecutionJSONRejectsNonObjectsAndOversize(t *testing.T) {
 		t.Fatalf("oversize response JSON error = %v", err)
 	}
 }
+
+func TestCanonicalizeQueryExecutionJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"whitespace", `{ "api_version": "llm.temporal/query/v1", "kind": "provider_status" }`, `{"api_version":"llm.temporal/query/v1","kind":"provider_status"}`},
+		{"key order", `{"kind":"provider_status","api_version":"llm.temporal/query/v1"}`, `{"api_version":"llm.temporal/query/v1","kind":"provider_status"}`},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			canonical, err := canonicalQueryExecutionJSON("response", []byte(test.raw))
+			if err != nil {
+				t.Fatalf("canonicalize JSON: %v", err)
+			}
+			if string(canonical) != test.want {
+				t.Fatalf("canonical JSON = %s, want %s", canonical, test.want)
+			}
+		})
+	}
+	if _, err := canonicalQueryExecutionJSON("response", []byte(`{"kind":"provider_status","kind":"provider_status"}`)); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate key error = %v", err)
+	}
+}

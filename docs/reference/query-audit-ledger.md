@@ -5,7 +5,8 @@
 composed: callers pass already validated, redacted control JSON and the
 repository enforces the storage invariants.
 
-Each row stores bounded request and response JSON, a SHA-256 response digest,
+Each row stores bounded, canonicalized request and response JSON, a SHA-256
+digest over the canonical response bytes,
 the closed query kind and source, exact-or-unknown cost metadata, and UTC
 timestamps. Prompts, model output, credentials, provider bodies, and raw tool
 payloads are rejected recursively. Scope and operation values are never stored

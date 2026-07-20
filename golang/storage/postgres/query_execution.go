@@ -121,21 +121,33 @@ func (repository QueryExecutionRepository) clock() time.Time {
 	return time.Now().UTC()
 }
 
-func validateQueryExecutionJSON(name string, data []byte) error {
+func canonicalQueryExecutionJSON(name string, data []byte) ([]byte, error) {
 	if len(data) == 0 || len(data) > MaxQueryExecutionJSONBytes {
-		return fmt.Errorf("query execution %s JSON must be between 1 and %d bytes", name, MaxQueryExecutionJSONBytes)
+		return nil, fmt.Errorf("query execution %s JSON must be between 1 and %d bytes", name, MaxQueryExecutionJSONBytes)
+	}
+	canonical, err := llm.CanonicalJSONWithLimits(data, MaxQueryExecutionJSONBytes, 64)
+	if err != nil {
+		return nil, fmt.Errorf("query execution %s JSON cannot be canonicalized: %w", name, err)
 	}
 	var value any
-	if err := json.Unmarshal(data, &value); err != nil {
-		return fmt.Errorf("query execution %s JSON is invalid: %w", name, err)
+	if err := json.Unmarshal(canonical, &value); err != nil {
+		return nil, fmt.Errorf("query execution %s canonical JSON is invalid: %w", name, err)
 	}
 	if _, ok := value.(map[string]any); !ok {
-		return fmt.Errorf("query execution %s JSON must be an object", name)
+		return nil, fmt.Errorf("query execution %s JSON must be an object", name)
 	}
 	if err := rejectSensitiveAuditFields(value); err != nil {
-		return fmt.Errorf("query execution %s JSON is not redacted: %w", name, err)
+		return nil, fmt.Errorf("query execution %s JSON is not redacted: %w", name, err)
 	}
-	return nil
+	if len(canonical) > MaxQueryExecutionJSONBytes {
+		return nil, fmt.Errorf("query execution %s canonical JSON exceeds %d bytes", name, MaxQueryExecutionJSONBytes)
+	}
+	return canonical, nil
+}
+
+func validateQueryExecutionJSON(name string, data []byte) error {
+	_, err := canonicalQueryExecutionJSON(name, data)
+	return err
 }
 
 var forbiddenAuditFieldNames = map[string]struct{}{
@@ -274,6 +286,16 @@ func (repository QueryExecutionRepository) Record(ctx context.Context, request Q
 	if request.RetentionExpiresAt.IsZero() {
 		request.RetentionExpiresAt = request.CompletedAt.Add(repository.Retention)
 	}
+	canonicalRequest, err := canonicalQueryExecutionJSON("request", request.RequestJSON)
+	if err != nil {
+		return record, err
+	}
+	canonicalResponse, err := canonicalQueryExecutionJSON("response", request.ResponseJSON)
+	if err != nil {
+		return record, err
+	}
+	request.RequestJSON = canonicalRequest
+	request.ResponseJSON = canonicalResponse
 	if err := validateQueryExecutionRequest(request, now); err != nil {
 		return record, err
 	}
@@ -355,6 +377,9 @@ func hydrateQueryExecutionRecord(record *QueryExecutionRecord, scopeID uuid.UUID
 	record.RequestJSON = append([]byte(nil), requestJSON...)
 	record.ResponseJSON = append([]byte(nil), responseJSON...)
 	copy(record.ResponseDigest[:], responseDigest)
+	if sha256.Sum256(record.ResponseJSON) != record.ResponseDigest {
+		return errors.New("PostgreSQL query execution response digest does not match stored response JSON")
+	}
 	if actualText != nil {
 		actual, err := DecodeUSD(*actualText)
 		if err != nil {
