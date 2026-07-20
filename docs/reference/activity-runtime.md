@@ -20,9 +20,11 @@ fails closed when neither seam is configured. The boundary authorizes the
 tenant/project/actor scope, accepts only the provider-status, model-inventory,
 and credit-status query kinds in this slice, and verifies HMAC cursors bound to
 the query kind, scope, and filter. Cursors must be issued with the worker's
-query cursor key. Budget-status and spend-summary handlers, persisted query
-reads/audit-ledger writes, and query-plan/index work remain the follow-up
-composition described by Task 14 of the v1 plan.
+query cursor key. Budget-status and spend-summary handlers, query-specific
+persisted reads, and Activity composition remain the follow-up work described
+by Task 14 of the v1 plan. The repository-only query execution audit boundary
+now validates and persists redacted records; it is not wired into an Activity
+in this slice.
 
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
 control-plane implementation. Production composition currently installs an

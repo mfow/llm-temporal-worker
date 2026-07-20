@@ -71,6 +71,7 @@ is the single status/authority index:
 - [Verified upstream contracts](reference/source-contracts.md)
 - [Generic compaction safeguards](reference/generic-compaction.md)
 - [v1 Activity runtime boundary](reference/activity-runtime.md)
+- [Query execution audit ledger](reference/query-audit-ledger.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
