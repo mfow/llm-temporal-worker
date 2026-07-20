@@ -106,7 +106,7 @@ func TestCreditStatusProjectionQueryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Endpoints) != 1 || page.Endpoints[0].EndpointID != "endpoint-low" || page.NextEndpointKey != "" {
+	if len(page.Endpoints) != 2 || page.Endpoints[0].EndpointID != "endpoint-low" || page.Endpoints[1].EndpointID != "endpoint-sticky" || page.NextEndpointKey != "" {
 		t.Fatalf("continuation page = %#v, next=%q", page.Endpoints, page.NextEndpointKey)
 	}
 	if page.Endpoints[0].EvidenceSource != control.CreditEvidenceOperator || page.Endpoints[0].SafeEvidenceCode != "credit_low" {
