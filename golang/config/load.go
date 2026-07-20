@@ -75,7 +75,7 @@ func applyDefaults(config *Config) {
 		config.Temporal.Worker.HeartbeatKeepaliveInterval = Duration(time.Second)
 	}
 	if config.State.Kind == "" {
-		config.State.Kind = "redis"
+		config.State.Kind = StateKindDurable
 	}
 	if config.State.OperationTerminalRetention == 0 {
 		config.State.OperationTerminalRetention = Duration(45 * 24 * time.Hour)

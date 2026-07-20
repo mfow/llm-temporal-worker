@@ -141,7 +141,22 @@ func (temporal TemporalConfig) validate() error {
 }
 
 func (state StateConfig) validate(environment string) error {
-	if state.Kind != "redis" {
+	switch state.Kind {
+	case StateKindDurable:
+		// Durable mode is the only production composition. Both stores are
+		// required and readiness verifies their immutable contracts before a
+		// worker can poll new work.
+	case StateKindRedis:
+		// Kept for the existing local Redis-only fixture while the durable
+		// repositories are adopted. It is never accepted as production.
+		if environment == "production" {
+			return fmt.Errorf("state.kind redis is not permitted in production; use durable")
+		}
+	case StateKindMemory:
+		if environment == "production" {
+			return fmt.Errorf("state.kind memory is not permitted in production")
+		}
+	default:
 		return fmt.Errorf("state.kind %q is unsupported", state.Kind)
 	}
 	for name, value := range map[string]Duration{
@@ -160,10 +175,12 @@ func (state StateConfig) validate(environment string) error {
 	if state.AmbiguousRetention < state.OperationTerminalRetention {
 		return fmt.Errorf("state.ambiguous_retention must cover operation_terminal_retention")
 	}
-	if err := state.Redis.validate(environment); err != nil {
-		return err
+	if state.Kind != StateKindMemory {
+		if err := state.Redis.validate(environment); err != nil {
+			return err
+		}
 	}
-	if err := state.Postgres.validate(environment, false); err != nil {
+	if err := state.Postgres.validate(environment, state.Kind == StateKindDurable); err != nil {
 		return err
 	}
 	return nil
@@ -179,8 +196,13 @@ func (postgres PostgresConfig) validate(environment string, required bool) error
 	if !postgresPrefixPattern.MatchString(postgres.TablePrefix) || len(postgres.TablePrefix) > 24 {
 		return fmt.Errorf("state.postgres.table_prefix must be empty or match [a-z][a-z0-9_]{0,22}_")
 	}
-	if required && len(postgres.Addresses) == 0 {
-		return fmt.Errorf("state.postgres.addresses must not be empty for durable state")
+	if required {
+		if len(postgres.Addresses) == 0 {
+			return fmt.Errorf("state.postgres.addresses must not be empty for durable state")
+		}
+		if postgres.Username.Kind == "" || postgres.Password.Kind == "" {
+			return fmt.Errorf("state.postgres.username and password are required for durable state")
+		}
 	}
 	for index, address := range postgres.Addresses {
 		if err := validateAddress(address, fmt.Sprintf("state.postgres.addresses[%d]", index)); err != nil {

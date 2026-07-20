@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -31,6 +32,48 @@ func TestRedisDependencyProbeChecksEveryConfiguredPolicyWithoutMutation(t *testi
 	}
 	if client.mutations != 0 {
 		t.Fatalf("readiness probe mutated Redis %d times", client.mutations)
+	}
+}
+
+func TestPostgresDependencyProbeVerifiesHealthAndSchemaWithoutMutation(t *testing.T) {
+	namespace, err := postgresstore.NewNamespace("worker_db", "worker_state", "tenant_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePostgresProbeClient{}
+	probe, err := NewPostgresDependencyProbe(client, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Probe(context.Background())
+	if result != (ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady}) {
+		t.Fatalf("PostgreSQL probe result = %#v", result)
+	}
+	if client.healthCalls != 1 || client.verifyCalls != 1 {
+		t.Fatalf("PostgreSQL probe calls health=%d verify=%d, want one each", client.healthCalls, client.verifyCalls)
+	}
+}
+
+func TestPostgresDependencyProbeFailsClosedOnSchemaMismatch(t *testing.T) {
+	namespace, err := postgresstore.NewNamespace("worker_db", "worker_state", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePostgresProbeClient{verifyErr: errors.New("contract mismatch")}
+	probe, err := NewPostgresDependencyProbe(client, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Probe(context.Background())
+	if result.Dependency != DependencyPostgres || result.Status != ProbeStatusUnavailable || result.Reason != ProbeReasonUnavailable {
+		t.Fatalf("schema mismatch result = %#v", result)
+	}
+}
+
+func TestNormalizeProbeResultAcceptsPostgres(t *testing.T) {
+	result := normalizeProbeResult(ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady})
+	if result.Dependency != DependencyPostgres || result.Status != ProbeStatusReady {
+		t.Fatalf("normalized PostgreSQL result = %#v", result)
 	}
 }
 
@@ -200,6 +243,23 @@ func TestBlobDependencyProbeUsesOnlyBucketCapabilityAndMasksErrors(t *testing.T)
 type fakeBucketProbe struct {
 	calls int
 	err   error
+}
+
+type fakePostgresProbeClient struct {
+	healthErr   error
+	verifyErr   error
+	healthCalls int
+	verifyCalls int
+}
+
+func (client *fakePostgresProbeClient) Health(context.Context, postgresstore.Namespace) error {
+	client.healthCalls++
+	return client.healthErr
+}
+
+func (client *fakePostgresProbeClient) Verify(context.Context, postgresstore.Namespace) error {
+	client.verifyCalls++
+	return client.verifyErr
 }
 
 func (probe *fakeBucketProbe) ProbeBucket(context.Context) error {

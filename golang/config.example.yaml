@@ -26,7 +26,7 @@ temporal:
     heartbeat_keepalive_interval: 1s
 
 state:
-  kind: redis
+  kind: durable
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d

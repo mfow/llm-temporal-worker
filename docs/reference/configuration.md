@@ -386,6 +386,19 @@ and requires both **state.redis** and **state.postgres**: PostgreSQL is the
 system of record, while Redis provides the active budget/throttle materialization
 and cross-worker coordination optimization.
 
+In durable mode the runtime constructs and probes both stores before admitting
+work. The PostgreSQL dependency probe checks the current database, UTC session
+timezone, and the installed schema contract for the configured namespace; the
+Redis probe performs its normal connectivity, clock, policy, function, prefix,
+and manifest checks. A failure or timeout keeps readiness closed, and both
+clients are closed during a failed build, configuration replacement, or worker
+shutdown. Schema installation remains a deployment concern (`postgres.Install`)
+and is never performed by a worker during readiness probing.
+
+`state.kind: redis` is retained only as a development/test fixture for the
+legacy Redis-only composition and is rejected in production. `state.kind:
+memory` is likewise development-only and never provides durable recovery.
+
 Memory mode is an explicitly non-durable single-process development mode:
 
 ~~~yaml
