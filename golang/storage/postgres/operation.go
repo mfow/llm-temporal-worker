@@ -224,7 +224,11 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		return result, err
 	}
 	query := "SELECT operation_id, request_fingerprint_hmac, state, api_version, request_schema_version, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at FROM " + operations + " WHERE scope_id = $1 AND operation_kind = $2 AND operation_key_hmac = $3 FOR UPDATE"
-	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_digest, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest, config_digest, state, lease_expires_at, operation_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$19,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT (scope_id, operation_kind, operation_key_hmac) DO NOTHING"
+	// The operation key is the normal idempotency constraint, but operation_id
+	// is also unique. Concurrent Begins for the same caller ID can race before
+	// either lookup sees the row, so handle conflicts from both constraints and
+	// let the reread below classify the winning request.
+	insert := "INSERT INTO " + operations + " (operation_id, scope_id, operation_kind, api_version, operation_key_hmac, request_fingerprint_hmac, request_digest, request_schema_version, request_manifest_jsonb, request_inline_ciphertext, request_key_id, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest, config_digest, state, lease_expires_at, operation_expires_at, reserved_cost_usd, incurred_cost_usd, cost_status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,'reserved',$16,$17,$18,$19,'pending',clock_timestamp(),clock_timestamp()) ON CONFLICT DO NOTHING"
 	err = WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var existingFingerprint []byte
 		var existing admission.Operation
@@ -257,6 +261,19 @@ func (r OperationRepository) Begin(ctx context.Context, request admission.BeginR
 		if inserted.RowsAffected() == 0 {
 			var storedFingerprint []byte
 			if err := tx.QueryRow(ctx, "SELECT request_fingerprint_hmac FROM "+operations+" WHERE scope_id=$1 AND operation_kind=$2 AND operation_key_hmac=$3 FOR UPDATE", scope.ID, kind, operationKey[:]).Scan(&storedFingerprint); err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return redactPostgresError(fmt.Errorf("re-read PostgreSQL operation: %w", err))
+				}
+				// A deterministic operation UUID is globally unique even when the
+				// caller reuses its ID with a different scope or operation kind.
+				// Classify that primary-key conflict explicitly instead of leaking
+				// the failed idempotency-key reread as a retryable database error.
+				var storedID uuid.UUID
+				if idErr := tx.QueryRow(ctx, "SELECT operation_id FROM "+operations+" WHERE operation_id=$1 FOR UPDATE", opID).Scan(&storedID); idErr == nil {
+					return admission.ErrOperationConflict
+				} else if !errors.Is(idErr, pgx.ErrNoRows) {
+					return redactPostgresError(fmt.Errorf("classify PostgreSQL operation conflict: %w", idErr))
+				}
 				return redactPostgresError(fmt.Errorf("re-read PostgreSQL operation: %w", err))
 			}
 			if !hmac.Equal(storedFingerprint, fingerprint[:]) {
