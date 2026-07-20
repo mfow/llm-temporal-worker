@@ -373,9 +373,17 @@ func hydrateQueryExecutionRecord(record *QueryExecutionRecord, scopeID uuid.UUID
 	if record == nil || record.ID == uuid.Nil || scopeID == uuid.Nil || len(record.OperationKeyHMAC) != 32 || len(record.RequestFingerprintHMAC) != 32 || len(responseDigest) != 32 {
 		return errors.New("PostgreSQL query execution has invalid digest or identity length")
 	}
+	canonicalRequest, err := canonicalQueryExecutionJSON("stored request", requestJSON)
+	if err != nil {
+		return err
+	}
+	canonicalResponse, err := canonicalQueryExecutionJSON("stored response", responseJSON)
+	if err != nil {
+		return err
+	}
 	record.ScopeID = scopeID
-	record.RequestJSON = append([]byte(nil), requestJSON...)
-	record.ResponseJSON = append([]byte(nil), responseJSON...)
+	record.RequestJSON = canonicalRequest
+	record.ResponseJSON = canonicalResponse
 	copy(record.ResponseDigest[:], responseDigest)
 	if sha256.Sum256(record.ResponseJSON) != record.ResponseDigest {
 		return errors.New("PostgreSQL query execution response digest does not match stored response JSON")
