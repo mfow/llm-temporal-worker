@@ -13,6 +13,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  container:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up latest stable Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.16.2
+          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
+
+      - name: Resolve image build metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'version=pr-%s-%s\n' "${{ github.event.pull_request.number }}" "$GITHUB_RUN_NUMBER"
+            printf 'revision=%s\n' "$GITHUB_SHA"
+            printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'source=https://github.com/%s\n' "$GITHUB_REPOSITORY"
+            printf 'go_version=%s\n' "$(go env GOVERSION)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build container image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: ./golang
+          file: ./golang/Dockerfile
+          push: false
+          tags: llm-temporal-worker:pr-${{ github.event.pull_request.number }}-${{ github.run_number }}
+          cache-from: type=gha,scope=llmtw-pr-${{ github.event.pull_request.number }}
+          cache-to: type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number }},ignore-error=true
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            REVISION=${{ steps.metadata.outputs.revision }}
+            BUILD_TIME=${{ steps.metadata.outputs.build_time }}
+            SOURCE=${{ steps.metadata.outputs.source }}
+            GO_VERSION=${{ steps.metadata.outputs.go_version }}
+
   ocaml:
     name: OCaml package
     runs-on: ubuntu-latest
@@ -140,7 +192,7 @@ jobs:
         if: steps.go.outputs.present == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: 1.26.x
+          go-version: stable
           cache: true
           cache-dependency-path: golang/go.sum
 

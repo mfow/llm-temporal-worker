@@ -52,6 +52,32 @@ func TestWorkflowContract(t *testing.T) {
 	}
 }
 
+func TestWorkflowContainerBuildContract(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		scope string
+	}{
+		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number }}"},
+		{name: "master.yml", scope: "llmtw-master"},
+	} {
+		workflow := readWorkflow(t, test.name)
+		job := workflowJob(t, workflow, "container")
+		assertJobReadOnlyPermissions(t, workflow.name, "container", job)
+		assertJobUsesAction(t, workflow, "container", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c")
+		assertJobUsesAction(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf")
+		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-from", "type=gha,scope="+test.scope)
+		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-to", "type=gha,mode=max,scope="+test.scope+",ignore-error=true")
+		if !strings.Contains(workflow.raw, "go-version: stable") {
+			t.Fatalf("%s container build does not use the latest stable Go toolchain", workflow.name)
+		}
+		if !strings.Contains(workflow.raw, "GO_VERSION=${{ steps.metadata.outputs.go_version }}") ||
+			!strings.Contains(workflow.raw, "REVISION=${{ steps.metadata.outputs.revision }}") ||
+			!strings.Contains(workflow.raw, "BUILD_TIME=${{ steps.metadata.outputs.build_time }}") {
+			t.Fatalf("%s container build does not pass commit and build metadata", workflow.name)
+		}
+	}
+}
+
 func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),

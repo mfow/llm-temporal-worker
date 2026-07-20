@@ -13,23 +13,31 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerfile := string(data)
+	if strings.Contains(dockerfile, "@sha256:") {
+		t.Fatal("Dockerfile base images must use mutable tags rather than pinned digests")
+	}
 
 	for _, want := range []string{
 		"ARG VERSION=dev",
 		"ARG REVISION=unknown",
 		"ARG BUILD_TIME=unknown",
 		"ARG SOURCE=https://github.com/mfow/llm-temporal-worker",
-		"ARG GO_VERSION=go1.26.5",
+		"ARG GO_VERSION=unknown",
 		"org.opencontainers.image.version=\"${VERSION}\"",
 		"org.opencontainers.image.revision=\"${REVISION}\"",
 		"org.opencontainers.image.created=\"${BUILD_TIME}\"",
 		"org.opencontainers.image.source=\"${SOURCE}\"",
 		"io.github.mfow.llm-temporal-worker.go.version=\"${GO_VERSION}\"",
+		"ENV LLMTW_BUILD_VERSION=\"${VERSION}\"",
+		"LLMTW_BUILD_GIT_SHA=\"${REVISION}\"",
+		"LLMTW_BUILD_TIMESTAMP=\"${BUILD_TIME}\"",
+		"LLMTW_BUILD_SOURCE=\"${SOURCE}\"",
+		"LLMTW_BUILD_GO_VERSION=\"${GO_VERSION}\"",
 		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION}",
 		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION}",
 		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.BuildTime=${BUILD_TIME}",
 		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Source=${SOURCE}",
-		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${GO_VERSION}",
+		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}",
 	} {
 		if !strings.Contains(dockerfile, want) {
 			t.Errorf("Dockerfile does not stamp %q", want)
@@ -37,15 +45,15 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 	}
 }
 
-func TestImageBuildToolchainVersionPolicyStaysPinned(t *testing.T) {
+func TestImageBuildToolchainVersionPolicyUsesLatestStableTag(t *testing.T) {
 	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, want := range []string{
-		"ARG GO_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
-		"ARG GO_VERSION=go1.26.5",
+		"ARG GO_IMAGE=docker.io/library/golang:latest",
+		"FROM gcr.io/distroless/static-debian12:nonroot",
 	} {
 		if !strings.Contains(string(dockerfileData), want) {
 			t.Errorf("Dockerfile toolchain policy is missing %q", want)
@@ -56,8 +64,8 @@ func TestImageBuildToolchainVersionPolicyStaysPinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(makefileData), "IMAGE_VERIFY_GO_VERSION ?= go1.26.5") {
-		t.Error("Makefile image verification must use the pinned Go 1.26.5 toolchain")
+	if !strings.Contains(string(makefileData), "IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)") {
+		t.Error("Makefile image verification must use the installed stable Go toolchain")
 	}
 }
 

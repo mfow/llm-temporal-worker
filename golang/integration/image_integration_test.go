@@ -29,6 +29,7 @@ type imageInspection struct {
 	Config struct {
 		User   string            `json:"User"`
 		Labels map[string]string `json:"Labels"`
+		Env    []string          `json:"Env"`
 	} `json:"Config"`
 }
 
@@ -59,6 +60,7 @@ func TestHardenedImageRuntimeAndMetadata(t *testing.T) {
 		t.Fatalf("image user = %q, want numeric non-root %q", inspected.Config.User, imageVerifyUser)
 	}
 	assertImageLabels(t, inspected.Config.Labels, expected)
+	assertImageEnvironment(t, inspected.Config.Env, expected)
 	if got := imageVersion(t, image); got != expected {
 		t.Fatalf("binary metadata = %#v, want %#v", got, expected)
 	}
@@ -119,6 +121,28 @@ func assertImageLabels(t *testing.T, labels map[string]string, metadata buildinf
 	} {
 		if got := labels[name]; got != want {
 			t.Errorf("image label %s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func assertImageEnvironment(t *testing.T, environment []string, metadata buildinfo.Metadata) {
+	t.Helper()
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[name] = value
+		}
+	}
+	for name, want := range map[string]string{
+		"LLMTW_BUILD_VERSION":    metadata.Version,
+		"LLMTW_BUILD_GIT_SHA":    metadata.Revision,
+		"LLMTW_BUILD_TIMESTAMP":  metadata.BuildTime,
+		"LLMTW_BUILD_SOURCE":     metadata.Source,
+		"LLMTW_BUILD_GO_VERSION": metadata.GoVersion,
+	} {
+		if got := values[name]; got != want {
+			t.Errorf("image environment %s = %q, want %q", name, got, want)
 		}
 	}
 }
