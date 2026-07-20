@@ -20,6 +20,7 @@ func TestMigrationIndexesRemainExplicit(t *testing.T) {
 		"response_cache_reusable_key_uidx",
 		"operations_provider_operation_uidx",
 		"query_executions_unknown_cost_idx",
+		"provider_inventory_latest_account_idx",
 	} {
 		if !strings.Contains(sql, "CREATE ") || !strings.Contains(sql, index) {
 			t.Errorf("migration missing index %q", index)
