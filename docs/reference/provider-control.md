@@ -88,3 +88,32 @@ append-only event ledger, invokes a provider API, or exposes raw provider
 responses and credentials. Staleness is represented by the persisted
 `stale_after` timestamp so the query layer can report current versus stale
 provenance without changing the stored projection.
+
+### Persisted model inventory pages
+
+`InventoryRepository.ListInventoryModels` is the bounded read side for a
+model-inventory query. It selects the newest immutable snapshot for each
+matching provider/endpoint, then reads normalized model rows in deterministic
+`provider, endpoint, provider_model_id` order. Provider, endpoint, model-prefix,
+and lifecycle filters are applied in PostgreSQL; the page limit is bounded to
+1..1000 and the read never invokes inference or a provider management API.
+
+The first page discovers a `SnapshotHorizon`, the maximum observation time of
+the selected latest snapshots. A continuation must pass that horizon and the
+returned keyset position (`provider`, `endpoint`, snapshot identity, and
+`provider_model_id`). Reads run in one repeatable-read transaction, so a newly
+persisted snapshot cannot replace the snapshot set halfway through a page
+sequence. Latest selection also partitions on the endpoint-account HMAC
+internally; the HMAC is never returned, while the immutable snapshot identity
+keeps account epochs distinct for cursor binding. The returned
+`InventorySnapshotInfo` carries snapshot identity, source, completeness,
+observation/expiry timestamps, and inventory digest; its `ProvenanceAt` helper
+reports current, stale, or explicitly unsupported state.
+
+This storage page intentionally retains the capability digest and bounded safe
+metadata from the normalized `control.Model`. The `llm.ModelInventoryPage`
+wire contract requires a list of capability names, which is not derivable from
+a digest. The authorization, signed public cursor, and an explicit capability
+encoding/mapping decision remain follow-up work in the control/query layer;
+storage does not fabricate capability names or make discovered models
+routable.

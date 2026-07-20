@@ -1368,6 +1368,14 @@ CREATE INDEX __PREFIX__provider_inventory_latest_idx
         (config_digest, endpoint_id, observed_at DESC, inventory_snapshot_id)
     INCLUDE (source, complete, expires_at);
 
+-- The query page partitions latest selection by endpoint-account identity.
+-- Keep that HMAC internal while making the account-epoch ordering indexable.
+CREATE INDEX __PREFIX__provider_inventory_latest_account_idx
+    ON __SCHEMA__.__PREFIX__provider_inventory_snapshots
+        (config_digest, provider, endpoint_id, endpoint_account_hmac,
+         observed_at DESC, inventory_snapshot_id)
+    INCLUDE (source, complete, expires_at, inventory_digest);
+
 CREATE INDEX __PREFIX__provider_inventory_expiry_idx
     ON __SCHEMA__.__PREFIX__provider_inventory_snapshots
         (expires_at, inventory_snapshot_id);
