@@ -26,7 +26,7 @@ const (
 )
 
 // InventoryModelPosition is the unsigned database keyset position.  Public
-// query cursors must authenticate all three fields before passing them to the
+// query cursors must authenticate all four fields before passing them to the
 // repository.
 type InventoryModelPosition struct {
 	Provider        string
