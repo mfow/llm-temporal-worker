@@ -7,8 +7,8 @@ schedules exactly one activity attempt.
 
 The public API mirrors the v1 request and response records: service classes
 are exactly `Economy | Standard | Priority`; request controls include
-portability, instructions, items, tools, output, sampling, reasoning,
-continuation, and extensions; responses retain route, service, usage, cost,
+portability, instructions, items, tools, output, temperature, reasoning
+effort/summary, and extensions; responses retain route, service, usage, cost,
 provider, continuation, and diagnostics. Only deliberately open contract
 leaves (schemas, tool arguments, extension/provider metadata) use
 `Yojson.Safe.t`.
@@ -60,11 +60,12 @@ let definition =
 
 ## Immutable conversations
 
-For a multi-turn workflow, `Llm_temporal.Conversation` keeps the branch head
-as an immutable value.  `fork` is a cheap persistent branch operation: it does
-not schedule an Activity or mutate the parent.  A successful `respond` returns
-the provider response together with a child conversation carrying the returned
-continuation.  Callers therefore choose explicitly which child to retain.
+For a multi-turn workflow, `Llm_temporal.Conversation` keeps the v1 checkpoint
+branch head as an immutable value. `fork` is a cheap persistent branch
+operation: it does not schedule an Activity or mutate the parent. A successful
+`respond` returns the v1 provider response together with a child conversation
+carrying the returned checkpoint. Callers therefore choose explicitly which
+child to retain.
 
 ```ocaml
 let settings =
@@ -86,13 +87,35 @@ match Llm_temporal.Conversation.respond
 ```
 
 `Conversation.to_request` is available when a workflow needs to inspect or
-inject the exact low-level request.  `respond_with` accepts an injectable
+inject the exact low-level v1 request. `respond_with` accepts an injectable
 typed dispatcher for deterministic tests; production code normally uses
-`respond` or `start_respond`.  The conversation wrapper remains focused on the
-Generate activity.  The protocol layer now also exposes exact Compact and
-typed Query v1 records, Yojson codecs, and the `llm.compact.v1`/`llm.query.v1`
-Activity descriptors; these low-level records stay separate from the
-ergonomic conversation facade.
+`respond` or `start_respond`. Settings changes are explicit persistent
+builders, for example:
+
+```ocaml
+let patch =
+  Llm_temporal.Conversation.Settings.Patch.set_service_class
+    Llm_temporal.Economy
+    Llm_temporal.Conversation.Settings.Patch.keep
+in
+let cache =
+  Llm_temporal.Conversation.Cache_policy.accept_up_to
+    ~max_age_seconds:60L ~variant:1l ()
+in
+let branch =
+  Llm_temporal.Conversation.respond ~settings_patch:patch ?cache
+    ~operation_key:(Llm_temporal.Operation_key.of_string "turn-2")
+    ~append:[ Message { actor = Human; content = [ Text "Continue." ] } ] branch
+in
+```
+
+`Conversation.compact` creates an explicit compaction child from a checkpoint;
+the following Generate restores the branch's application tools and output
+configuration. The wrapper does not stream, retain a mutable implicit head, or
+schedule any Activity outside the exact `llm.generate.v1` and
+`llm.compact.v1` descriptors. The protocol layer also exposes exact Compact
+and typed Query v1 records and Yojson codecs; those low-level records remain
+separate from the ergonomic facade.
 
 ## Typed query facade
 
