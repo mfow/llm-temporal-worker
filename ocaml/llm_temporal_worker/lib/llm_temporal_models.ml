@@ -40,6 +40,7 @@ module Sha256_digest = Identifier.Sha256_digest
 module Usd_decimal = Llm_temporal_usd_decimal
 
 type service_class = Economy | Standard | Priority
+type validation_error = string
 type portability = Strict | Best_effort
 type actor = Human | Model
 type instruction_level = Application | Policy
@@ -262,7 +263,7 @@ type settings_patch = {
   tools : function_tool list patch;
   tool_policy : tool_policy patch;
   output : output_spec patch;
-  temperature : float patch;
+  temperature : Usd_decimal.t patch;
   reasoning_effort : reasoning_effort patch;
   reasoning_summary : reasoning_summary patch;
   compaction_policy : Yojson.Safe.t patch;

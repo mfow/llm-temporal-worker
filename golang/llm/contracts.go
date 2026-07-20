@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -126,8 +128,24 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 	if err := addPatch("output", patch.Output, fields, add); err != nil {
 		return nil, err
 	}
-	if err := addPatch("temperature", patch.Temperature, fields, add); err != nil {
-		return nil, err
+	if patch.Temperature.Clear {
+		if err := patch.Temperature.validate(); err != nil {
+			return nil, fmt.Errorf("temperature: %w", err)
+		}
+		if err := add("temperature", nil, true); err != nil {
+			return nil, err
+		}
+	} else if patch.Temperature.Set != nil {
+		if err := patch.Temperature.validate(); err != nil {
+			return nil, fmt.Errorf("temperature: %w", err)
+		}
+		value, err := canonicalTemperature(*patch.Temperature.Set)
+		if err != nil {
+			return nil, fmt.Errorf("temperature: %w", err)
+		}
+		if err := add("temperature", value, false); err != nil {
+			return nil, err
+		}
 	}
 	if err := addPatch("reasoning_effort", patch.ReasoningEffort, fields, add); err != nil {
 		return nil, err
@@ -252,7 +270,7 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 		result.Output, err = decodePatch[OutputSpec](raw, "output")
 	}
 	if raw, ok := fields["temperature"]; ok && err == nil {
-		result.Temperature, err = decodePatch[float64](raw, "temperature")
+		result.Temperature, err = decodeTemperaturePatch(raw)
 	}
 	if raw, ok := fields["reasoning_effort"]; ok && err == nil {
 		result.ReasoningEffort, err = decodePatch[ReasoningEffort](raw, "reasoning_effort")
@@ -271,6 +289,86 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 	}
 	*patch = result
 	return nil
+}
+
+// decodeTemperaturePatch accepts the canonical v1 decimal-string spelling.
+// Numeric input remains accepted for one compatibility window so older Go
+// producers can be upgraded independently; MarshalJSON always emits the
+// canonical string form.
+func decodeTemperaturePatch(raw json.RawMessage) (Patch[float64], error) {
+	fields, err := decodeObject(raw)
+	if err != nil {
+		return Patch[float64]{}, fmt.Errorf("temperature: %w", err)
+	}
+	if err := checkUnknownFields(fields, "set", "clear"); err != nil {
+		return Patch[float64]{}, fmt.Errorf("temperature: %w", err)
+	}
+	set, hasSet := fields["set"]
+	clear, hasClear := fields["clear"]
+	if hasSet == hasClear {
+		return Patch[float64]{}, fmt.Errorf("temperature must contain exactly one of set or clear")
+	}
+	if hasClear {
+		var value bool
+		if err := json.Unmarshal(clear, &value); err != nil || !value {
+			return Patch[float64]{}, fmt.Errorf("temperature.clear must be true")
+		}
+		return Patch[float64]{Clear: true}, nil
+	}
+	var value string
+	if len(set) > 0 && set[0] == '"' {
+		if err := json.Unmarshal(set, &value); err != nil {
+			return Patch[float64]{}, fmt.Errorf("temperature.set must be a decimal string")
+		}
+	} else {
+		// Compatibility with the pre-Task-17 numeric wire representation.
+		var numeric float64
+		if err := json.Unmarshal(set, &numeric); err != nil {
+			return Patch[float64]{}, fmt.Errorf("temperature.set must be a decimal string or number")
+		}
+		value = strconv.FormatFloat(numeric, 'f', -1, 64)
+	}
+	numeric, err := parseTemperatureDecimal(value)
+	if err != nil {
+		return Patch[float64]{}, fmt.Errorf("temperature.set: %w", err)
+	}
+	return Patch[float64]{Set: &numeric}, nil
+}
+
+func parseTemperatureDecimal(value string) (float64, error) {
+	if value == "" || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
+		return 0, fmt.Errorf("must be a non-negative decimal")
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || parts[0] == "" || (len(parts[0]) > 1 && parts[0][0] == '0') || len(parts[0]) > 20 {
+		return 0, fmt.Errorf("must be a canonical decimal within NUMERIC(38,18)")
+	}
+	if len(parts) == 2 && (len(parts[1]) == 0 || len(parts[1]) > 18) {
+		return 0, fmt.Errorf("must have between 1 and 18 fractional digits")
+	}
+	for _, part := range parts {
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return 0, fmt.Errorf("must contain only decimal digits")
+			}
+		}
+	}
+	numeric, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(numeric) || math.IsInf(numeric, 0) || numeric < 0 {
+		return 0, fmt.Errorf("must be finite and non-negative")
+	}
+	return numeric, nil
+}
+
+func canonicalTemperature(value float64) (string, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return "", fmt.Errorf("must be finite and non-negative")
+	}
+	canonical := strconv.FormatFloat(value, 'f', -1, 64)
+	if _, err := parseTemperatureDecimal(canonical); err != nil {
+		return "", err
+	}
+	return canonical, nil
 }
 
 type GenerateRequestV1 struct {

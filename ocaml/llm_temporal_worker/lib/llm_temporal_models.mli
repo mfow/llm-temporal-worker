@@ -6,6 +6,8 @@ module type Opaque_identifier = sig
   val to_string : t -> string
 end
 
+type validation_error = string
+
 module Operation_key : Opaque_identifier
 module Operation_id : Opaque_identifier
 module Model_selector : Opaque_identifier
@@ -112,12 +114,28 @@ module Budget_policy_key : Opaque_identifier
 module Budget_generation_id : Opaque_identifier
 module Provider_model_id : Opaque_identifier
 module Window_key : Opaque_identifier
-module Checkpoint : Opaque_identifier
-module Query_cursor : Opaque_identifier
-module Budget_stream_id : Opaque_identifier
+module Checkpoint : sig
+  type t = private string
+  val of_string : string -> (t, validation_error) result
+  val of_string_exn : string -> t
+  val to_string : t -> string
+end
+module Query_cursor : sig
+  type t = private string
+  val of_string : string -> (t, validation_error) result
+  val of_string_exn : string -> t
+  val to_string : t -> string
+end
+module Budget_stream_id : sig
+  type t = private string
+  val of_string : string -> (t, validation_error) result
+  val of_string_exn : string -> t
+  val to_string : t -> string
+end
 module Sha256_digest : sig
   type t = private string
-  val of_hex : string -> t
+  val of_hex : string -> (t, validation_error) result
+  val of_hex_exn : string -> t
   val to_hex : t -> string
 end
 
@@ -143,7 +161,7 @@ type settings_patch = {
   tools : function_tool list patch;
   tool_policy : tool_policy patch;
   output : output_spec patch;
-  temperature : float patch;
+  temperature : Usd_decimal.t patch;
   reasoning_effort : reasoning_effort patch;
   reasoning_summary : reasoning_summary patch;
   compaction_policy : Yojson.Safe.t patch;

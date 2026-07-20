@@ -43,24 +43,28 @@ module Window_key : S
 
 module Checkpoint : sig
   type t = private string
-  val of_string : string -> t
+  val of_string : string -> (t, string) result
+  val of_string_exn : string -> t
   val to_string : t -> string
 end
 
 module Query_cursor : sig
   type t = private string
-  val of_string : string -> t
+  val of_string : string -> (t, string) result
+  val of_string_exn : string -> t
   val to_string : t -> string
 end
 
 module Budget_stream_id : sig
   type t = private string
-  val of_string : string -> t
+  val of_string : string -> (t, string) result
+  val of_string_exn : string -> t
   val to_string : t -> string
 end
 
 module Sha256_digest : sig
   type t = private string
-  val of_hex : string -> t
+  val of_hex : string -> (t, string) result
+  val of_hex_exn : string -> t
   val to_hex : t -> string
 end

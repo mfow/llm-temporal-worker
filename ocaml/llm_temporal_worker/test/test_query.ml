@@ -2,6 +2,9 @@ open Llm_temporal
 
 let failf format = Printf.ksprintf failwith format
 let ok = function Ok value -> value | Error error -> failf "%s" (Temporal.Error.message error)
+let cursor value = match Query_cursor.of_string value with Ok value -> value | Error message -> failwith message
+let stream_id value = match Budget_stream_id.of_string value with Ok value -> value | Error message -> failwith message
+let digest value = match Sha256_digest.of_hex value with Ok value -> value | Error message -> failwith message
 let time value =
   match Ptime.of_rfc3339 value with
   | Ok (value, _, _) -> value
@@ -47,8 +50,8 @@ let response_for = function
       response (Budget_status_result {
         active_at = time "2026-01-01T00:00:00Z";
         generation_id = Budget_generation_id.of_string "generation-1";
-        manifest_digest = Sha256_digest.of_hex (String.make 64 'a');
-        stream_high_water_mark = Budget_stream_id.of_string "1-0";
+        manifest_digest = digest (String.make 64 'a');
+        stream_high_water_mark = stream_id "1-0";
         windows = [] })
   | Spend_summary_request filter ->
       response (Spend_summary_result {
@@ -62,6 +65,9 @@ let dispatch ?task_queue:_ activity envelope =
 let run query = ok (Query.execute_with ~dispatch ~operation_key ~context query)
 
 let () =
+  (match Budget_stream_id.of_string "not-a-stream-id" with
+   | Error _ -> ()
+   | Ok _ -> failwith "invalid budget stream id was accepted");
   let provider : provider_status_page Query.t = Query.Provider_status (provider_filter ()) in
   let model : model_inventory_page Query.t = Query.Model_inventory (model_filter ()) in
   let credit : credit_status_page Query.t = Query.Credit_status (credit_filter ()) in
@@ -73,7 +79,7 @@ let () =
   ignore (run budget);
   ignore (run spend);
 
-  let cursor = Query_cursor.of_string "provider:page-2" in
+  let cursor = cursor "provider:page-2" in
   let paged = Query.Provider_status (provider_filter ~cursor ()) in
   let envelope = Query.to_envelope ~operation_key ~context paged in
   (match envelope.query with
