@@ -264,6 +264,10 @@ func (repository InventoryRepository) ListInventoryModels(ctx context.Context, o
 	if err := rows.Err(); err != nil {
 		return InventoryModelPage{}, redactPostgresError(fmt.Errorf("read inventory models: %w", err))
 	}
+	// pgx keeps the connection busy while a result set is open, even after
+	// Next has returned false (or after we stopped at limit+1).  Close the
+	// result before committing the read-only transaction.
+	rows.Close()
 	if err := tx.Commit(ctx); err != nil {
 		return InventoryModelPage{}, redactPostgresError(fmt.Errorf("commit inventory model read: %w", err))
 	}

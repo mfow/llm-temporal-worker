@@ -50,7 +50,7 @@ func TestInventoryModelPageReadsLatestSnapshotWithPinnedKeyset(t *testing.T) {
 	if len(first.Models) != 2 || first.Models[0].Model.ProviderModelID != "model-a" || first.Models[1].Model.ProviderModelID != "model-b" {
 		t.Fatalf("first page models = %#v", first.Models)
 	}
-	if first.Models[0].Snapshot.ID == first.Models[1].Snapshot.ID || first.Models[0].Snapshot.ObservedAt != latestA.ObservedAt {
+	if first.Models[0].Snapshot.ID != first.Models[1].Snapshot.ID || first.Models[0].Snapshot.ObservedAt != latestA.ObservedAt {
 		t.Fatalf("first page did not use one latest endpoint snapshot: %#v", first.Models)
 	}
 	if first.Next == nil || first.Next.ProviderModelID != "model-b" || first.Next.EndpointID != "endpoint-a" {
