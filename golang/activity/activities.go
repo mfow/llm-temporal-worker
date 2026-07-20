@@ -27,6 +27,11 @@ type Activities struct {
 	// closed v1 Activity records. Runtime composition supplies this explicitly;
 	// a nil value is rejected before dispatch.
 	V1Runtime V1Runtime
+	// QueryService is an optional control-plane seam for llm.query.v1. It is
+	// independent from Generate/Compact composition so query callers cannot
+	// accidentally dispatch inference work while the durable query handlers
+	// are being assembled.
+	QueryService QueryService
 
 	// heartbeatTickerFactory is a test seam. Production leaves it nil and uses
 	// the bounded real-time ticker in startHeartbeatKeepalive.

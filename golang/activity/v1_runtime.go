@@ -28,6 +28,13 @@ type V1Runtime interface {
 	QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
 }
 
+// QueryService is the control-plane implementation used by llm.query.v1.
+// Keeping this interface separate from V1Runtime allows query reads to be
+// deployed before the Generate/Compact durable engine is composed.
+type QueryService interface {
+	Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
+}
+
 // UnconfiguredV1Runtime makes an incomplete production composition fail
 // closed before any provider or storage work. It is intentionally useful as a
 // concrete value: callers can distinguish a missing durable implementation
@@ -114,13 +121,17 @@ func (activities *Activities) QueryV1(ctx context.Context, request llm.QueryRequ
 	if err := validateV1Request(ctx, MarshalQueryV1, request, activities); err != nil {
 		return nil, err
 	}
-	if activities == nil || activities.V1Runtime == nil {
+	if activities == nil || (activities.V1Runtime == nil && activities.QueryService == nil) {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
 	var response llm.QueryResponseV1
 	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
 		var err error
-		response, err = activities.V1Runtime.QueryV1(dispatchContext, request)
+		if activities.QueryService != nil {
+			response, err = activities.QueryService.Execute(dispatchContext, request)
+		} else {
+			response, err = activities.V1Runtime.QueryV1(dispatchContext, request)
+		}
 		if err != nil {
 			return err
 		}

@@ -14,6 +14,16 @@ Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.
 
+`Activities.QueryService` is an independent seam for `llm.query.v1`. It may be
+provided before the Generate/Compact runtime is composed; the Activity still
+fails closed when neither seam is configured. The boundary authorizes the
+tenant/project/actor scope, accepts only the provider-status, model-inventory,
+and credit-status query kinds in this slice, and verifies HMAC cursors bound to
+the query kind, scope, and filter. Cursors must be issued with the worker's
+query cursor key. Budget-status and spend-summary handlers, persisted query
+reads/audit-ledger writes, and query-plan/index work remain the follow-up
+composition described by Task 14 of the v1 plan.
+
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
 control-plane implementation. Production composition currently installs an
 explicit fail-closed runtime until that implementation is wired. A missing or
