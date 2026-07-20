@@ -64,11 +64,11 @@ module graph, including indirect dependencies. A baseline exception does not
 narrow that scanner input; it only limits which already-reported trace may be
 accepted after the scan.
 
-The target pins `govulncheck` at `v1.6.0` and runs it with `go1.26.5`, the
-reviewed toolchain patch. Its JSON parser retains unique `GO-*` finding
-identifiers and a fail-closed internal trace scope without retaining raw trace
-data. A `vulnerability_exceptions` entry is valid only when it gives an
-identified finding, owner, future RFC 3339 expiry, HTTPS remediation reference,
+The target pins `govulncheck` at `v1.6.0` and runs it with the current
+`go env GOVERSION` toolchain selected by CI. Its JSON parser retains unique
+`GO-*` finding identifiers and a fail-closed internal trace scope without
+retaining raw trace data. A `vulnerability_exceptions` entry is valid only when
+it gives an identified finding, owner, future RFC 3339 expiry, HTTPS remediation reference,
 and a `scope` of either `module_only` or `reachable`. A `module_only` exception
 accepts only the single module/version trace frame; a later reachable package or
 function trace fails until the baseline is explicitly reviewed as `reachable`.

@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
 GO ?= go
-SECURITY_GO_TOOLCHAIN ?= go1.26.5
+SECURITY_GO_TOOLCHAIN ?= $(shell $(GO) env GOVERSION)
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
@@ -14,7 +14,7 @@ POSTGRES_INTEGRATION_CONTAINER_PREFIX ?= llmtw-postgres-integration
 IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
 IMAGE_VERIFY_VERSION ?= image-verify
 IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
-IMAGE_VERIFY_GO_VERSION ?= go1.26.5
+IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
 .PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify

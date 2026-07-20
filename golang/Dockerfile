@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1.7
 
-# The digest is the multi-platform index for the Go 1.26.5 Bookworm image.
-# Renovate/security review should update the tag and digest together.
-ARG GO_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
+# The latest stable Go image is intentionally tag-based so each build pulls
+# the current patch release instead of reusing a pinned digest.
+ARG GO_IMAGE=docker.io/library/golang:latest
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 ARG SOURCE=https://github.com/mfow/llm-temporal-worker
-ARG GO_VERSION=go1.26.5
+ARG GO_VERSION=unknown
 
 FROM ${GO_IMAGE} AS build
 
@@ -31,7 +31,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    test "$(go env GOVERSION)" = "${GO_VERSION}" && \
+    actual_go_version="$(go env GOVERSION)" && \
+    if [ "${GO_VERSION}" = "unknown" ]; then \
+      go_version="${actual_go_version}"; \
+    else \
+      test "${actual_go_version}" = "${GO_VERSION}"; \
+      go_version="${GO_VERSION}"; \
+    fi && \
     CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -buildvcs=false \
       -ldflags="-s -w \
@@ -39,13 +45,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION} \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.BuildTime=${BUILD_TIME} \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Source=${SOURCE} \
-        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${GO_VERSION}" \
+        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}" \
       -o /out/llm-temporal-worker ./cmd/llm-temporal-worker
 
 # Distroless static includes CA roots, time-zone data, and uid 65532, but no
-# shell or package manager. The digest is the immutable multi-platform image
-# index for the nonroot variant.
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:8dd8d3ca2cf283383304fd45a5c9c74d5f2cd9da8d3b077d720e264880077c65
+# shell or package manager. Keep the tag mutable so builds pull the current
+# image for this stable Debian 12 variant.
+FROM gcr.io/distroless/static-debian12:nonroot
 
 ARG VERSION
 ARG REVISION
@@ -62,6 +68,12 @@ LABEL org.opencontainers.image.title="llm-temporal-worker" \
       org.opencontainers.image.source="${SOURCE}" \
       io.github.mfow.llm-temporal-worker.go.version="${GO_VERSION}"
 
+ENV LLMTW_BUILD_VERSION="${VERSION}" \
+    LLMTW_BUILD_GIT_SHA="${REVISION}" \
+    LLMTW_BUILD_TIMESTAMP="${BUILD_TIME}" \
+    LLMTW_BUILD_SOURCE="${SOURCE}" \
+    LLMTW_BUILD_GO_VERSION="${GO_VERSION}"
+
 COPY --from=build /out/llm-temporal-worker /usr/local/bin/llm-temporal-worker
 
 USER 65532:65532
@@ -69,5 +81,6 @@ WORKDIR /home/nonroot
 
 # Health is provided by the orchestrator. Distroless intentionally has no
 # shell/curl healthcheck and the root filesystem is expected to be read-only.
-EXPOSE 8080 9090
+# The worker does not publish a fixed port; callers choose the health-server
+# address when they need the optional local probe.
 ENTRYPOINT ["/usr/local/bin/llm-temporal-worker"]
