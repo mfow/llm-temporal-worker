@@ -176,6 +176,20 @@ Adapters must use the Activity context in official SDK calls. A detached
 background context is allowed only for the short, bounded ambiguity/finalization
 record and must retain tracing identifiers without prompt data.
 
+## Resumable provider operations
+
+Adapters that implement the optional `ResumableAdapter` port submit once and
+return a provider-owned operation identifier. The worker envelope-encrypts that
+identifier in the durable operation ledger before its first poll. If the
+Activity is retried while the operation is `provider_pending`, the worker loads
+the encrypted identifier and calls `Poll` on the pinned endpoint; it never
+calls `Submit` or `Invoke` again. Polls honor provider delay guidance subject
+to a bounded worker limit. A limit, cancellation, or transient poll failure
+leaves the operation pending for the next Activity attempt. A provider
+not-found or other terminal poll outcome is classified through the existing
+ambiguous/definite-failure ledger transitions. Adapters without this optional
+port retain the existing one-shot `Invoke` path.
+
 ## Error mapping
 
 The Activity converts common errors to Temporal Application Errors:

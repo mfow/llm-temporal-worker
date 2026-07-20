@@ -330,6 +330,11 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 		return nil, false, engineError(provider.CodeAmbiguousDispatch, provider.PhaseAdmission, provider.DispatchAmbiguous, provider.RetryNever, "operation may have reached the provider", nil)
 	case admission.StateAmbiguous:
 		return nil, false, engineError(provider.CodeAmbiguousDispatch, provider.PhaseAdmission, provider.DispatchAmbiguous, provider.RetryNever, "operation may have reached the provider", nil)
+	case admission.StateProviderPending:
+		// The provider id is authoritative durable state. dispatchPlan will
+		// load it through the optional ProviderPendingStore and poll only; it
+		// must never submit a second operation on an Activity retry.
+		return nil, true, nil
 	case admission.StateReserved:
 		if !operation.LeaseUntil.IsZero() && now.Before(operation.LeaseUntil) {
 			return nil, false, nil

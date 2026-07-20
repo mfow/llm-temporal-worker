@@ -19,11 +19,12 @@ type budgetKey struct {
 }
 
 type AdmissionStore struct {
-	mu         sync.Mutex
-	clock      func() time.Time
-	operations map[string]admission.Operation
-	byScope    map[string]string
-	buckets    map[budgetKey]map[int64]pricing.MicroUSD
+	mu          sync.Mutex
+	clock       func() time.Time
+	operations  map[string]admission.Operation
+	providerIDs map[string]string
+	byScope     map[string]string
+	buckets     map[budgetKey]map[int64]pricing.MicroUSD
 }
 
 type AdmissionOptions struct{ Clock func() time.Time }
@@ -32,7 +33,58 @@ func NewAdmissionStore(options AdmissionOptions) *AdmissionStore {
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
-	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD)}
+	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD)}
+}
+
+// MarkProviderPending mirrors the durable repository transition used by
+// resumable adapters. The memory store exists primarily for engine tests, but
+// implementing the optional seam keeps those tests faithful to production.
+func (store *AdmissionStore) MarkProviderPending(ctx context.Context, request admission.ProviderPendingRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if request.ProviderOperationID == "" || request.EndpointID == "" {
+		return fmt.Errorf("provider operation id and endpoint are required")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	operation, err := store.loadToken(request.OperationID, request.DispatchToken)
+	if err != nil {
+		return err
+	}
+	if operation.State == admission.StateProviderPending {
+		if store.providerIDs[operation.ID] == request.ProviderOperationID {
+			return nil
+		}
+		return admission.ErrOperationConflict
+	}
+	if operation.State != admission.StateDispatching {
+		return admission.ErrInvalidTransition
+	}
+	operation.State = admission.StateProviderPending
+	operation.Attempt.EndpointID = request.EndpointID
+	operation.Attempt.Provider = request.Provider
+	operation.Attempt.Dispatch = admission.Accepted
+	operation.UpdatedAt = store.clock()
+	store.operations[operation.ID] = operation
+	store.providerIDs[operation.ID] = request.ProviderOperationID
+	return nil
+}
+
+func (store *AdmissionStore) ProviderOperation(ctx context.Context, id string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, ok := store.operations[id]; !ok {
+		return "", admission.ErrOperationNotFound
+	}
+	providerID := store.providerIDs[id]
+	if providerID == "" {
+		return "", fmt.Errorf("provider operation envelope is incomplete")
+	}
+	return providerID, nil
 }
 
 func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginRequest) (admission.BeginResult, error) {
@@ -112,7 +164,7 @@ func (store *AdmissionStore) Complete(ctx context.Context, request admission.Com
 	if operation.State == admission.StateCompleted {
 		return nil
 	}
-	if operation.State != admission.StateDispatching {
+	if operation.State != admission.StateDispatching && operation.State != admission.StateProviderPending {
 		return admission.ErrInvalidTransition
 	}
 	if request.Actual < 0 || !request.Actual.Valid() {

@@ -1,7 +1,7 @@
 # ADR 0008: Resumable Provider Operations and Typed Queries
 
-- Status: Accepted design; adapter contract foundation implemented; durable
-  Activity integration pending
+- Status: Accepted design; adapter contract and durable Activity integration
+  implemented for adapters that opt into the resumable port
 - Date: 2026-07-18
 
 ## Context
@@ -79,11 +79,13 @@ ID, honors provider delay guidance subject to a worker cap, and reports retryabl
 poll limits without submitting again. It emits heartbeat progress containing
 only phase/count fields; provider IDs remain durable state.
 
-This foundation does not claim the full Phase A delivery: the production
-Activity path still needs to connect the contract to the durable operation
-repository, persist the encrypted ID before the first poll, and add provider
-idempotency-key recovery where documented. Until that integration lands,
-existing one-shot adapters remain the only runtime dispatch path.
+The production Activity path connects the optional contract to durable
+operation repositories. A `Submit` result in `provider_pending` is persisted
+before polling, and a retry loads the encrypted identifier and calls `Poll`
+only. Poll limits and cancellation leave the durable operation pending for the
+next Activity attempt. Providers that do not implement the optional port remain
+one-shot adapters. The acceptance-before-persistence gap is still ambiguous;
+automatic resubmission is never inferred.
 
 ## Rejected alternatives
 
