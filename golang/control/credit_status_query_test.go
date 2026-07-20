@@ -58,3 +58,19 @@ func TestCreditStatusValidationRejectsUnsafeAndUnorderedPages(t *testing.T) {
 		t.Fatal("same endpoint id from different providers should have distinct ordering keys")
 	}
 }
+
+func TestCreditStatusValidationRequiresOrderedProvenance(t *testing.T) {
+	observed := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	status := CreditStatus{
+		Provider: "provider", EndpointID: "endpoint", Credit: CreditOK, Billing: BillingOK,
+		ObservedAt: observed, StaleAfter: observed,
+		EvidenceSource: CreditEvidenceUnknown,
+	}
+	if err := status.Validate(); err == nil || !strings.Contains(err.Error(), "stale timestamp") {
+		t.Fatalf("equal stale/provenance timestamps accepted: %v", err)
+	}
+	status.StaleAfter = observed.Add(time.Minute)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("ordered provenance rejected: %v", err)
+	}
+}

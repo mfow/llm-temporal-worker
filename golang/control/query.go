@@ -148,6 +148,18 @@ type cursorEnvelope struct {
 	ExpiresAt int64         `json:"expires_at"`
 }
 
+// CursorClaims are the authenticated, scope- and filter-bound values carried
+// by a query cursor. Position remains opaque to this package; query adapters
+// may encode a bounded storage key and snapshot horizon in it before signing.
+type CursorClaims struct {
+	Kind      llm.QueryKind
+	Scope     string
+	QueryHash string
+	Position  string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+}
+
 // SignCursor creates a scope- and filter-bound cursor for a handler's opaque
 // position. The position is never interpreted by this package.
 func (service *QueryService) SignCursor(request llm.QueryRequestV1, position string, issuedAt time.Time) (string, error) {
@@ -174,36 +186,46 @@ func (service *QueryService) SignCursor(request llm.QueryRequestV1, position str
 }
 
 func (service *QueryService) ValidateCursor(request llm.QueryRequestV1, token string, now time.Time) error {
+	_, err := service.DecodeCursor(request, token, now)
+	return err
+}
+
+// DecodeCursor authenticates a cursor and returns its claims for a typed
+// query adapter. Callers must still validate and decode Position according to
+// their query-specific contract; no untrusted position is returned before
+// the HMAC and scope/filter checks succeed.
+func (service *QueryService) DecodeCursor(request llm.QueryRequestV1, token string, now time.Time) (CursorClaims, error) {
+	var claims CursorClaims
 	if service == nil || len(service.CursorKey) == 0 || len(token) > 2048 {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
 	decode := base64.RawURLEncoding
 	payload, err := decode.DecodeString(parts[0])
 	if err != nil {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
 	provided, err := decode.DecodeString(parts[1])
 	if err != nil {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
 	signature := hmac.New(sha256.New, service.CursorKey)
 	_, _ = signature.Write(payload)
 	if !hmac.Equal(provided, signature.Sum(nil)) {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
 	var envelope cursorEnvelope
 	if json.Unmarshal(payload, &envelope) != nil || envelope.Kind != request.Kind || envelope.Scope != scopeString(request.Context) || envelope.QueryHash != queryHash(request.Query) || envelope.Position == "" {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
 	now = now.UTC()
 	if now.IsZero() || envelope.IssuedAt > now.Add(2*time.Minute).Unix() || envelope.ExpiresAt <= now.Unix() || envelope.ExpiresAt <= envelope.IssuedAt {
-		return ErrQueryCursor
+		return claims, ErrQueryCursor
 	}
-	return nil
+	return CursorClaims{Kind: envelope.Kind, Scope: envelope.Scope, QueryHash: envelope.QueryHash, Position: envelope.Position, IssuedAt: time.Unix(envelope.IssuedAt, 0).UTC(), ExpiresAt: time.Unix(envelope.ExpiresAt, 0).UTC()}, nil
 }
 
 func requestCursor(raw json.RawMessage) (string, bool, error) {

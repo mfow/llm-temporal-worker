@@ -31,6 +31,8 @@ type CreditStatus struct {
 	EndpointID       string
 	Credit           CreditState
 	Billing          BillingState
+	ObservedAt       time.Time
+	StaleAfter       time.Time
 	ConfirmedAt      time.Time
 	EvidenceSource   CreditEvidenceSource
 	SafeEvidenceCode string
@@ -94,6 +96,15 @@ func (status CreditStatus) Validate() error {
 		status.ConfirmedAt = time.Time{}
 	} else if status.ConfirmedAt.Location() == nil {
 		return errors.New("credit status confirmed timestamp has no location")
+	}
+	if !status.ObservedAt.IsZero() && status.ObservedAt.Location() == nil {
+		return errors.New("credit status observed timestamp has no location")
+	}
+	if !status.StaleAfter.IsZero() && status.StaleAfter.Location() == nil {
+		return errors.New("credit status stale timestamp has no location")
+	}
+	if !status.ObservedAt.IsZero() && !status.StaleAfter.IsZero() && !status.StaleAfter.After(status.ObservedAt) {
+		return errors.New("credit status stale timestamp must follow observed timestamp")
 	}
 	if status.SafeEvidenceCode != "" {
 		if err := validateSafeCode("safe_evidence_code", status.SafeEvidenceCode); err != nil {

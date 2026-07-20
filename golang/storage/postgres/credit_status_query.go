@@ -29,6 +29,7 @@ type CreditStatusListOptions struct {
 	Provider         string
 	EndpointID       string
 	IncludeOK        bool
+	SnapshotHorizon  time.Time
 	AfterEndpointKey string
 	Limit            int
 }
@@ -55,6 +56,9 @@ func (options *CreditStatusListOptions) normalize() error {
 		if _, _, err := splitCreditStatusKey(options.AfterEndpointKey); err != nil {
 			return err
 		}
+	}
+	if !options.SnapshotHorizon.IsZero() {
+		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
 	}
 	if options.Limit == 0 {
 		options.Limit = DefaultCreditStatusPageSize
@@ -92,21 +96,12 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 	if err != nil {
 		return page, err
 	}
-	query := "WITH current_endpoint AS (" +
-		"SELECT DISTINCT ON (r.provider, r.endpoint_id) r.provider, r.endpoint_id, r.credit_state, r.billing_state, r.credit_confirmed_at, r.observed_at, r.route_id, incident.source, incident.safe_error_code, incident.provider_code " +
-		"FROM " + routes + " r LEFT JOIN LATERAL (" +
-		"SELECT e.source, e.safe_error_code, e.provider_code FROM " + events + " e " +
-		"WHERE e.config_digest = r.config_digest AND e.route_id = r.route_id " +
-		"AND ((r.credit_state IN ('low','exhausted') AND e.credit_state IN ('low','exhausted')) " +
-		"OR (r.billing_state = 'issue' AND e.billing_state = 'issue')) " +
-		"ORDER BY e.observed_at DESC, e.event_id DESC LIMIT 1" +
-		") incident ON TRUE " +
-		"WHERE r.config_digest = $1 AND ($2 = '' OR r.provider = $2) AND ($3 = '' OR r.endpoint_id = $3) " +
-		"ORDER BY r.provider, r.endpoint_id, r.observed_at DESC, r.route_id DESC" +
-		") SELECT provider, endpoint_id, credit_state, billing_state, credit_confirmed_at, source, safe_error_code, provider_code " +
-		"FROM current_endpoint WHERE ($4 OR credit_state <> 'ok' OR billing_state <> 'ok') AND ($5 = '' OR (provider > $5 OR (provider = $5 AND endpoint_id > $6))) " +
-		"ORDER BY provider, endpoint_id LIMIT $7"
-	rows, err := repository.Pool.Query(ctx, query, options.ConfigDigest[:], options.Provider, options.EndpointID, options.IncludeOK, afterProvider, afterEndpoint, options.Limit+1)
+	query := creditStatusListQuery(routes, events)
+	var horizon any
+	if !options.SnapshotHorizon.IsZero() {
+		horizon = options.SnapshotHorizon
+	}
+	rows, err := repository.Pool.Query(ctx, query, options.ConfigDigest[:], options.Provider, options.EndpointID, horizon, options.IncludeOK, afterProvider, afterEndpoint, options.Limit+1)
 	if err != nil {
 		return page, redactPostgresError(fmt.Errorf("list credit statuses: %w", err))
 	}
@@ -115,8 +110,9 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 		var provider, endpoint, credit, billing string
 		var source *string
 		var confirmedAt *time.Time
+		var observedAt, staleAfter *time.Time
 		var safeErrorCode, providerCode *string
-		if err := rows.Scan(&provider, &endpoint, &credit, &billing, &confirmedAt, &source, &safeErrorCode, &providerCode); err != nil {
+		if err := rows.Scan(&provider, &endpoint, &credit, &billing, &confirmedAt, &observedAt, &staleAfter, &source, &safeErrorCode, &providerCode); err != nil {
 			return control.CreditStatusPage{}, redactPostgresError(fmt.Errorf("scan credit status: %w", err))
 		}
 		var confirmed time.Time
@@ -131,6 +127,15 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 		if err != nil {
 			return control.CreditStatusPage{}, fmt.Errorf("PostgreSQL credit status is invalid: %w", err)
 		}
+		if observedAt != nil {
+			status.ObservedAt = observedAt.UTC()
+		}
+		if staleAfter != nil {
+			status.StaleAfter = staleAfter.UTC()
+		}
+		if err := status.Validate(); err != nil {
+			return control.CreditStatusPage{}, fmt.Errorf("PostgreSQL credit status provenance is invalid: %w", err)
+		}
 		page.Endpoints = append(page.Endpoints, status)
 	}
 	if err := rows.Err(); err != nil {
@@ -144,6 +149,24 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 		return control.CreditStatusPage{}, err
 	}
 	return page, nil
+}
+
+func creditStatusListQuery(routes, events string) string {
+	return "WITH current_endpoint AS (" +
+		"SELECT DISTINCT ON (r.provider, r.endpoint_id) r.provider, r.endpoint_id, r.credit_state, r.billing_state, r.credit_confirmed_at, r.observed_at, r.stale_after, r.route_id, incident.source, incident.safe_error_code, incident.provider_code " +
+		"FROM " + routes + " r LEFT JOIN LATERAL (" +
+		"SELECT e.source, e.safe_error_code, e.provider_code FROM " + events + " e " +
+		"WHERE e.config_digest = r.config_digest AND e.config_epoch = r.config_epoch AND e.route_id = r.route_id " +
+		"AND ($4::timestamptz IS NULL OR e.observed_at <= $4) " +
+		"AND ((r.credit_state IN ('low','exhausted') AND e.credit_state IN ('low','exhausted')) " +
+		"OR (r.billing_state = 'issue' AND e.billing_state = 'issue')) " +
+		"ORDER BY e.observed_at DESC, e.event_id DESC LIMIT 1" +
+		") incident ON TRUE " +
+		"WHERE r.config_digest = $1 AND ($2 = '' OR r.provider = $2) AND ($3 = '' OR r.endpoint_id = $3) AND ($4::timestamptz IS NULL OR r.observed_at <= $4) " +
+		"ORDER BY r.provider, r.endpoint_id, r.observed_at DESC, r.route_id DESC" +
+		") SELECT provider, endpoint_id, credit_state, billing_state, credit_confirmed_at, observed_at, stale_after, source, safe_error_code, provider_code " +
+		"FROM current_endpoint WHERE ($5 OR credit_state <> 'ok' OR billing_state <> 'ok') AND ($6 = '' OR (provider > $6 OR (provider = $6 AND endpoint_id > $7))) " +
+		"ORDER BY provider, endpoint_id LIMIT $8"
 }
 
 func splitCreditStatusKey(key string) (provider, endpoint string, err error) {
