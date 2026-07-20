@@ -23,6 +23,10 @@ type Activities struct {
 	Metrics                    *observability.Metrics
 	Tracer                     *observability.Tracer
 	PayloadLimits              PayloadLimits
+	// V1Runtime owns durable checkpoint/cache/provider/control state for the
+	// closed v1 Activity records. Runtime composition supplies this explicitly;
+	// a nil value is rejected before dispatch.
+	V1Runtime V1Runtime
 
 	// heartbeatTickerFactory is a test seam. Production leaves it nil and uses
 	// the bounded real-time ticker in startHeartbeatKeepalive.
@@ -279,5 +283,9 @@ func sameProgress(left, right engine.Progress) bool {
 // Register installs the exact versioned Activity name rather than relying on
 // a Go method name that could change during a refactor.
 func (activities *Activities) Register(registry worker.ActivityRegistry) {
+	if activities != nil && activities.V1Runtime != nil {
+		activities.RegisterV1(registry)
+		return
+	}
 	registry.RegisterActivityWithOptions(activities.generateTemporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 }
