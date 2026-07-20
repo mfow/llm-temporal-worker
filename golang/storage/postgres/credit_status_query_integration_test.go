@@ -26,9 +26,16 @@ func TestCreditStatusProjectionQueryIntegration(t *testing.T) {
 		{
 			ConfigDigest: configDigest, RouteID: "route-credit", EndpointID: "endpoint-credit",
 			EndpointAccountHMAC: sha256.Sum256([]byte("credit-account")), Provider: "provider-credit", EndpointFamily: "chat",
-			ObservedAt: now, Source: control.SourceInference, Availability: control.AvailabilityUnavailable,
+			ObservedAt: now, Source: control.SourceManagementAPI, Availability: control.AvailabilityUnavailable,
 			Credit: control.CreditExhausted, Billing: control.BillingIssue, ProviderCode: "insufficient_quota",
 			EvidenceDigest: sha256.Sum256([]byte("credit-evidence")), ConfigEpoch: "epoch-1", ExpiresAt: now.Add(time.Hour),
+		},
+		{
+			ConfigDigest: configDigest, RouteID: "route-credit", EndpointID: "endpoint-credit",
+			EndpointAccountHMAC: sha256.Sum256([]byte("credit-account")), Provider: "provider-credit", EndpointFamily: "chat",
+			ObservedAt: now.Add(250 * time.Millisecond), Source: control.SourceInference, Availability: control.AvailabilityAvailable,
+			Credit: control.CreditOK, Billing: control.BillingOK,
+			EvidenceDigest: sha256.Sum256([]byte("credit-inference-ok")), ConfigEpoch: "epoch-1", ExpiresAt: now.Add(time.Hour),
 		},
 		{
 			ConfigDigest: configDigest, RouteID: "route-healthy", EndpointID: "endpoint-healthy",
@@ -50,6 +57,20 @@ func TestCreditStatusProjectionQueryIntegration(t *testing.T) {
 			ObservedAt: now.Add(2 * time.Second), Source: control.SourceOperator, Availability: control.AvailabilityDegraded,
 			Credit: control.CreditLow, Billing: control.BillingUnknown, SafeErrorCode: "credit_low",
 			EvidenceDigest: sha256.Sum256([]byte("low-evidence")), ConfigEpoch: "epoch-1", ExpiresAt: now.Add(time.Hour),
+		},
+		{
+			ConfigDigest: configDigest, RouteID: "route-sticky", EndpointID: "endpoint-sticky",
+			EndpointAccountHMAC: sha256.Sum256([]byte("sticky-account")), Provider: "provider-sticky", EndpointFamily: "chat",
+			ObservedAt: now.Add(3 * time.Second), Source: control.SourceManagementAPI, Availability: control.AvailabilityUnavailable,
+			Credit: control.CreditExhausted, Billing: control.BillingIssue, ProviderCode: "insufficient_quota",
+			EvidenceDigest: sha256.Sum256([]byte("sticky-evidence")), ConfigEpoch: "epoch-1", ExpiresAt: now.Add(time.Hour),
+		},
+		{
+			ConfigDigest: configDigest, RouteID: "route-sticky", EndpointID: "endpoint-sticky",
+			EndpointAccountHMAC: sha256.Sum256([]byte("sticky-account")), Provider: "provider-sticky", EndpointFamily: "chat",
+			ObservedAt: now.Add(4 * time.Second), Source: control.SourceInference, Availability: control.AvailabilityAvailable,
+			Credit: control.CreditOK, Billing: control.BillingOK,
+			EvidenceDigest: sha256.Sum256([]byte("sticky-inference-ok")), ConfigEpoch: "epoch-1", ExpiresAt: now.Add(time.Hour),
 		},
 	}
 	repository := DefaultProviderStatusRepository(pool, namespace)
@@ -73,6 +94,13 @@ func TestCreditStatusProjectionQueryIntegration(t *testing.T) {
 	if page.Endpoints[0].EvidenceSource != control.CreditEvidenceProviderAPI || page.Endpoints[0].SafeEvidenceCode != "billing_hard_limit" {
 		t.Fatalf("provider evidence = %#v", page.Endpoints[0])
 	}
+	sticky, err := repository.ListCreditStatuses(ctx, CreditStatusListOptions{ConfigDigest: configDigest, Provider: "provider-sticky", EndpointID: "endpoint-sticky", IncludeOK: false, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sticky.Endpoints) != 1 || sticky.Endpoints[0].EvidenceSource != control.CreditEvidenceProviderAPI || sticky.Endpoints[0].SafeEvidenceCode != "insufficient_quota" {
+		t.Fatalf("sticky provider evidence = %#v", sticky.Endpoints)
+	}
 
 	page, err = repository.ListCreditStatuses(ctx, CreditStatusListOptions{ConfigDigest: configDigest, IncludeOK: false, AfterEndpointKey: page.NextEndpointKey, Limit: 2})
 	if err != nil {
@@ -89,7 +117,7 @@ func TestCreditStatusProjectionQueryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Endpoints) != 3 || page.Endpoints[1].EndpointID != "endpoint-healthy" {
+	if len(page.Endpoints) != 4 || page.Endpoints[1].EndpointID != "endpoint-healthy" {
 		t.Fatalf("all endpoint page = %#v", page.Endpoints)
 	}
 }

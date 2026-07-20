@@ -92,8 +92,14 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 		return page, err
 	}
 	query := "WITH current_endpoint AS (" +
-		"SELECT DISTINCT ON (r.provider, r.endpoint_id) r.provider, r.endpoint_id, r.credit_state, r.billing_state, r.credit_confirmed_at, r.observed_at, r.route_id, e.source, e.safe_error_code, e.provider_code " +
-		"FROM " + routes + " r JOIN " + events + " e ON e.event_id = r.last_event_id " +
+		"SELECT DISTINCT ON (r.provider, r.endpoint_id) r.provider, r.endpoint_id, r.credit_state, r.billing_state, r.credit_confirmed_at, r.observed_at, r.route_id, incident.source, incident.safe_error_code, incident.provider_code " +
+		"FROM " + routes + " r LEFT JOIN LATERAL (" +
+		"SELECT e.source, e.safe_error_code, e.provider_code FROM " + events + " e " +
+		"WHERE e.config_digest = r.config_digest AND e.route_id = r.route_id " +
+		"AND ((r.credit_state IN ('low','exhausted') AND e.credit_state IN ('low','exhausted')) " +
+		"OR (r.billing_state = 'issue' AND e.billing_state = 'issue')) " +
+		"ORDER BY e.observed_at DESC, e.event_id DESC LIMIT 1" +
+		") incident ON TRUE " +
 		"WHERE r.config_digest = $1 AND ($2 = '' OR r.provider = $2) AND ($3 = '' OR r.endpoint_id = $3) " +
 		"ORDER BY r.provider, r.endpoint_id, r.observed_at DESC, r.route_id DESC" +
 		") SELECT provider, endpoint_id, credit_state, billing_state, credit_confirmed_at, source, safe_error_code, provider_code " +
@@ -105,7 +111,8 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var provider, endpoint, credit, billing, source string
+		var provider, endpoint, credit, billing string
+		var source *string
 		var confirmedAt *time.Time
 		var safeErrorCode, providerCode *string
 		if err := rows.Scan(&provider, &endpoint, &credit, &billing, &confirmedAt, &source, &safeErrorCode, &providerCode); err != nil {
@@ -115,7 +122,11 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 		if confirmedAt != nil {
 			confirmed = confirmedAt.UTC()
 		}
-		status, err := control.NewCreditStatus(provider, endpoint, control.CreditState(credit), control.BillingState(billing), confirmed, control.Source(source), nullableStringValue(safeErrorCode), nullableStringValue(providerCode))
+		evidenceSource := control.SourceInference
+		if source != nil {
+			evidenceSource = control.Source(*source)
+		}
+		status, err := control.NewCreditStatus(provider, endpoint, control.CreditState(credit), control.BillingState(billing), confirmed, evidenceSource, nullableStringValue(safeErrorCode), nullableStringValue(providerCode))
 		if err != nil {
 			return control.CreditStatusPage{}, fmt.Errorf("PostgreSQL credit status is invalid: %w", err)
 		}
