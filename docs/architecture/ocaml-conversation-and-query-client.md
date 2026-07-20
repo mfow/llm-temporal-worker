@@ -642,9 +642,15 @@ module Query : sig
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
-    ('a response, Temporal.Error.t) Temporal.Future.t
+    (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 end
 ~~~
+
+`start` keeps the Activity's Temporal error as the Future error and returns
+the protocol-kind matcher result as its successful value. This preserves a
+typed error for a mismatched closed result without raising from a workflow
+callback; the current Temporal SDK intentionally exposes no public operation
+for converting a successful Future value into a Future error.
 
 Call-site type inference prevents asking a provider-status query and treating
 the answer as a spend summary:

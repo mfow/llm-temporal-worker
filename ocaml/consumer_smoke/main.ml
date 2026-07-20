@@ -38,7 +38,7 @@ let () =
   in
   let spend : spend_summary Query.t =
     Query.Spend_summary {
-      start_time = Ptime.epoch; end_time = Ptime.add_span Ptime.epoch (Ptime.Span.of_int_s 1);
+      start_time = Ptime.epoch; end_time = Ptime.epoch;
       group_by = [ By_operation_kind ]; operation_kinds = [ Generate ] }
   in
   ignore (provider, model, credit, budget, spend)

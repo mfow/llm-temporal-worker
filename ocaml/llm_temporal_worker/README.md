@@ -118,8 +118,10 @@ and `Spend_summary` constructors are exhaustive. The facade validates that
 the closed result tag matches the requested constructor and returns a codec
 `Temporal.Error.t` for mismatches or unknown future tags; it never uses an
 unchecked JSON cast or `Obj.magic`. `Query.start` returns a workflow-owned
-Temporal future, while `Query.execute_with` is available for deterministic
-dispatch injection in tests.
+Temporal future whose successful value is a typed `result` (so protocol-kind
+mismatches stay on the error channel without raising in a workflow callback),
+while `Query.execute_with` is available for deterministic dispatch injection
+in tests.
 
 Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
 enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and

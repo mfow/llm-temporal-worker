@@ -94,9 +94,8 @@ let start ?task_queue ~operation_key ~context query =
       ~retry_policy:Llm_temporal_invocation.activity_retry_policy
       Llm_temporal_invocation.query_v1_activity envelope
   in
-  Temporal.Future.map
-    (fun response ->
-      match of_response query response with
-      | Ok value -> value
-      | Error error -> invalid_arg (Temporal.Error.message error))
-    future
+  (* [Temporal.Future.map] preserves the Activity's error channel and the
+     public SDK intentionally has no constructor for turning a successful
+     value into a future error. Keep protocol mismatches in the value channel
+     rather than raising from a workflow callback. *)
+  Temporal.Future.map (fun response -> of_response query response) future
