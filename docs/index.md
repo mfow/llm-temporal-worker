@@ -70,6 +70,7 @@ is the single status/authority index:
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)
 - [Generic compaction safeguards](reference/generic-compaction.md)
+- [v1 Activity runtime boundary](reference/activity-runtime.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)

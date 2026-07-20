@@ -276,6 +276,12 @@ func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metri
 		Metrics:       metrics,
 		Tracer:        tracer,
 		PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
+		// The v1 Activity names are always registered by production workers,
+		// but durable checkpoint/cache/control state is supplied by the future
+		// provider-backed V1Runtime. Until that composition is present, fail
+		// closed before any provider dispatch rather than registering the
+		// pre-release envelope or silently bypassing durable state.
+		V1Runtime: activity.UnconfiguredV1Runtime{},
 	}
 }
 
