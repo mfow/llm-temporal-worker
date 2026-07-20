@@ -26,7 +26,7 @@ temporal:
     heartbeat_keepalive_interval: 1s
 
 state:
-  kind: redis
+  kind: durable
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
@@ -53,6 +53,25 @@ state:
     dial_timeout: 2s
     operation_timeout: 3s
     required_persistence: aof_and_rdb
+  postgres:
+    addresses: [postgres.example.internal:5432]
+    database: llm_worker
+    schema: llm_worker
+    table_prefix: ""
+    username:
+      kind: file
+      path: /var/run/secrets/llmtw/postgres-username
+    password:
+      kind: file
+      path: /var/run/secrets/llmtw/postgres-password
+    tls:
+      enabled: true
+      server_name: postgres.example.internal
+      ca_file: /var/run/secrets/llmtw/postgres-ca.pem
+    max_connections: 96
+    dial_timeout: 2s
+    statement_timeout: 30s
+    lock_timeout: 2s
 
 blob_store:
   kind: s3

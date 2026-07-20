@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
+	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -31,6 +34,67 @@ func TestRedisKeyOptionsUseConfiguredPrefix(t *testing.T) {
 	}
 	if _, err := redisstore.NewKeyOptions("bad prefix", "admission", options.KeySecret); err == nil {
 		t.Fatal("invalid Redis key prefix accepted")
+	}
+}
+
+func TestBuildPostgresResolvesDurableNamespaceAndKeepsSecretsOutOfProbe(t *testing.T) {
+	var got config.PostgresConfig
+	var gotNamespace postgresstore.Namespace
+	var gotUsername, gotPassword string
+	probe := DependencyProbeFunc(func(context.Context) ProbeResult {
+		return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	})
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+			switch ref.Name {
+			case "POSTGRES_USER":
+				return []byte("worker-user"), nil
+			case "POSTGRES_PASSWORD":
+				return []byte("worker-password"), nil
+			default:
+				return nil, fmt.Errorf("unexpected secret %q", ref.Name)
+			}
+		}),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		PostgresFactory: func(_ context.Context, value config.PostgresConfig, namespace postgresstore.Namespace, username, password string) (DependencyProbe, io.Closer, error) {
+			got, gotNamespace, gotUsername, gotPassword = value, namespace, username, password
+			return probe, nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Postgres: config.PostgresConfig{
+		Addresses: []string{"postgres:5432"}, Database: "worker_db", Schema: "worker_state", TablePrefix: "tenant_",
+		Username: config.SecretRef{Kind: config.SecretEnv, Name: "POSTGRES_USER"}, Password: config.SecretRef{Kind: config.SecretEnv, Name: "POSTGRES_PASSWORD"},
+	}}}
+	gotProbe, closer, err := factory.buildPostgres(context.Background(), value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer != nil {
+		t.Fatal("test Postgres factory unexpectedly returned a closer")
+	}
+	if gotProbe == nil || gotUsername != "worker-user" || gotPassword != "worker-password" {
+		t.Fatalf("Postgres factory inputs probe=%#v username=%q password=%q", gotProbe, gotUsername, gotPassword)
+	}
+	if gotNamespace.String() != "worker_db/worker_state/tenant_" || got.Database != "worker_db" {
+		t.Fatalf("Postgres namespace/config = %s/%#v", gotNamespace, got)
+	}
+}
+
+func TestBuildPostgresSkipsRedisOnlyComposition(t *testing.T) {
+	called := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { called = true; return nil, nil }),
+		PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
+			called = true
+			return nil, nil, nil
+		},
+	}}
+	probe, closer, err := factory.buildPostgres(context.Background(), config.Config{State: config.StateConfig{Kind: config.StateKindRedis}})
+	if err != nil || probe != nil || closer != nil || called {
+		t.Fatalf("Redis-only composition built PostgreSQL: probe=%#v closer=%#v err=%v called=%v", probe, closer, err, called)
 	}
 }
 

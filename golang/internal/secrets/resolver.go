@@ -109,7 +109,13 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 	if value == nil {
 		return fmt.Errorf("configuration is nil")
 	}
-	refs := []config.SecretRef{value.State.Redis.Username, value.State.Redis.Password}
+	refs := make([]config.SecretRef, 0, 4+len(value.Continuation.HandleKeys))
+	if value.State.Kind != config.StateKindMemory {
+		refs = append(refs, value.State.Redis.Username, value.State.Redis.Password)
+	}
+	if value.State.Kind == config.StateKindDurable {
+		refs = append(refs, value.State.Postgres.Username, value.State.Postgres.Password)
+	}
 	for _, key := range value.Continuation.HandleKeys {
 		refs = append(refs, key.Secret)
 	}

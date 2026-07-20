@@ -298,10 +298,10 @@ func TestLoadAppliesPostgresNamespaceEnvironmentOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsDurableStateUntilDurableFactoryIsWired(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "  kind: redis\n", "  kind: durable\n", 1)
-	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "state.kind") {
-		t.Fatalf("durable state was accepted without a durable factory: %v", err)
+func TestLoadRejectsRedisOnlyStateInProduction(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "  kind: durable\n", "  kind: redis\n", 1)
+	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "state.kind redis") {
+		t.Fatalf("Redis-only production state was accepted: %v", err)
 	}
 }
 

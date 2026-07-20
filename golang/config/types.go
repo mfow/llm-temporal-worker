@@ -131,6 +131,17 @@ type StateConfig struct {
 	Postgres                   PostgresConfig `yaml:"postgres" json:"postgres"`
 }
 
+// StateKind identifies the storage composition selected for a worker.
+// Durable mode is the production composition: PostgreSQL is authoritative
+// and Redis provides the low-latency active-budget materialization. Redis-only
+// remains accepted for the pre-composition development fixture; new
+// production configurations must use Durable.
+const (
+	StateKindDurable = "durable"
+	StateKindMemory  = "memory"
+	StateKindRedis   = "redis"
+)
+
 type RedisConfig struct {
 	Addresses           []string  `yaml:"addresses" json:"addresses"`
 	KeyPrefix           string    `yaml:"key_prefix" json:"key_prefix"`
