@@ -10,3 +10,13 @@ type AdmissionStore interface {
 	Fail(context.Context, FailRequest) error
 	Get(context.Context, string) (Operation, error)
 }
+
+// ProviderPendingStore is an optional extension implemented by durable
+// operation repositories that can persist and recover a provider-owned
+// operation identifier. Engines must never require this extension for
+// adapters that only support one-shot Invoke calls.
+type ProviderPendingStore interface {
+	AdmissionStore
+	MarkProviderPending(context.Context, ProviderPendingRequest) error
+	ProviderOperation(context.Context, string) (string, error)
+}

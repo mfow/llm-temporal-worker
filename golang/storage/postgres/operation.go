@@ -642,14 +642,14 @@ func (r OperationRepository) Get(ctx context.Context, id string) (admission.Oper
 	}
 	var scopeID uuid.UUID
 	var requestFingerprint, requestDigest, resultDigest, scopeCiphertext, scopeContextHash []byte
-	var stateValue, apiVersion, costStatus, costMethod, reason string
+	var stateValue, apiVersion, costStatus, costMethod, reason, endpointID, providerName string
 	var scopeKeyID *string
 	var reserved, incurred, actual *string
 	var completed, retention, lease, operationExpiry *time.Time
 	var resultSize *int64
 	var resultMedia *string
 	opID := operationUUID(id)
-	err = r.Pool.QueryRow(ctx, "SELECT scope_id, state, api_version, request_fingerprint_hmac, request_digest, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), created_at, updated_at, completed_at, retention_expires_at, lease_expires_at, operation_expires_at, result_digest, result_byte_length, result_media_type, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest FROM "+operations+" WHERE operation_id=$1", opID).Scan(&scopeID, &stateValue, &apiVersion, &requestFingerprint, &requestDigest, &reserved, &incurred, &actual, &costStatus, &costMethod, &reason, &operation.CreatedAt, &operation.UpdatedAt, &completed, &retention, &lease, &operationExpiry, &resultDigest, &resultSize, &resultMedia, &scopeCiphertext, &scopeKeyID, &scopeContextHash)
+	err = r.Pool.QueryRow(ctx, "SELECT scope_id, state, api_version, request_fingerprint_hmac, request_digest, reserved_cost_usd::text, incurred_cost_usd::text, actual_cost_usd::text, cost_status, COALESCE(cost_method,''), COALESCE(cost_unknown_reason_code,''), COALESCE(endpoint_id,''), COALESCE(provider,''), created_at, updated_at, completed_at, retention_expires_at, lease_expires_at, operation_expires_at, result_digest, result_byte_length, result_media_type, scope_key_ciphertext, scope_key_key_id, scope_key_context_digest FROM "+operations+" WHERE operation_id=$1", opID).Scan(&scopeID, &stateValue, &apiVersion, &requestFingerprint, &requestDigest, &reserved, &incurred, &actual, &costStatus, &costMethod, &reason, &endpointID, &providerName, &operation.CreatedAt, &operation.UpdatedAt, &completed, &retention, &lease, &operationExpiry, &resultDigest, &resultSize, &resultMedia, &scopeCiphertext, &scopeKeyID, &scopeContextHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
 			return operation, admission.ErrOperationNotFound
@@ -658,6 +658,11 @@ func (r OperationRepository) Get(ctx context.Context, id string) (admission.Oper
 	}
 	operation.ID = id
 	operation.State = admission.OperationState(stateValue)
+	if operation.State == admission.StateProviderPending {
+		operation.Attempt.EndpointID = endpointID
+		operation.Attempt.Provider = providerName
+		operation.Attempt.Dispatch = admission.Accepted
+	}
 	operationUUIDValue := operationUUID(id)
 	tokenDigest := operationHMAC(mustKey(r.Keys), "dispatch-token", operationUUIDValue[:])
 	operation.DispatchToken = hex.EncodeToString(tokenDigest[:])

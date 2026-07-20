@@ -83,6 +83,9 @@ func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provi
 }
 
 func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation) (llm.Response, error) {
+	if operation.State == admission.StateProviderPending {
+		return engine.resumeProviderPending(ctx, request, providerRequest, snapshot, quoted, operation, parent)
+	}
 	for index, candidate := range quoted.candidates {
 		if index >= engine.dependencies.MaxAttempts {
 			break
@@ -116,7 +119,7 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease)}
 		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
 		attemptStarted := time.Now()
-		result, invokeErr := adapter.Invoke(attemptCtx, call, observer)
+		result, invokeErr, providerPending := engine.invokeAttempt(attemptCtx, operation, candidate.candidate, adapter, call, observer)
 		if metrics := observability.MetricsFromContext(ctx); metrics != nil {
 			outcome := "success"
 			if invokeErr != nil {
@@ -128,6 +131,11 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 			engine.recordTraceError(attemptCtx, attemptSpan, invokeErr)
 		}
 		attemptSpan.End()
+		if invokeErr != nil && providerPending {
+			mapped := classifyProviderError(invokeErr, true)
+			mapped.OperationID = operation.ID
+			return llm.Response{}, mapped
+		}
 		if invokeErr == nil {
 			if observer.heartbeatErr != nil {
 				return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "progress heartbeat failed", observer.heartbeatErr), candidate.estimate.MicroUSD)
