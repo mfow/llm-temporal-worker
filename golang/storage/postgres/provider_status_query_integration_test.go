@@ -64,6 +64,21 @@ func TestProviderStatusProjectionQueryIntegration(t *testing.T) {
 		t.Fatalf("unhealthy page = %#v, next=%q", page.Routes, page.NextRouteID)
 	}
 
+	routes, err := namespace.Render("provider_route_status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE "+routes+" SET circuit_state='open' WHERE config_digest=$1 AND route_id='route-a'", configDigest[:]); err != nil {
+		t.Fatal(err)
+	}
+	page, err = repository.ListRouteStatuses(ctx, ProviderStatusListOptions{ConfigDigest: configDigest, IncludeHealthy: false, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Routes) != 2 || page.Routes[0].RouteID != "route-a" || page.Routes[1].RouteID != "route-b" || page.NextRouteID != "route-b" {
+		t.Fatalf("open-circuit unhealthy page = %#v, next=%q", page.Routes, page.NextRouteID)
+	}
+
 	page, err = repository.ListRouteStatuses(ctx, ProviderStatusListOptions{ConfigDigest: configDigest, IncludeHealthy: true, Limit: 2})
 	if err != nil {
 		t.Fatal(err)

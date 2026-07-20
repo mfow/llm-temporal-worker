@@ -131,7 +131,7 @@ func (repository ProviderStatusRepository) ListRouteStatuses(ctx context.Context
 	if err != nil {
 		return page, err
 	}
-	query := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + relation + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok') AND ($6 = '' OR route_id > $6) ORDER BY route_id LIMIT $7"
+	query := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + relation + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok' OR circuit_state <> 'closed') AND ($6 = '' OR route_id > $6) ORDER BY route_id LIMIT $7"
 	rows, err := repository.Pool.Query(ctx, query, options.ConfigDigest[:], options.Provider, options.EndpointID, options.Availability, options.IncludeHealthy, options.AfterRouteID, options.Limit+1)
 	if err != nil {
 		return page, redactPostgresError(fmt.Errorf("list provider route statuses: %w", err))
