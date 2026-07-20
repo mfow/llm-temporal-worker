@@ -30,3 +30,18 @@ func TestCreditStatusListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestCreditStatusListQueryBindsIncidentEvidenceToProjectionEpoch(t *testing.T) {
+	query := creditStatusListQuery("routes", "events")
+	for _, expected := range []string{
+		"e.config_digest = r.config_digest",
+		"e.config_epoch = r.config_epoch",
+		"e.route_id = r.route_id",
+		"e.observed_at <= $4",
+		"r.observed_at <= $4",
+	} {
+		if !strings.Contains(query, expected) {
+			t.Fatalf("credit status query missing %q: %s", expected, query)
+		}
+	}
+}

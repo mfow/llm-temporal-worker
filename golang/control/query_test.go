@@ -107,6 +107,25 @@ func TestQueryServiceCursorsAreBoundToScopeAndFilter(t *testing.T) {
 	}
 }
 
+func TestQueryServiceDecodeCursorReturnsAuthenticatedPosition(t *testing.T) {
+	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return queryResponse(request), nil
+	}), func(context.Context, Authorization) error { return nil })
+	request := queryRequest()
+	issued := service.now()
+	token, err := service.SignCursor(request, `{"after":"provider\u0000endpoint","horizon":"2026-07-20T00:00:00Z"}`, issued)
+	if err != nil {
+		t.Fatalf("SignCursor() error = %v", err)
+	}
+	claims, err := service.DecodeCursor(request, token, issued.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("DecodeCursor() error = %v", err)
+	}
+	if claims.Kind != request.Kind || claims.Position == "" || !claims.IssuedAt.Equal(issued) || !claims.ExpiresAt.After(issued) {
+		t.Fatalf("claims = %#v", claims)
+	}
+}
+
 func TestQueryServiceValidatesOutgoingCursorAgainstFreshTime(t *testing.T) {
 	request := queryRequest()
 	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
