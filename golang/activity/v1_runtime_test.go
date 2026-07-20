@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -20,10 +21,18 @@ type v1RuntimeStub struct {
 	compactCalls  int
 	queryCalls    int
 	err           error
+	entered       chan struct{}
+	release       chan struct{}
 }
 
 func (runtime *v1RuntimeStub) GenerateV1(_ context.Context, request llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
 	runtime.generateCalls++
+	if runtime.entered != nil {
+		runtime.entered <- struct{}{}
+	}
+	if runtime.release != nil {
+		<-runtime.release
+	}
 	if runtime.err != nil {
 		return llm.GenerateResponseV1{}, runtime.err
 	}
@@ -136,6 +145,42 @@ func TestV1ActivitiesDispatchTypedRecords(t *testing.T) {
 	if runtime.generateCalls != 1 || runtime.compactCalls != 1 || runtime.queryCalls != 1 {
 		t.Fatalf("runtime calls = generate:%d compact:%d query:%d", runtime.generateCalls, runtime.compactCalls, runtime.queryCalls)
 	}
+}
+
+func TestV1GeneratePreservesHeartbeatLifecycleDuringRuntimeDispatch(t *testing.T) {
+	ticker := newManualHeartbeatTicker()
+	heartbeater := newRecordingHeartbeater()
+	runtime := &v1RuntimeStub{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	activities := &Activities{
+		V1Runtime:                  runtime,
+		Heartbeater:                heartbeater,
+		HeartbeatKeepaliveInterval: time.Second,
+		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
+			return ticker
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := activities.GenerateV1(context.Background(), validGenerateV1Request())
+		done <- err
+	}()
+	select {
+	case <-runtime.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for v1 runtime dispatch")
+	}
+	ticker.Tick()
+	heartbeater.WaitForPhase(t, heartbeatProviderWaitPhase, 1)
+	close(runtime.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for v1 Activity completion")
+	}
+	waitForKeepaliveEvent(t, ticker.stopped, "v1 keepalive ticker to stop")
 }
 
 func TestRegisteredV1GenerateExecutesThroughTemporalEnvironment(t *testing.T) {

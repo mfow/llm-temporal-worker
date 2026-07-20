@@ -3,7 +3,10 @@ package activity
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -57,12 +60,21 @@ func (activities *Activities) GenerateV1(ctx context.Context, request llm.Genera
 	if activities == nil || activities.V1Runtime == nil {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
-	response, err := activities.V1Runtime.GenerateV1(ctx, request)
+	var response llm.GenerateResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = activities.V1Runtime.GenerateV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		_, err = MarshalGenerateResponseV1(response, activities.payloadLimits())
+		if err != nil {
+			return v1OutputError("Generate", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, ToTemporalError(err)
-	}
-	if _, err := MarshalGenerateResponseV1(response, activities.payloadLimits()); err != nil {
-		return nil, ToTemporalError(v1OutputError("Generate", err))
+		return nil, err
 	}
 	return &response, nil
 }
@@ -76,12 +88,21 @@ func (activities *Activities) CompactV1(ctx context.Context, request llm.Compact
 	if activities == nil || activities.V1Runtime == nil {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
-	response, err := activities.V1Runtime.CompactV1(ctx, request)
+	var response llm.CompactResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = activities.V1Runtime.CompactV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		_, err = MarshalCompactResponseV1(response, activities.payloadLimits())
+		if err != nil {
+			return v1OutputError("Compact", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, ToTemporalError(err)
-	}
-	if _, err := MarshalCompactResponseV1(response, activities.payloadLimits()); err != nil {
-		return nil, ToTemporalError(v1OutputError("Compact", err))
+		return nil, err
 	}
 	return &response, nil
 }
@@ -96,14 +117,83 @@ func (activities *Activities) QueryV1(ctx context.Context, request llm.QueryRequ
 	if activities == nil || activities.V1Runtime == nil {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
-	response, err := activities.V1Runtime.QueryV1(ctx, request)
+	var response llm.QueryResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = activities.V1Runtime.QueryV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		_, err = MarshalQueryResponseV1(response, activities.payloadLimits())
+		if err != nil {
+			return v1OutputError("Query", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, ToTemporalError(err)
-	}
-	if _, err := MarshalQueryResponseV1(response, activities.payloadLimits()); err != nil {
-		return nil, ToTemporalError(v1OutputError("Query", err))
+		return nil, err
 	}
 	return &response, nil
+}
+
+// runV1 preserves the existing Activity lifecycle around the durable runtime
+// seam. Runtime implementations may block on provider or storage work, so the
+// adapter binds telemetry and sends bounded provider_wait heartbeats exactly as
+// the legacy Generate path does. It returns only the sanitized Temporal error.
+func (activities *Activities) runV1(ctx context.Context, dispatch func(context.Context) error) (resultErr error) {
+	ctx = observability.WithTracer(ctx, activities.Tracer)
+	ctx = observability.WithMetrics(ctx, activities.Metrics)
+	started := time.Now()
+	var rawErr error
+	defer func() {
+		status, errorClass := activityMetricOutcome(resultErr)
+		activities.Metrics.RecordActivity(status, errorClass, time.Since(started), "total")
+		if activityCanceled(resultErr) {
+			return
+		}
+		failureErr := resultErr
+		if rawErr != nil {
+			failureErr = rawErr
+		}
+		if origin, failed := activityFailureOrigin(failureErr); failed {
+			activities.Metrics.RecordActivityFailure(origin)
+		}
+	}()
+
+	keepaliveInterval, err := activities.keepaliveInterval()
+	if err != nil {
+		return ToTemporalError(err)
+	}
+	var heartbeater Heartbeater
+	dispatchContext := ctx
+	var keepalive *heartbeatKeepalive
+	if rawHeartbeater := activities.newHeartbeater(); rawHeartbeater != nil {
+		serializedHeartbeater := &serializedHeartbeater{target: rawHeartbeater}
+		heartbeater = &deduplicatingHeartbeater{target: serializedHeartbeater}
+		ctx = engine.WithHeartbeat(ctx, heartbeater)
+		if err := heartbeater.Beat(ctx, engine.Progress{Phase: "planning"}); err != nil {
+			return ToTemporalError(err)
+		}
+		dispatchContext, keepalive = startHeartbeatKeepalive(ctx, serializedHeartbeater, keepaliveInterval, activities.heartbeatTickerFactory)
+		defer func() {
+			if keepalive != nil {
+				_ = keepalive.stop()
+			}
+		}()
+	}
+	rawErr = dispatch(dispatchContext)
+	keepaliveErr := keepalive.stop()
+	keepalive = nil
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ToTemporalError(ctxErr)
+	}
+	if keepaliveErr != nil {
+		return ToTemporalError(heartbeatKeepaliveFailure(keepaliveErr))
+	}
+	if rawErr != nil {
+		return ToTemporalError(rawErr)
+	}
+	return nil
 }
 
 func (activities *Activities) generateV1Temporal(ctx context.Context, request llm.GenerateRequestV1) (*llm.GenerateResponseV1, error) {
