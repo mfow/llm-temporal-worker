@@ -49,10 +49,17 @@ var expectedV1TraceabilityIDs = []string{
 }
 
 var evidenceStatusForMode = map[string]string{
-	"offline":                         "unrecorded",
 	"protected_manual":                "awaiting_protected_run",
 	"external_authorization_required": "authorization_required",
 }
+
+// The release-evidence artifact recorded below was produced by this exact
+// protected master revision. Keep this candidate pin explicit so a later
+// catalog refresh cannot accidentally retain evidence from an older run.
+const expectedV1EvidenceRevision = "0048df00a772347d8e019e0ee3e4f9377328f017"
+const expectedV1EvidenceWorkflowRunID int64 = 29714835927
+const expectedV1EvidenceArtifactName = "release-evidence"
+const expectedV1EvidenceArtifactDigest = "97723049486b6f5ee4e76072ed143da18f78e647244cc96b07c11edbbfda9061"
 
 type v1TraceabilityCatalog struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -85,8 +92,23 @@ type v1TraceabilityWorkflowJob struct {
 }
 
 type v1TraceabilityEvidence struct {
-	Mode   string `json:"mode"`
-	Status string `json:"status"`
+	Mode           string `json:"mode"`
+	Status         string `json:"status"`
+	Revision       string `json:"revision,omitempty"`
+	WorkflowRunID  int64  `json:"workflow_run_id,omitempty"`
+	ArtifactName   string `json:"artifact_name,omitempty"`
+	ArtifactDigest string `json:"artifact_digest,omitempty"`
+}
+
+func recordedV1Evidence() v1TraceabilityEvidence {
+	return v1TraceabilityEvidence{
+		Mode:           "offline",
+		Status:         "recorded",
+		Revision:       expectedV1EvidenceRevision,
+		WorkflowRunID:  expectedV1EvidenceWorkflowRunID,
+		ArtifactName:   expectedV1EvidenceArtifactName,
+		ArtifactDigest: expectedV1EvidenceArtifactDigest,
+	}
 }
 
 func TestV1TraceabilityCatalog(t *testing.T) {
@@ -183,7 +205,7 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 					{Path: ".github/workflows/master.yml", Job: "verify"},
 				},
 			},
-			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
+			Evidence: recordedV1Evidence(),
 		},
 		{
 			ID: "v1.slo.worker-caused-error-rate",
@@ -303,8 +325,8 @@ func TestV1TraceabilityCatalogRejectsDuplicateJSONKeys(t *testing.T) {
 		},
 		{
 			name:   "nested evidence status where final value is valid",
-			before: "\"mode\": \"offline\",\n        \"status\": \"unrecorded\"",
-			after:  "\"mode\": \"offline\",\n        \"status\": \"authorization_required\",\n        \"status\": \"unrecorded\"",
+			before: "\"mode\": \"offline\",\n        \"status\": \"recorded\"",
+			after:  "\"mode\": \"offline\",\n        \"status\": \"authorization_required\",\n        \"status\": \"recorded\"",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -452,6 +474,18 @@ func TestV1TraceabilityCatalogRejectsBrokenStaticRecords(t *testing.T) {
 				t.Fatalf("catalog validator accepted %s", test.name)
 			}
 		})
+	}
+}
+
+func TestV1TraceabilityRejectsStaleOfflineEvidenceRevision(t *testing.T) {
+	root := repositoryRoot(t)
+	raw := readV1TraceabilityCatalog(t, root)
+	mutated := mutateV1TraceabilityCatalog(t, raw, func(t *testing.T, document map[string]any) {
+		evidence := catalogEvidence(t, requirementAt(t, document, 0))
+		evidence["revision"] = "2456e83a8f4e6f9f6b54b7b6e06ccf54886f9f3b"
+	})
+	if err := validateV1TraceabilityCatalog(root, mutated); err == nil {
+		t.Fatal("catalog validator accepted offline evidence from a stale revision")
 	}
 }
 
@@ -640,10 +674,36 @@ func validateV1TraceabilityRequirement(root string, makeTargets map[string]struc
 	if err := validateWorkflowJobs(root, requirement.Verification.WorkflowJobs); err != nil {
 		return err
 	}
+	if requirement.Evidence.Mode == "offline" {
+		switch requirement.Evidence.Status {
+		case "recorded":
+			if requirement.Evidence.Revision != expectedV1EvidenceRevision {
+				return fmt.Errorf("offline evidence revision = %q, want %q", requirement.Evidence.Revision, expectedV1EvidenceRevision)
+			}
+			if requirement.Evidence.WorkflowRunID != expectedV1EvidenceWorkflowRunID {
+				return fmt.Errorf("offline evidence workflow_run_id = %d, want %d", requirement.Evidence.WorkflowRunID, expectedV1EvidenceWorkflowRunID)
+			}
+			if requirement.Evidence.ArtifactName != expectedV1EvidenceArtifactName {
+				return fmt.Errorf("offline evidence artifact_name = %q, want %q", requirement.Evidence.ArtifactName, expectedV1EvidenceArtifactName)
+			}
+			if requirement.Evidence.ArtifactDigest != expectedV1EvidenceArtifactDigest {
+				return fmt.Errorf("offline evidence artifact_digest = %q, want %q", requirement.Evidence.ArtifactDigest, expectedV1EvidenceArtifactDigest)
+			}
+		case "unrecorded":
+			if requirement.Evidence.Revision != "" || requirement.Evidence.WorkflowRunID != 0 || requirement.Evidence.ArtifactName != "" || requirement.Evidence.ArtifactDigest != "" {
+				return fmt.Errorf("unrecorded offline evidence must not contain release artifact fields")
+			}
+		default:
+			return fmt.Errorf("offline evidence requires status %q or %q, got %q", "recorded", "unrecorded", requirement.Evidence.Status)
+		}
+		return nil
+	}
 	if expectedStatus, exists := evidenceStatusForMode[requirement.Evidence.Mode]; !exists {
 		return fmt.Errorf("evidence mode %q is not allowed", requirement.Evidence.Mode)
 	} else if requirement.Evidence.Status != expectedStatus {
 		return fmt.Errorf("evidence mode %q requires status %q, got %q", requirement.Evidence.Mode, expectedStatus, requirement.Evidence.Status)
+	} else if requirement.Evidence.Revision != "" || requirement.Evidence.WorkflowRunID != 0 || requirement.Evidence.ArtifactName != "" || requirement.Evidence.ArtifactDigest != "" {
+		return fmt.Errorf("non-offline evidence must not contain release artifact fields")
 	}
 	return nil
 }
@@ -902,7 +962,7 @@ func rejectForbiddenCatalogFields(value any, location string) error {
 			if location != "" {
 				fieldLocation = location + "." + key
 			}
-			if forbiddenStaticCatalogField(key) {
+			if forbiddenStaticCatalogField(key) && !allowedRecordedEvidenceField(location, key) {
 				return fmt.Errorf("static catalog must not contain evidence claim field %q", fieldLocation)
 			}
 			if err := rejectForbiddenCatalogFields(child, fieldLocation); err != nil {
@@ -917,6 +977,18 @@ func rejectForbiddenCatalogFields(value any, location string) error {
 		}
 	}
 	return nil
+}
+
+func allowedRecordedEvidenceField(location, field string) bool {
+	if !strings.HasSuffix(location, ".evidence") {
+		return false
+	}
+	switch field {
+	case "revision", "workflow_run_id", "artifact_name", "artifact_digest":
+		return true
+	default:
+		return false
+	}
 }
 
 func forbiddenStaticCatalogField(field string) bool {
