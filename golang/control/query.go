@@ -106,7 +106,12 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 		return llm.QueryResponseV1{}, err
 	}
 	if response.NextCursor != nil {
-		if err := service.ValidateCursor(request, *response.NextCursor, now); err != nil {
+		// The handler may spend enough time reading storage or refreshing
+		// provider state for a cursor it signs on return to be more than the
+		// allowed future-skew window relative to the pre-handler timestamp.
+		// Keep `now` for the incoming cursor check, but validate outgoing
+		// cursors against a fresh clock sample after the handler completes.
+		if err := service.ValidateCursor(request, *response.NextCursor, service.now()); err != nil {
 			return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", err)
 		}
 	}

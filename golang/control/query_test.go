@@ -107,6 +107,39 @@ func TestQueryServiceCursorsAreBoundToScopeAndFilter(t *testing.T) {
 	}
 }
 
+func TestQueryServiceValidatesOutgoingCursorAgainstFreshTime(t *testing.T) {
+	request := queryRequest()
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	clockCalls := 0
+	var service *QueryService
+	service = &QueryService{
+		Authorize: func(context.Context, Authorization) error { return nil },
+		CursorKey: []byte("query-test-key"),
+		Clock: func() time.Time {
+			clockCalls++
+			if clockCalls == 1 {
+				return base
+			}
+			return base.Add(3 * time.Minute)
+		},
+		Handler: queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+			cursor, err := service.SignCursor(request, "route-2", base.Add(3*time.Minute))
+			if err != nil {
+				return llm.QueryResponseV1{}, err
+			}
+			response := queryResponse(request)
+			response.NextCursor = &cursor
+			return response, nil
+		}),
+	}
+	if _, err := service.Execute(context.Background(), request); err != nil {
+		t.Fatalf("Execute() rejected a cursor signed after a slow handler: %v", err)
+	}
+	if clockCalls != 2 {
+		t.Fatalf("clock calls = %d, want pre-handler and post-handler samples", clockCalls)
+	}
+}
+
 func TestQueryServiceRejectsResponseMismatchAndUnsafeScope(t *testing.T) {
 	request := queryRequest()
 	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {

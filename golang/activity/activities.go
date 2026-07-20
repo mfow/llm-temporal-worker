@@ -288,7 +288,7 @@ func sameProgress(left, right engine.Progress) bool {
 // Register installs the exact versioned Activity name rather than relying on
 // a Go method name that could change during a refactor.
 func (activities *Activities) Register(registry worker.ActivityRegistry) {
-	if activities != nil && activities.V1Runtime != nil {
+	if activities != nil && (activities.V1Runtime != nil || activities.QueryService != nil) {
 		activities.RegisterV1(registry)
 		return
 	}

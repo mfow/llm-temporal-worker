@@ -36,3 +36,12 @@ func TestQueryV1UsesIndependentQueryService(t *testing.T) {
 		t.Fatal("GenerateV1 unexpectedly succeeded without a durable V1 runtime")
 	}
 }
+
+func TestRegisterIncludesQueryActivityForQueryOnlyService(t *testing.T) {
+	registry := &v1Registry{}
+	activities := &Activities{QueryService: &queryServiceStub{}}
+	activities.Register(registry)
+	if len(registry.names) != 3 || registry.names[2] != QueryActivityName {
+		t.Fatalf("registered names = %v, want v1 activities including %q", registry.names, QueryActivityName)
+	}
+}
