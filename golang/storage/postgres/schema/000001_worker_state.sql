@@ -1339,6 +1339,22 @@ CREATE INDEX __PREFIX__provider_route_current_problem_idx
 CREATE INDEX __PREFIX__provider_route_last_event_idx
     ON __SCHEMA__.__PREFIX__provider_route_status (last_event_id);
 
+-- Query Activities read the current projection in deterministic route-id
+-- order.  Keep the page key and all filter columns covered so a persisted
+-- status query does not fall back to the append-only event ledger.
+CREATE INDEX __PREFIX__provider_route_query_idx
+    ON __SCHEMA__.__PREFIX__provider_route_status
+        (config_digest, route_id)
+    INCLUDE (
+        provider,
+        endpoint_id,
+        availability,
+        credit_state,
+        billing_state,
+        observed_at,
+        stale_after
+    );
+
 CREATE INDEX __PREFIX__provider_inventory_latest_idx
     ON __SCHEMA__.__PREFIX__provider_inventory_snapshots
         (config_digest, endpoint_id, observed_at DESC, inventory_snapshot_id)
