@@ -132,7 +132,7 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		}
 		attemptSpan.End()
 		if invokeErr != nil && providerPending {
-			mapped := classifyProviderError(invokeErr, true)
+			mapped := pendingPollError(invokeErr)
 			mapped.OperationID = operation.ID
 			return llm.Response{}, mapped
 		}

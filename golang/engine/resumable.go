@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
@@ -119,12 +120,28 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	}
 	result, pollErr := PollProviderOperation(ctx, resumable, call, providerOperationID, observer, ProviderPollOptions{})
 	if pollErr != nil {
-		mapped := classifyProviderError(pollErr, true)
-		if mapped.Code == provider.CodeCanceled || mapped.Retry == provider.RetrySameOperation {
+		mapped := pendingPollError(pollErr)
+		if mapped.Retry == provider.RetrySameOperation || mapped.Code == provider.CodeCanceled {
 			mapped.OperationID = operation.ID
 			return llm.Response{}, mapped
 		}
 		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 	}
 	return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
+}
+
+// pendingPollError preserves retry guidance while an operation is already
+// durable. classifyProviderError intentionally turns accepted dispatch errors
+// into terminal ambiguity for new submissions; doing that for a poll would
+// discard safe retry of the same provider-owned operation.
+func pendingPollError(err error) *provider.Error {
+	var mapped *provider.Error
+	if errors.As(err, &mapped) {
+		copy := *mapped
+		if copy.Retry == provider.RetrySameOperation || copy.Code == provider.CodeCanceled {
+			return &copy
+		}
+		return &copy
+	}
+	return engineError(provider.CodeStateUnavailable, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider poll failed", err)
 }
