@@ -53,6 +53,32 @@ let exactly_three_results (branches : Conversation.turn list) = match branches w
   | [ branch_0; branch_1; branch_2 ] -> Ok (branch_0, branch_1, branch_2)
   | _ -> invalid_arg "Temporal.Future.all changed result cardinality"
 
+(* Keep the exact low-level descriptor examples type-checked as well as the
+   ergonomic facade below.  This function is never called: the fixture is a
+   compile-only downstream consumer and must not contact Temporal or a
+   provider at process startup. *)
+let low_level_activity_examples ~task_queue
+    (generation_request : generate_request)
+    (compaction_request : compact_request)
+    (query_envelope : query_envelope) =
+  let task_queue = Temporal_task_queue.to_string task_queue in
+  let generated =
+    Temporal.Activity.execute ~task_queue
+      ~retry_policy:activity_retry_policy
+      generate_v1_activity generation_request
+  in
+  let compacted =
+    Temporal.Activity.execute ~task_queue
+      ~retry_policy:activity_retry_policy
+      compact_v1_activity compaction_request
+  in
+  let queried =
+    Temporal.Activity.execute ~task_queue
+      ~retry_policy:activity_retry_policy
+      query_v1_activity query_envelope
+  in
+  generated, compacted, queried
+
 let claim_workflow ~input_codec ~output_codec ~task_queue =
   Temporal.Workflow.define
     ~name:"claims.cached-branching.v1"
@@ -159,4 +185,4 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
 (* Keep the definition reachable so Dune type-checks its full inferred type,
    while avoiding a workflow registration or Activity execution at process
    startup. *)
-let () = ignore claim_workflow
+let () = ignore (claim_workflow, low_level_activity_examples)

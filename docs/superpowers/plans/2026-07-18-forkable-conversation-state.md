@@ -824,9 +824,12 @@ directory unless a command explicitly says otherwise.
   constructors, a cache-enabled root call, three sibling forks from one
   immutable parent using variants 0/1/2, explicit compaction, and a
   post-compaction Generate that restores tools and structured output.
-- [ ] Type-check both the natural facade and the low-level Activity descriptor
-  examples. Assert the facade returns Temporal futures that can be composed
-  with **Temporal.Future.all** without a hidden mutable conversation head.
+- [x] Type-check both the natural facade and the low-level Activity descriptor
+  examples. The external `ocaml/consumer_workflow_smoke` package now compiles
+  the exact v1 `Temporal.Activity.execute` calls for
+  `generate_v1_activity`, `compact_v1_activity`, and `query_v1_activity` with
+  the exported one-attempt retry policy, while also asserting the facade's
+  `Temporal.Future.all` fan-out has no hidden mutable conversation head.
 - [ ] Commit: **feat(ocaml): expose immutable conversations and typed queries**.
 
 ### Task 19: Compose Redis budgets with PostgreSQL durable state

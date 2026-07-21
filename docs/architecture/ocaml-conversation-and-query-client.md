@@ -711,7 +711,7 @@ cross-kind reuse before dispatch.
 The invocation module exposes three exact names:
 
 ~~~ocaml
-val generate_activity :
+val generate_v1_activity :
   (generate_request, generate_response) Temporal.Activity.t
 
 val compact_v1_activity :
@@ -978,7 +978,7 @@ let invoke_generate ~task_queue request =
   Temporal.Activity.execute
     ~task_queue:(Temporal_task_queue.to_string task_queue)
     ~retry_policy:activity_retry_policy
-    generate_activity request
+    generate_v1_activity request
 
 let invoke_compact_v1 ~task_queue request =
   Temporal.Activity.execute
