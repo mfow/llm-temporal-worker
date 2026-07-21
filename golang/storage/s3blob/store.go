@@ -171,6 +171,12 @@ func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byt
 	if result.ContentLength != nil && *result.ContentLength != ref.ByteLength {
 		return nil, blob.ErrDigestMismatch
 	}
+	// Content type is part of the immutable blob reference. A digest and
+	// length match alone do not prove that an object has not been replaced
+	// with the same bytes under a different media type.
+	if result.ContentType == nil || *result.ContentType != ref.MediaType {
+		return nil, blob.ErrDigestMismatch
+	}
 	data, err := io.ReadAll(io.LimitReader(result.Body, store.maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read blob: %w", err)

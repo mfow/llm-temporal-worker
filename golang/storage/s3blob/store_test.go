@@ -47,7 +47,7 @@ func (fake *fakeS3) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...
 	if fake.getOutput != nil {
 		return fake.getOutput, nil
 	}
-	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(fake.data)), ContentLength: int64Ptr(int64(len(fake.data)))}, nil
+	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(fake.data)), ContentLength: int64Ptr(int64(len(fake.data))), ContentType: stringPtr("text/plain")}, nil
 }
 
 func (fake *fakeS3) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
@@ -294,11 +294,17 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 		{name: "content length mismatch", configure: func(fake *fakeS3, ref blob.Ref) {
 			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64Ptr(ref.ByteLength + 1)}
 		}, is: blob.ErrDigestMismatch},
+		{name: "content type mismatch", configure: func(fake *fakeS3, ref blob.Ref) {
+			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr("application/octet-stream")}
+		}, is: blob.ErrDigestMismatch},
+		{name: "missing content type", configure: func(fake *fakeS3, ref blob.Ref) {
+			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64Ptr(ref.ByteLength)}
+		}, is: blob.ErrDigestMismatch},
 		{name: "digest mismatch", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("baddata"))), ContentLength: int64Ptr(ref.ByteLength)}
+			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("baddata"))), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
 		}, is: blob.ErrDigestMismatch},
 		{name: "read failure", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(errorReader{}), ContentLength: int64Ptr(ref.ByteLength)}
+			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(errorReader{}), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
 		}, want: "read blob: read failed"},
 	}
 	for _, test := range tests {
@@ -319,7 +325,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 	}
 
 	t.Run("response larger than limit is rejected", func(t *testing.T) {
-		fake := &fakeS3{getOutput: &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("12345"))), ContentLength: int64Ptr(4)}}
+		fake := &fakeS3{getOutput: &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("12345"))), ContentLength: int64Ptr(4), ContentType: stringPtr("text/plain")}}
 		store := testStore(t, fake, now, 4)
 		ref := testRef(store, now, "tenant", []byte("1234"))
 		if _, err := store.Get(context.Background(), "tenant", ref); !errors.Is(err, blob.ErrDigestMismatch) {
@@ -332,7 +338,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 		fake := &fakeS3{}
 		store := testStore(t, fake, now, 100)
 		ref := testRef(store, now, "tenant", payload)
-		fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(&cancelOnReadReader{reader: bytes.NewReader(payload), cancel: cancel}), ContentLength: int64Ptr(ref.ByteLength)}
+		fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(&cancelOnReadReader{reader: bytes.NewReader(payload), cancel: cancel}), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
 		if _, err := store.Get(ctx, "tenant", ref); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Get() = %v, want context.Canceled", err)
 		}
