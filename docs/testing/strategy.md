@@ -210,6 +210,7 @@ Fuzz targets include:
 - retained provider event-payload decoders;
 - provider error-body decoder with leak checks;
 - decimal price parsing/multiplication/ceil/overflow;
+- exact USD-to-nanoUSD conservative ceiling/floor and safe-integer bounds;
 - budget window boundary and retry-after calculation;
 - continuation handle parse/MAC/tenant binding;
 - Redis Function argument codec;
