@@ -29,4 +29,7 @@ that have already been resolved.
 This is the durable-state-independent slice of the design. PostgreSQL
 publication, blob ordering, Activity payload wiring, and retention remain
 separate concerns and must use this contract rather than reimplementing
-materialization in an adapter.
+materialization in an adapter. The storage-neutral DTO and repository/UoW
+ports are documented in [Durable checkpoint repository port](../reference/checkpoint-repository-port.md).
+They define the validation, canonical digest, scope, and immutable-publication
+boundary only; no PostgreSQL adapter or Generate/Compact wiring is implied.
