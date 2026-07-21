@@ -461,9 +461,9 @@ let query_request_of_json value =
   let* _context = required "query request" "context" fields >>= context_of_v1_json in
   let* kind = required "query request" "kind" fields >>= string "query request.kind" in
   let* query = required "query request" "query" fields in
-  let page context fields =
+  let page context kind fields =
     let* page_size = match optional "page_size" fields with None -> Ok 100 | Some value -> int64 (context ^ ".page_size") value >>= fun value -> if value < 1L || value > 1000L then Error (errorf "%s.page_size is out of bounds" context) else Ok (Int64.to_int value) in
-    let* cursor = match optional "cursor" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".cursor") value in let* value = validated (context ^ ".cursor") Query_cursor.of_string value in Ok (Some value) in
+    let* cursor = match optional "cursor" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".cursor") value in let* value = validated (context ^ ".cursor") (Query_cursor.of_string_for_kind kind) value in Ok (Some value) in
     Ok (page_size, cursor)
   in
   let optional_provider _context fields = optional_id_field "provider" Provider_id.of_string fields in
@@ -475,20 +475,20 @@ let query_request_of_json value =
         let* availability = match optional "availability" fields with None | Some `Null -> Ok None | Some (`String value) -> let* value = availability_of_string "provider_status.availability" value in Ok (Some value) | Some _ -> Error (errorf "provider_status.availability must be a string") in
         let* include_healthy = match optional "include_healthy" fields with None -> Ok true | Some value -> bool "provider_status.include_healthy" value in
         let* refresh_if_older_than_seconds = match optional "refresh_if_older_than_seconds" fields with None | Some `Null -> Ok None | Some value -> let* value = int64 "provider_status.refresh_if_older_than_seconds" value in let* () = if value < 1L || value > 86400L then Error (errorf "provider_status refresh age out of bounds") else Ok () in Ok (Some value) in
-        let* page_size, cursor = page "provider_status" fields in Ok (Provider_status_request { provider; endpoint; availability; include_healthy; refresh_if_older_than_seconds; page_size; cursor })
+        let* page_size, cursor = page "provider_status" Query_cursor.Provider_status fields in Ok (Provider_status_request { provider; endpoint; availability; include_healthy; refresh_if_older_than_seconds; page_size; cursor })
     | "model_inventory" ->
         let* fields = closed "model_inventory query" ["provider"; "endpoint"; "model_prefix"; "lifecycle"; "refresh_if_older_than_seconds"; "page_size"; "cursor"] query in
         let* provider = optional_provider "provider" fields in let* endpoint = optional_endpoint "endpoint" fields in
         let* model_prefix = match optional "model_prefix" fields with None | Some `Null -> Ok None | Some value -> let* value = string "model_inventory.model_prefix" value in Ok (Some value) in
         let* lifecycle = match optional "lifecycle" fields with None | Some `Null -> Ok None | Some (`String value) -> let* value = lifecycle_of_string "model_inventory.lifecycle" value in Ok (Some value) | Some _ -> Error (errorf "model_inventory.lifecycle must be a string") in
         let* refresh_if_older_than_seconds = match optional "refresh_if_older_than_seconds" fields with None | Some `Null -> Ok None | Some value -> let* value = int64 "model_inventory.refresh_if_older_than_seconds" value in let* () = if value < 1L || value > 86400L then Error (errorf "model inventory refresh age out of bounds") else Ok () in Ok (Some value) in
-        let* page_size, cursor = page "model_inventory" fields in Ok (Model_inventory_request { provider; endpoint; model_prefix; lifecycle; refresh_if_older_than_seconds; page_size; cursor })
+        let* page_size, cursor = page "model_inventory" Query_cursor.Model_inventory fields in Ok (Model_inventory_request { provider; endpoint; model_prefix; lifecycle; refresh_if_older_than_seconds; page_size; cursor })
     | "credit_status" ->
         let* fields = closed "credit_status query" ["provider"; "endpoint"; "include_ok"; "refresh_if_older_than_seconds"; "page_size"; "cursor"] query in
         let* provider = optional_provider "provider" fields in let* endpoint = optional_endpoint "endpoint" fields in
         let* include_ok = match optional "include_ok" fields with None -> Ok true | Some value -> bool "credit_status.include_ok" value in
         let* refresh_if_older_than_seconds = match optional "refresh_if_older_than_seconds" fields with None | Some `Null -> Ok None | Some value -> let* value = int64 "credit_status.refresh_if_older_than_seconds" value in let* () = if value < 1L || value > 86400L then Error (errorf "credit status refresh age out of bounds") else Ok () in Ok (Some value) in
-        let* page_size, cursor = page "credit_status" fields in Ok (Credit_status_request { provider; endpoint; include_ok; refresh_if_older_than_seconds; page_size; cursor })
+        let* page_size, cursor = page "credit_status" Query_cursor.Credit_status fields in Ok (Credit_status_request { provider; endpoint; include_ok; refresh_if_older_than_seconds; page_size; cursor })
     | "budget_status" ->
         let* fields = closed "budget_status query" ["policy_key"; "active_at"; "include_windows"] query in
         let* policy_key = match optional "policy_key" fields with None | Some `Null -> Ok None | Some value -> let* value = string "budget_status.policy_key" value in Ok (Some (Budget_policy_key.of_string value)) in
@@ -684,7 +684,8 @@ let query_response_of_json value =
   let* source = required "query response" "source" fields >>= string "query response.source" >>= source_of_string "query response.source" in
   let* freshness = required "query response" "freshness" fields >>= string "query response.freshness" >>= freshness_of_string "query response.freshness" in
   let* complete = required "query response" "complete" fields >>= bool "query response.complete" in
-  let* next_cursor = match optional "next_cursor" fields with None | Some `Null -> Ok None | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" Query_cursor.of_string value >>= fun value -> Ok (Some value) in
+  let* cursor_kind = validated "query response.kind" Query_cursor.kind_of_string kind in
+  let* next_cursor = match optional "next_cursor" fields with None | Some `Null -> Ok None | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" (Query_cursor.of_string_for_kind cursor_kind) value >>= fun value -> Ok (Some value) in
   let* result_value = required "query response" "result" fields in
   let* result = match kind with
     | "provider_status" -> provider_page_of_json "query response.provider_status" result_value >>= fun value -> Ok (Provider_status_result value)

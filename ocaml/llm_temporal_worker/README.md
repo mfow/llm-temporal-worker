@@ -201,6 +201,12 @@ mismatches stay on the error channel without raising in a workflow callback),
 while `Query.execute_with` is available for deterministic dispatch injection
 in tests.
 
+Response cursors retain the query kind that produced them. Reusing a cursor
+returned by one paginated query with a different query kind is rejected by the
+OCaml facade before an Activity is dispatched. `Query_cursor.of_string` remains
+available for manually supplied or fixture cursors whose origin is unknown;
+those cursors are still validated by the server.
+
 Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
 enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
 `Provider_request_id.t` cannot be interchanged, while `of_string` and

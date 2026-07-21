@@ -3,6 +3,10 @@ open Llm_temporal
 let failf format = Printf.ksprintf failwith format
 let ok = function Ok value -> value | Error error -> failf "%s" (Temporal.Error.message error)
 let cursor value = match Query_cursor.of_string value with Ok value -> value | Error message -> failwith message
+let tagged_cursor kind value =
+  match Query_cursor.of_string_for_kind kind value with
+  | Ok value -> value
+  | Error message -> failwith message
 let stream_id value = match Budget_stream_id.of_string value with Ok value -> value | Error message -> failwith message
 let digest value = match Sha256_digest.of_hex value with Ok value -> value | Error message -> failwith message
 let time value =
@@ -85,6 +89,34 @@ let () =
   (match envelope.query with
    | Provider_status_request { cursor = Some value; _ } when value = cursor -> ()
    | _ -> failwith "query cursor was not retained");
+
+  let provider_cursor = tagged_cursor Query_cursor.Provider_status "provider:page-3" in
+  let wrong_kind =
+    Query.Model_inventory
+      { (model_filter ()) with cursor = Some provider_cursor }
+  in
+  let dispatch_called = ref false in
+  let should_not_dispatch ?task_queue:_ _activity _envelope =
+    dispatch_called := true;
+    failwith "dispatch should not be called for a mismatched cursor"
+  in
+  (match Query.execute_with ~dispatch:should_not_dispatch ~operation_key ~context wrong_kind with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query cursor kind mismatch: expected model_inventory, got provider_status" -> ()
+   | Error error -> failf "unexpected cursor mismatch error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "mismatched query cursor was accepted");
+  if !dispatch_called then failwith "mismatched cursor was dispatched";
+
+  let encoded =
+    ok (V1_codec.encode_query_response
+          { (response (Provider_status_result { routes = [] })) with
+            next_cursor = Some provider_cursor })
+  in
+  (match V1_codec.decode_query_response encoded with
+   | Ok { next_cursor = Some value; _ }
+     when Query_cursor.kind value = Some Query_cursor.Provider_status -> ()
+   | Ok _ -> failwith "decoded response cursor lost its query kind"
+   | Error error -> failf "response cursor failed to round-trip: %s" (Temporal.Error.message error));
 
   let mismatched =
     { (response (Provider_status_result { routes = [] })) with
