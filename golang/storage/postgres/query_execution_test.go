@@ -73,6 +73,15 @@ func TestValidateQueryExecutionRequest(t *testing.T) {
 	}
 }
 
+func TestValidateQueryExecutionRequestRejectsRequestFingerprintMismatch(t *testing.T) {
+	now := time.Date(2026, time.July, 20, 8, 0, 0, 0, time.UTC)
+	request := validQueryExecutionRequest(now)
+	request.RequestJSON = []byte(`{"api_version":"llm.temporal/query/v1","kind":"provider_status","query":{"include_healthy":true}}`)
+	if err := validateQueryExecutionRequest(request, now); err == nil || !strings.Contains(err.Error(), "request fingerprint") {
+		t.Fatalf("validateQueryExecutionRequest() error = %v, want request fingerprint mismatch", err)
+	}
+}
+
 func TestValidateQueryExecutionCostVariants(t *testing.T) {
 	now := time.Date(2026, time.July, 20, 8, 0, 0, 0, time.UTC)
 	unknown := validQueryExecutionRequest(now)
