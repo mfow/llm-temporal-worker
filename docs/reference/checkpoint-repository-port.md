@@ -31,6 +31,15 @@ affinity children through one PostgreSQL unit of work. A retry of the same
 immutable row is accepted; a different payload for the same checkpoint ID
 returns `ErrCheckpointConflict`.
 
+Because the PostgreSQL schema stores `origin_operation_id` as a UUID and has
+no column for the original operation string, this adapter accepts only
+canonical (lower-case, untrimmed) UUID `OperationID` values when publishing a checkpoint. The general operation
+repository may still derive UUIDs for legacy string IDs, but checkpoints fail
+closed instead of storing that derived value: otherwise a read would return a
+different `OriginOperationID` and break canonical identity. Existing rows are
+therefore expected to contain the canonical UUID returned by the operation
+boundary.
+
 The adapter deliberately does not claim the full runtime boundary. Blob bytes
 must already be durable before `PutCheckpoint`, and operation/result rows are
 not published by this unit of work. It does not open blob locators, call a

@@ -69,6 +69,21 @@ func parseScopeUUID(value string) (uuid.UUID, error) {
 	return parsed, nil
 }
 
+// parseOperationUUID enforces the PostgreSQL checkpoint boundary's canonical
+// identifier representation. The established operations schema stores UUIDs
+// only, while OperationRepository still accepts legacy string IDs by hashing
+// them. A checkpoint cannot safely use that legacy derivation: the schema has
+// no column to retain the original string, so reading it back would change
+// OriginOperationID and invalidate the checkpoint's canonical identity.
+func parseOperationUUID(id state.OperationID) (uuid.UUID, error) {
+	raw := string(id)
+	parsed, err := uuid.Parse(raw)
+	if err != nil || parsed == uuid.Nil || parsed.String() != raw {
+		return uuid.Nil, errors.New("checkpoint origin operation ID must be a UUID")
+	}
+	return parsed, nil
+}
+
 func (repository DurableCheckpointRepository) relation(name string) (string, error) {
 	return repository.Namespace.Render(name)
 }
@@ -375,7 +390,11 @@ func (unit *checkpointUnitOfWork) PutCheckpoint(ctx context.Context, write state
 			return err
 		}
 	}
-	if err := unit.ensureOperation(ctx, scope, operationUUID(string(checkpoint.OriginOperationID))); err != nil {
+	originOperationID, err := parseOperationUUID(checkpoint.OriginOperationID)
+	if err != nil {
+		return err
+	}
+	if err := unit.ensureOperation(ctx, scope, originOperationID); err != nil {
 		return err
 	}
 	if cacheID != nil {
@@ -388,7 +407,7 @@ func (unit *checkpointUnitOfWork) PutCheckpoint(ctx context.Context, write state
 		return err
 	}
 	query := "INSERT INTO " + relation + " (checkpoint_id, scope_id, public_id_hmac, handle_key_id, parent_checkpoint_id, checkpoint_kind, depth, origin_operation_id, origin_cache_entry_id, delta_blob_id, response_blob_id, settings_patch_blob_id, materialized_snapshot_blob_id, canonical_lineage_digest, materialized_settings_digest, tool_frontier_digest, schema_version, compiler_epoch, compaction_policy_version, compaction_prompt_version, compacted_through_checkpoint_id, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (checkpoint_id) DO NOTHING"
-	command, err := unit.tx.Exec(ctx, query, id, scope, checkpoint.PublicIDHMAC[:], checkpoint.HandleKeyID, parentID, checkpoint.Kind, checkpoint.Depth, operationUUID(string(checkpoint.OriginOperationID)), cacheID, deltaID, responseID, settingsID, snapshotID, checkpoint.CanonicalLineageDigest[:], checkpoint.MaterializedSettingsDigest[:], checkpoint.ToolFrontierDigest[:], checkpoint.SchemaVersion, checkpoint.CompilerEpoch, checkpoint.CompactionPolicyVersion, checkpoint.CompactionPromptVersion, compactedID, checkpoint.CreatedAt.UTC(), checkpoint.ExpiresAt.UTC())
+	command, err := unit.tx.Exec(ctx, query, id, scope, checkpoint.PublicIDHMAC[:], checkpoint.HandleKeyID, parentID, checkpoint.Kind, checkpoint.Depth, originOperationID, cacheID, deltaID, responseID, settingsID, snapshotID, checkpoint.CanonicalLineageDigest[:], checkpoint.MaterializedSettingsDigest[:], checkpoint.ToolFrontierDigest[:], checkpoint.SchemaVersion, checkpoint.CompilerEpoch, checkpoint.CompactionPolicyVersion, checkpoint.CompactionPromptVersion, compactedID, checkpoint.CreatedAt.UTC(), checkpoint.ExpiresAt.UTC())
 	if err != nil {
 		return redactPostgresError(fmt.Errorf("insert PostgreSQL checkpoint: %w", err))
 	}
@@ -491,6 +510,10 @@ func (unit *checkpointUnitOfWork) sameCheckpointRow(ctx context.Context, scope u
 	if err != nil {
 		return false, err
 	}
+	originOperationID, err := parseOperationUUID(checkpoint.OriginOperationID)
+	if err != nil {
+		return false, err
+	}
 	var publicHMAC, lineage, settings, frontier []byte
 	var storedScope uuid.UUID
 	var handleKey, kind, compiler string
@@ -511,7 +534,7 @@ func (unit *checkpointUnitOfWork) sameCheckpointRow(ctx context.Context, scope u
 		{sameDatabaseInstant(created, checkpoint.CreatedAt)}, {sameDatabaseInstant(expires, checkpoint.ExpiresAt)},
 		{bytesEqual(publicHMAC, checkpoint.PublicIDHMAC[:])}, {bytesEqual(lineage, checkpoint.CanonicalLineageDigest[:])},
 		{bytesEqual(settings, checkpoint.MaterializedSettingsDigest[:])}, {bytesEqual(frontier, checkpoint.ToolFrontierDigest[:])},
-		{operation == operationUUID(string(checkpoint.OriginOperationID))}, {optionalUUIDEqual(parent, checkpoint.ParentID)},
+		{operation == originOperationID}, {optionalUUIDEqual(parent, checkpoint.ParentID)},
 		{optionalUUIDEqual(originCache, checkpoint.OriginCacheEntryID)}, {optionalUUIDEqual(delta, checkpoint.DeltaBlob.ID)},
 		{optionalUUIDEqual(response, checkpoint.ResponseBlob.ID)}, {optionalUUIDEqual(patch, checkpoint.SettingsPatchBlob.ID)},
 		{optionalUUIDEqual(snapshot, optionalBlobID(checkpoint.MaterializedSnapshotBlob))}, {optionalUUIDEqual(compacted, checkpoint.CompactedThroughID)},
