@@ -63,6 +63,13 @@ let mismatch expected actual =
   Temporal.Error.codec
     ~message:(Printf.sprintf "query result kind mismatch: expected %s, got %s" expected actual)
 
+let operation_key_mismatch ~expected ~actual =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf
+                "query response operation key mismatch: expected %s, got %s"
+                (Operation_key.to_string expected)
+                (Operation_key.to_string actual))
+
 let cursor_mismatch expected actual =
   Temporal.Error.codec
     ~message:(Printf.sprintf "query response cursor kind mismatch: expected %s, got %s"
@@ -137,6 +144,12 @@ let execute_with ?task_queue ~dispatch ~operation_key ~context query =
       let envelope = to_envelope ~operation_key ~context query in
       match Llm_temporal_invocation.invoke_query_once ?task_queue ~dispatch envelope with
       | Error error -> Error error
+      | Ok response when
+          not (String.equal
+                 (Operation_key.to_string response.operation_key)
+                 (Operation_key.to_string operation_key)) ->
+          Error (operation_key_mismatch ~expected:operation_key
+                   ~actual:response.operation_key)
       | Ok response -> of_response query response
 
 let activity_dispatch ?task_queue activity input =
