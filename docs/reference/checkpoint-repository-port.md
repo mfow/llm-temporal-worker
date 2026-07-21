@@ -26,10 +26,12 @@ history; a materializer decides whether a caller may use one at its read time.
 `golang/storage/postgres` now contains the first adapter for this port:
 `DurableCheckpointRepository`. It performs scope-qualified reads, verifies blob
 metadata and scope before publication, checks parent depth and origin
-operation/cache scope, and writes the checkpoint row plus provider-state and
-affinity children through one PostgreSQL unit of work. A retry of the same
-immutable row is accepted; a different payload for the same checkpoint ID
-returns `ErrCheckpointConflict`.
+operation/cache scope, checks that parent and compaction-lineage references
+belong to the same scope, and writes the checkpoint row plus provider-state and
+affinity children through one PostgreSQL unit of work. Reads repeat the
+lineage-scope check so a manually corrupted row cannot expose a cross-tenant
+parent or compaction reference. A retry of the same immutable row is accepted;
+a different payload for the same checkpoint ID returns `ErrCheckpointConflict`.
 
 Because the PostgreSQL schema stores `origin_operation_id` as a UUID and has
 no column for the original operation string, this adapter accepts only
