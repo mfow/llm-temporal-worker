@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
@@ -127,6 +128,8 @@ type productionClientSet struct {
 	close           func(context.Context) error
 	probes          []DependencyProbe
 	providerControl engine.ProviderStatusRecorder
+	queryRepos      PostgresQueryRepositories
+	queryService    activity.QueryService
 }
 
 func (set *productionClientSet) Close(ctx context.Context) error {
@@ -150,6 +153,26 @@ func (set *productionClientSet) ProviderStatusRecorder() engine.ProviderStatusRe
 		return nil
 	}
 	return set.providerControl
+}
+
+// QueryRepositories returns the immutable read-side repositories constructed
+// for this configuration snapshot. Nil entries are intentional capabilities:
+// callers must fail closed when a query family has not been provisioned.
+func (set *productionClientSet) QueryRepositories() PostgresQueryRepositories {
+	if set == nil {
+		return PostgresQueryRepositories{}
+	}
+	return set.queryRepos
+}
+
+// QueryService returns the optional typed control-plane service supplied by
+// the same snapshot-scoped PostgreSQL closer. It is nil until authorization,
+// cursor signing, and concrete handlers are explicitly configured.
+func (set *productionClientSet) QueryService() activity.QueryService {
+	if set == nil {
+		return nil
+	}
+	return set.queryService
 }
 
 func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEngineFactory, error) {
@@ -237,6 +260,11 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	var providerControl engine.ProviderStatusRecorder
 	if source, ok := postgresCloser.(providerStatusRepositorySource); ok {
 		providerControl = newPostgresProviderStatusRecorder(source)
+	}
+	queryRepos := queryRepositoriesFromCloser(postgresCloser)
+	var queryService activity.QueryService
+	if source, ok := postgresCloser.(queryServiceSource); ok {
+		queryService = source.QueryService()
 	}
 	clock := factory.options.Clock
 	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: keyOptions, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
@@ -344,6 +372,8 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	return engineValue, &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
+		queryRepos:      queryRepos,
+		queryService:    queryService,
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
 				closeContext = context.Background()
@@ -994,6 +1024,11 @@ type postgresPoolCloser struct {
 
 func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.ProviderStatusRepository {
 	return postgresstore.DefaultProviderStatusRepository(closer.pool, closer.namespace)
+}
+
+func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
+	repository := closer.ProviderStatusRepository()
+	return PostgresQueryRepositories{ProviderStatus: &repository}
 }
 
 func (closer postgresPoolCloser) Close() error {
