@@ -150,6 +150,26 @@ func validateQueryExecutionJSON(name string, data []byte) error {
 	return err
 }
 
+// validateStoredQueryExecutionRequestFingerprint binds the persisted request
+// JSON to its keyed fingerprint. The idempotent replay path already compares
+// the stored fingerprint with the caller's request, but that alone would not
+// detect direct mutation of request_jsonb while leaving the HMAC untouched.
+func validateStoredQueryExecutionRequestFingerprint(key, requestJSON, fingerprint []byte) error {
+	if len(fingerprint) != keyDigestBytes {
+		return errors.New("PostgreSQL query execution has invalid request fingerprint HMAC length")
+	}
+	canonicalRequest, err := canonicalQueryExecutionJSON("stored request", requestJSON)
+	if err != nil {
+		return err
+	}
+	requestDigest := sha256.Sum256(canonicalRequest)
+	expected := operationHMAC(key, "query-request-fingerprint", requestDigest[:])
+	if !hmac.Equal(fingerprint, expected[:]) {
+		return errors.New("PostgreSQL query execution request fingerprint does not match stored request JSON")
+	}
+	return nil
+}
+
 var forbiddenAuditFieldNames = map[string]struct{}{
 	"authorization": {}, "credential": {}, "credentials": {}, "model_output": {},
 	"prompt": {}, "raw_provider_error": {}, "raw_response": {}, "response_body": {},
@@ -370,6 +390,9 @@ func (repository QueryExecutionRepository) Record(ctx context.Context, request Q
 		copy(existing.RequestFingerprintHMAC[:], storedFingerprint)
 		if !hmac.Equal(storedFingerprint, requestFingerprintHMAC[:]) {
 			return ErrQueryExecutionConflict
+		}
+		if err := validateStoredQueryExecutionRequestFingerprint(key, storedRequest, storedFingerprint); err != nil {
+			return err
 		}
 		if err := hydrateQueryExecutionRecord(&existing, scope.ID, storedRequest, storedResponse, storedDigest, actualText, storedMethod, storedReason); err != nil {
 			return err

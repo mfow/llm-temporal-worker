@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +83,13 @@ func TestQueryExecutionPersistenceIntegration(t *testing.T) {
 	}
 	if storedRequest == "" || storedResponse == "" {
 		t.Fatal("stored control JSON or response digest is empty")
+	}
+	mutatedStoredRequest := []byte(`{"api_version":"llm.temporal/query/v1","kind":"provider_status","query":{"include_healthy":true}}`)
+	if _, err := pool.Exec(ctx, "UPDATE "+executions+" SET request_jsonb=$1::jsonb WHERE query_execution_id=$2", mutatedStoredRequest, record.ID); err != nil {
+		t.Fatalf("mutate stored request fixture: %v", err)
+	}
+	if _, err := repository.Record(ctx, request); err == nil || !strings.Contains(err.Error(), "does not match stored request JSON") {
+		t.Fatalf("mutated stored request replay error = %v, want persisted fingerprint mismatch", err)
 	}
 	if len(unknownRecord.RequestJSON) == 0 {
 		t.Fatal("unknown-cost record lost request JSON")
