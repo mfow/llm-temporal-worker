@@ -787,6 +787,31 @@ func (r OperationRepository) ProviderOperation(ctx context.Context, id string) (
 	return string(plaintext), nil
 }
 
+// ProviderPollAfter returns the provider's persisted next-poll guidance for a
+// pending operation. A missing value means the provider supplied no delay;
+// the encrypted provider operation itself remains behind ProviderOperation.
+func (r OperationRepository) ProviderPollAfter(ctx context.Context, id string) (time.Time, error) {
+	if err := r.validate(); err != nil {
+		return time.Time{}, err
+	}
+	relation, err := r.Namespace.Render("operations")
+	if err != nil {
+		return time.Time{}, err
+	}
+	opID := operationUUID(id)
+	var pollAfter *time.Time
+	if err := r.Pool.QueryRow(ctx, "SELECT poll_after FROM "+relation+" WHERE operation_id=$1", opID).Scan(&pollAfter); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, admission.ErrOperationNotFound
+		}
+		return time.Time{}, redactPostgresError(err)
+	}
+	if pollAfter == nil {
+		return time.Time{}, nil
+	}
+	return pollAfter.UTC(), nil
+}
+
 func contextHashForProvider(scopeID, operationID uuid.UUID, digest [32]byte) [32]byte {
 	hash, _ := contextDigest(EnvelopeContext{ScopeID: scopeID, OperationID: operationID, PayloadKind: "provider-operation", Digest: digest})
 	return hash

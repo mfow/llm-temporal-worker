@@ -94,6 +94,47 @@ func TestPollProviderOperationNeverSubmitsAndResumesPendingID(t *testing.T) {
 	}
 }
 
+func TestPollProviderOperationHonorsInitialProviderGuidance(t *testing.T) {
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{
+		State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted,
+		Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}},
+	}}}
+	var slept []time.Duration
+	result, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", nil, ProviderPollOptions{
+		MaxPolls:     1,
+		InitialDelay: 5 * time.Second,
+		Sleep:        func(_ context.Context, delay time.Duration) error { slept = append(slept, delay); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Response.Status != llm.ResponseStatusCompleted || adapter.polls != 1 {
+		t.Fatalf("result/polls = %#v/%d, want completed/1", result.Response, adapter.polls)
+	}
+	if len(slept) != 1 || slept[0] != 5*time.Second {
+		t.Fatalf("initial sleep = %v, want provider guidance", slept)
+	}
+}
+
+func TestPollProviderOperationCapsInitialGuidance(t *testing.T) {
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{
+		State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted,
+		Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}},
+	}}}
+	var slept []time.Duration
+	if _, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", nil, ProviderPollOptions{
+		MaxPolls:        1,
+		MaxPollInterval: time.Second,
+		InitialDelay:    5 * time.Second,
+		Sleep:           func(_ context.Context, delay time.Duration) error { slept = append(slept, delay); return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(slept) != 1 || slept[0] != time.Second {
+		t.Fatalf("initial sleep = %v, want capped guidance", slept)
+	}
+}
+
 func TestPollProviderOperationCapsGuidanceAndLeavesPendingRetryable(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{
 		{State: provider.ResumablePending, ProviderOperationID: "provider-op", NextPollAfter: 10 * time.Second, Dispatch: provider.DispatchAccepted},

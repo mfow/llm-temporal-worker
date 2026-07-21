@@ -81,7 +81,7 @@ func (engine *Engine) handleResumableOutcome(ctx context.Context, operation admi
 		}); err != nil {
 			return provider.Result{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "provider operation persistence failed", err), false
 		}
-		result, pollErr := PollProviderOperation(ctx, resumable, call, outcome.ProviderOperationID, observer, ProviderPollOptions{})
+		result, pollErr := PollProviderOperation(ctx, resumable, call, outcome.ProviderOperationID, observer, ProviderPollOptions{InitialDelay: outcome.NextPollAfter})
 		if pollErr != nil {
 			mapped := pendingPollError(pollErr)
 			if mapped.Retry != provider.RetrySameOperation && mapped.Code != provider.CodeCanceled {
@@ -114,6 +114,16 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	providerOperationID, err := store.ProviderOperation(ctx, operation.ID)
 	if err != nil {
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseStateLoad, provider.DispatchAccepted, provider.RetrySameOperation, "provider operation could not be loaded", err)
+	}
+	initialDelay := time.Duration(0)
+	if schedule, ok := engine.dependencies.Admission.(admission.ProviderPendingSchedule); ok {
+		pollAfter, scheduleErr := schedule.ProviderPollAfter(ctx, operation.ID)
+		if scheduleErr != nil {
+			return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseStateLoad, provider.DispatchAccepted, provider.RetrySameOperation, "provider poll schedule could not be loaded", scheduleErr)
+		}
+		if now := engine.dependencies.Clock(); !pollAfter.IsZero() && pollAfter.After(now) {
+			initialDelay = pollAfter.Sub(now)
+		}
 	}
 	index := -1
 	for i, candidate := range quoted.candidates {
@@ -159,7 +169,7 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "provider_wait", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 		return llm.Response{}, err
 	}
-	result, pollErr := PollProviderOperation(ctx, resumable, call, providerOperationID, observer, ProviderPollOptions{})
+	result, pollErr := PollProviderOperation(ctx, resumable, call, providerOperationID, observer, ProviderPollOptions{InitialDelay: initialDelay})
 	if pollErr != nil {
 		mapped := pendingPollError(pollErr)
 		engine.recordProviderStatus(ctx, snapshot, operation, candidate.candidate, provider.Result{}, mapped)

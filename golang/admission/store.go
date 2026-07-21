@@ -1,6 +1,9 @@
 package admission
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type AdmissionStore interface {
 	Begin(context.Context, BeginRequest) (BeginResult, error)
@@ -19,4 +22,12 @@ type ProviderPendingStore interface {
 	AdmissionStore
 	MarkProviderPending(context.Context, ProviderPendingRequest) error
 	ProviderOperation(context.Context, string) (string, error)
+}
+
+// ProviderPendingSchedule is an optional extension for durable repositories
+// that retain provider-provided next-poll guidance. Engines use it when a
+// retry resumes an already accepted operation; stores that do not expose the
+// schedule remain safe but may poll immediately.
+type ProviderPendingSchedule interface {
+	ProviderPollAfter(context.Context, string) (time.Time, error)
 }
