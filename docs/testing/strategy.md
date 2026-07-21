@@ -269,6 +269,13 @@ explicit preloaded-Lua compatibility mode. It tests:
 - continuation record, handle-index, and child operation-idempotency TTLs,
   plus expired-index versus dangling-index fail-closed behavior.
 
+The integration gate also runs the complete Function-mode suite twice against
+the same Redis daemon with two independently generated key prefixes. A focused
+cross-prefix check writes admission, continuation, and throttle state in both
+namespaces, removes one prefix, and verifies that the other remains readable.
+This proves that prefix isolation is a live shared-server property rather than
+only a key-format or separate-process test.
+
 Concurrency tests coordinate goroutines with barriers rather than sleeps and
 assert accepted total never exceeds the limit. Race tests run for memory and
 domain packages.
