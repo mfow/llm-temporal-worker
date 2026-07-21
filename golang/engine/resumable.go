@@ -162,12 +162,14 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	result, pollErr := PollProviderOperation(ctx, resumable, call, providerOperationID, observer, ProviderPollOptions{})
 	if pollErr != nil {
 		mapped := pendingPollError(pollErr)
+		engine.recordProviderStatus(ctx, snapshot, operation, candidate.candidate, provider.Result{}, mapped)
 		if mapped.Retry == provider.RetrySameOperation || mapped.Code == provider.CodeCanceled {
 			mapped.OperationID = operation.ID
 			return llm.Response{}, mapped
 		}
 		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 	}
+	engine.recordProviderStatus(ctx, snapshot, operation, candidate.candidate, result, nil)
 	return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
 }
 

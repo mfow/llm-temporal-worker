@@ -8,6 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -20,6 +21,8 @@ import (
 // in-flight request's route, capability, or price decision.
 type Snapshot struct {
 	Version                  string
+	ConfigDigest             [32]byte
+	ConfigEpoch              string
 	Routes                   routing.Catalog
 	Health                   routing.HealthView
 	Prices                   pricing.Resolver
@@ -92,6 +95,15 @@ type Heartbeat interface {
 	Beat(context.Context, Progress) error
 }
 
+// ProviderStatusRecorder receives bounded, snapshot-scoped provider
+// observations. Implementations may persist the observation durably, but a
+// recorder outage must never change the provider result returned to a caller.
+// Implementations must not retain prompts, outputs, credentials, or raw
+// provider response bodies.
+type ProviderStatusRecorder interface {
+	RecordProviderStatus(context.Context, control.StatusObservation) error
+}
+
 type Progress struct {
 	OperationID string
 	Phase       string
@@ -115,6 +127,7 @@ type Dependencies struct {
 	MaxAttempts         int
 	FinalizationTimeout time.Duration
 	Heartbeat           Heartbeat
+	ProviderControl     ProviderStatusRecorder
 }
 
 func (dependencies Dependencies) validate() error {

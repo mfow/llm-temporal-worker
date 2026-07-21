@@ -124,8 +124,9 @@ type ProductionEngineFactory struct {
 // and exposes only the runtime's narrow dependency probe capability. The app
 // package still sees it solely as a ClientSet.
 type productionClientSet struct {
-	close  func(context.Context) error
-	probes []DependencyProbe
+	close           func(context.Context) error
+	probes          []DependencyProbe
+	providerControl engine.ProviderStatusRecorder
 }
 
 func (set *productionClientSet) Close(ctx context.Context) error {
@@ -140,6 +141,15 @@ func (set *productionClientSet) DependencyProbes() []DependencyProbe {
 		return nil
 	}
 	return append([]DependencyProbe(nil), set.probes...)
+}
+
+// ProviderStatusRecorder exposes the snapshot-scoped recorder for adjacent
+// runtime/query composition without exposing PostgreSQL credentials or pools.
+func (set *productionClientSet) ProviderStatusRecorder() engine.ProviderStatusRecorder {
+	if set == nil {
+		return nil
+	}
+	return set.providerControl
 }
 
 func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEngineFactory, error) {
@@ -223,6 +233,10 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err != nil {
 		closeOwned()
 		return nil, nil, err
+	}
+	var providerControl engine.ProviderStatusRecorder
+	if source, ok := postgresCloser.(providerStatusRepositorySource); ok {
+		providerControl = newPostgresProviderStatusRecorder(source)
 	}
 	clock := factory.options.Clock
 	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: keyOptions, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
@@ -317,7 +331,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	engineValue, err := engine.New(engine.Dependencies{
 		Snapshots: engine.StaticSnapshot{Value: engineSnapshot}, Planner: planner, Adapters: engine.AdapterMap(adapters), Admission: admissionStore, Continuations: continuationStore, Results: results,
-		Clock: clock, Estimator: estimator, MaxAttempts: value.Limits.RouteAttempts, FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout),
+		Clock: clock, Estimator: estimator, MaxAttempts: value.Limits.RouteAttempts, FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout), ProviderControl: providerControl,
 	})
 	if err != nil {
 		closeAll()
@@ -328,7 +342,8 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		probes = append(probes, postgresProbe)
 	}
 	return engineValue, &productionClientSet{
-		probes: probes,
+		probes:          probes,
+		providerControl: providerControl,
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
 				closeContext = context.Background()
@@ -967,12 +982,19 @@ func defaultPostgresFactory(ctx context.Context, value config.PostgresConfig, na
 		pool.Close()
 		return nil, nil, err
 	}
-	return probe, postgresPoolCloser{pool: pool}, nil
+	return probe, postgresPoolCloser{pool: pool, namespace: namespace}, nil
 }
 
 type postgresProbeClient struct{ pool *pgxpool.Pool }
 
-type postgresPoolCloser struct{ pool *pgxpool.Pool }
+type postgresPoolCloser struct {
+	pool      *pgxpool.Pool
+	namespace postgresstore.Namespace
+}
+
+func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.ProviderStatusRepository {
+	return postgresstore.DefaultProviderStatusRepository(closer.pool, closer.namespace)
+}
 
 func (closer postgresPoolCloser) Close() error {
 	if closer.pool != nil {

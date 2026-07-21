@@ -70,6 +70,8 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 	}
 	return engine.Snapshot{
 		Version:                  snapshot.ConfigVersion(),
+		ConfigDigest:             snapshot.Digest(),
+		ConfigEpoch:              snapshot.ConfigVersion(),
 		Routes:                   routes,
 		Health:                   routing.HealthView{},
 		Prices:                   pricing.NewResolver(price),
