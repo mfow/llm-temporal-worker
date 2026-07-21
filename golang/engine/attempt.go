@@ -187,6 +187,9 @@ func (engine *Engine) continueAfterDefiniteFailure(ctx context.Context, operatio
 		if value.estimate.MicroUSD > quoted.maximum {
 			quoted.maximum = value.estimate.MicroUSD
 		}
+		if value.estimate.CostUSD.Cmp(quoted.maximumUSD) > 0 {
+			quoted.maximumUSD = value.estimate.CostUSD
+		}
 	}
 	lease := snapshot.ReservationLease
 	if lease <= 0 {
@@ -195,7 +198,7 @@ func (engine *Engine) continueAfterDefiniteFailure(ctx context.Context, operatio
 	request := admission.ContinueRequest{
 		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
 		Outcome:   admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ServiceClass: string(candidate.AttemptedClass), Dispatch: admission.Rejected}},
-		Remaining: quoted.maximum, Reservations: aggregateReservations(remaining), LeaseUntil: engine.dependencies.Clock().Add(lease), ExpiresAt: operation.ExpiresAt,
+		Remaining: quoted.maximum, RemainingUSD: quoted.maximumUSD, Reservations: aggregateReservations(remaining), LeaseUntil: engine.dependencies.Clock().Add(lease), ExpiresAt: operation.ExpiresAt,
 	}
 	if failure != nil && failure.Provider.RequestID != "" {
 		request.Outcome.ProviderRequestID = failure.Provider.RequestID

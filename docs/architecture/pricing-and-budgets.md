@@ -131,6 +131,14 @@ windows that could match any candidate; this may over-reserve an endpoint-
 specific budget but cannot undercount a later route. Only one candidate is
 billable at a time.
 
+At the engine admission boundary, the exact USD maximum is carried in
+`BeginRequest.ReservationUSD` (and `ContinueRequest.RemainingUSD`) alongside
+the bounded `MicroUSD` compatibility amount. Exact-capable durable stores use
+the USD value for operation and budget journal rows; legacy Redis admission
+continues enforcing the independently validated microUSD projection. This
+prevents sub-micro-dollar estimates from being silently recorded as zero while
+preserving the conservative integer materialization required by Redis.
+
 After a definite uncharged failure the remaining-plan reservation is reused or
 reduced. After a definite charged failure, `Continue` atomically converts the
 attempt's matching share to incurred cost, refunds other old-window shares, and

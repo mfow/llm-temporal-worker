@@ -44,6 +44,12 @@ func (candidate quotedCandidate) priceVersion() string {
 type quotedPlan struct {
 	candidates []quotedCandidate
 	maximum    pricing.MicroUSD
+	// maximumUSD carries the authoritative exact reservation alongside the
+	// legacy microUSD compatibility amount used by Redis admission stores.
+	// Keeping both values lets exact PostgreSQL operation records avoid a
+	// lossy conversion while older stores continue to enforce their bounded
+	// integer representation.
+	maximumUSD pricing.USD
 }
 
 func (engine *Engine) Generate(ctx context.Context, request llm.Request) (response llm.Response, resultErr error) {
@@ -228,10 +234,13 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		if err != nil {
 			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate cost estimate failed", err)
 		}
-		reservations := reservations(matches, estimate.MicroUSD, now)
+		reservations := reservations(matches, estimate.MicroUSD, estimate.CostUSD, now)
 		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: &entry, estimate: estimate, reservations: reservations})
 		if estimate.MicroUSD > quoted.maximum {
 			quoted.maximum = estimate.MicroUSD
+		}
+		if estimate.CostUSD.Cmp(quoted.maximumUSD) > 0 {
+			quoted.maximumUSD = estimate.CostUSD
 		}
 	}
 	if len(quoted.candidates) == 0 {
@@ -246,13 +255,14 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 	return quoted, nil
 }
 
-func reservations(matches []budget.MatchedWindow, amount pricing.MicroUSD, now time.Time) []admission.WindowReservation {
+func reservations(matches []budget.MatchedWindow, amount pricing.MicroUSD, amountUSD pricing.USD, now time.Time) []admission.WindowReservation {
 	result := make([]admission.WindowReservation, 0, len(matches))
 	for _, value := range matches {
 		_, bucket := value.Window.Range(now)
 		result = append(result, admission.WindowReservation{
 			PolicyID: value.PolicyID, WindowID: value.Window.ID, Bucket: bucket, Amount: amount,
-			Limit: value.Window.Limit, BucketNanos: value.Window.Bucket.Nanoseconds(), DurationNanos: value.Window.Duration.Nanoseconds(),
+			Limit: value.Window.Limit, AmountUSD: amountUSD, LimitUSD: value.Window.LimitUSD,
+			BucketNanos: value.Window.Bucket.Nanoseconds(), DurationNanos: value.Window.Duration.Nanoseconds(),
 		})
 	}
 	return result
@@ -270,7 +280,8 @@ func (engine *Engine) beginOrResume(ctx context.Context, request llm.Request, sn
 	reservations := aggregateReservations(quoted.candidates)
 	result, err := engine.dependencies.Admission.Begin(ctx, admission.BeginRequest{
 		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest, Reservation: quoted.maximum,
-		Reservations: reservations, ConfigVersion: snapshot.Version, PriceVersion: priceVersion(quoted.candidates),
+		ReservationUSD: quoted.maximumUSD,
+		Reservations:   reservations, ConfigVersion: snapshot.Version, PriceVersion: priceVersion(quoted.candidates),
 		LeaseUntil: now.Add(lease), ExpiresAt: now.Add(retention),
 	})
 	if err != nil {
@@ -386,7 +397,7 @@ func aggregateReservations(candidates []quotedCandidate) []admission.WindowReser
 		for _, reservation := range candidate.reservations {
 			id := key{policy: reservation.PolicyID, window: reservation.WindowID}
 			current, ok := byKey[id]
-			if !ok || reservation.Amount > current.Amount {
+			if !ok || reservation.Amount > current.Amount || (reservation.Amount == current.Amount && reservation.AmountUSD.Cmp(current.AmountUSD) > 0) {
 				byKey[id] = reservation
 			}
 		}

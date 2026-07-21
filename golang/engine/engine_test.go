@@ -142,6 +142,18 @@ type testHarness struct {
 	clock     time.Time
 }
 
+// recordingAdmission observes the exact reservation envelope without changing
+// the behavior of the in-memory compatibility store.
+type recordingAdmission struct {
+	admission.AdmissionStore
+	begin admission.BeginRequest
+}
+
+func (store *recordingAdmission) Begin(ctx context.Context, request admission.BeginRequest) (admission.BeginResult, error) {
+	store.begin = request
+	return store.AdmissionStore.Begin(ctx, request)
+}
+
 func newHarness(t testing.TB, adapter provider.Adapter) testHarness {
 	t.Helper()
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
@@ -337,6 +349,49 @@ func TestGenerateUsesOnlyExplicitFallbackWithMatchingRequiredBudgetPolicy(t *tes
 	}
 	if len(operation.Reservations) != 1 || operation.Reservations[0].PolicyID != "standard-only" {
 		t.Fatalf("operation reservations = %#v, want standard-only policy", operation.Reservations)
+	}
+}
+
+func TestGenerateCarriesExactReservationAlongsideRedisCompatibilityAmount(t *testing.T) {
+	adapter := &fakeAdapter{name: "exact-reservation", response: successfulResponse()}
+	base := memory.NewAdmissionStore(memory.AdmissionOptions{Clock: func() time.Time {
+		return time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	}})
+	recording := &recordingAdmission{AdmissionStore: base}
+	harness := newHarnessWithAdmission(t, adapter, recording, func() time.Time {
+		return time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	})
+	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
+	entries := []pricing.Entry{{
+		Provider: "provider-1", Family: string(provider.FamilyOpenAIResponses), EndpointID: "endpoint-1",
+		Region: "us-east-1", Model: "provider-model", ProviderTier: "standard-tier", Version: "submicro",
+		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("0"), OutputPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0.000000000000000001")},
+	}}
+	catalog, err := pricing.CompileUSD("submicro", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Prices = pricing.NewResolver(catalog)
+	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+	response, err := harness.engine.Generate(context.Background(), baseRequest("exact-reservation"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := recording.begin.ReservationUSD.String(), "0.000000000000000001"; got != want {
+		t.Fatalf("exact reservation = %s, want %s", got, want)
+	}
+	if recording.begin.Reservation != 1 {
+		t.Fatalf("microUSD compatibility reservation = %d, want conservative ceiling 1", recording.begin.Reservation)
+	}
+	operation, err := harness.admission.Get(context.Background(), response.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.ReservedCostUSD == nil || operation.ReservedCostUSD.String() != "0.000000000000000001" {
+		t.Fatalf("durable exact reservation = %v, want one atto-dollar", operation.ReservedCostUSD)
+	}
+	if response.Cost.ReservedCostUSD == nil || response.Cost.ReservedCostUSD.String() != "0.000000000000000001" {
+		t.Fatalf("response exact reservation = %v, want one atto-dollar", response.Cost.ReservedCostUSD)
 	}
 }
 
