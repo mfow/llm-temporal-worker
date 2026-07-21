@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDurableStateRequiresPostgresNamespaceAndCredentials(t *testing.T) {
 	state := StateConfig{
@@ -17,7 +20,7 @@ func TestDurableStateRequiresPostgresNamespaceAndCredentials(t *testing.T) {
 	}
 }
 
-func TestMemoryStateRemainsRejectedUntilFactorySupport(t *testing.T) {
+func TestMemoryStateUsesNoExternalStateConfiguration(t *testing.T) {
 	state := StateConfig{
 		Kind:                       StateKindMemory,
 		OperationTerminalRetention: 24,
@@ -26,8 +29,33 @@ func TestMemoryStateRemainsRejectedUntilFactorySupport(t *testing.T) {
 		ReservationLease:           1,
 		Postgres:                   PostgresConfig{Database: "worker_db", Schema: "worker_state", MaxConnections: 1, DialTimeout: 1, StatementTimeout: 1, LockTimeout: 1},
 	}
-	if err := state.validate("development"); err == nil {
-		t.Fatal("memory state was accepted before the production factory supports memory stores")
+	if err := state.validate("development"); err != nil {
+		t.Fatalf("memory state with no external dependencies rejected: %v", err)
+	}
+}
+
+func TestMemoryStateIsDevelopmentOnly(t *testing.T) {
+	state := StateConfig{
+		Kind:                       StateKindMemory,
+		OperationTerminalRetention: 24,
+		AmbiguousRetention:         48,
+		ContinuationRetention:      24,
+		ReservationLease:           1,
+	}
+	if err := state.validate("production"); err == nil {
+		t.Fatal("memory state was accepted in production")
+	}
+}
+
+func TestMemoryStateRequiresMemoryBlobStore(t *testing.T) {
+	if err := validateStateBlobComposition(StateKindMemory, "file"); err == nil || !strings.Contains(err.Error(), "blob_store.kind must be memory") {
+		t.Fatalf("memory state/blob mismatch error = %v", err)
+	}
+}
+
+func TestMemoryBlobStoreRequiresMemoryState(t *testing.T) {
+	if err := validateStateBlobComposition(StateKindRedis, "memory"); err == nil || !strings.Contains(err.Error(), "blob_store.kind memory requires state.kind memory") {
+		t.Fatalf("memory blob/state mismatch error = %v", err)
 	}
 }
 

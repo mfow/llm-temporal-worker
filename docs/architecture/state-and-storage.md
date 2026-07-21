@@ -244,12 +244,20 @@ atomic admission, an injected clock, immutable copied byte slices, and bounded
 maps with expiry. It is not a simplified fake: the common conformance suite
 runs unchanged against memory and Redis.
 
-Memory mode is rejected when:
+Memory mode is available only as the explicitly development-only
+`state.kind: memory` composition. The runtime factory constructs the in-process
+admission, continuation, and content-addressed blob stores without dialing
+Redis, PostgreSQL, or an external blob service. It remains rejected when:
 
-- more than one worker replica is configured;
 - production mode is enabled;
 - durable continuation is required across restart;
-- configuration reload would orphan live operations.
+- configuration reload would orphan live operations;
+- an external blob-store kind is selected.
+
+The process-local blob map enforces the configured per-blob byte limit and
+expiry cleanup; a lifecycle owner should call its `Sweep` method when idle.
+Restart loses all memory state, so this mode cannot provide crash recovery,
+multi-replica admission, backups, or release evidence.
 
 ## Leases and recovery
 

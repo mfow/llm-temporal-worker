@@ -39,6 +39,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	"github.com/mfow/llm-temporal-worker/golang/storage/fileblob"
+	memorystore "github.com/mfow/llm-temporal-worker/golang/storage/memory"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	"github.com/mfow/llm-temporal-worker/golang/storage/s3blob"
@@ -196,6 +197,9 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err != nil {
 		return nil, nil, err
 	}
+	if value.State.Kind == config.StateKindMemory {
+		return factory.buildMemory(ctx, value, engineSnapshot, adapters)
+	}
 	redisClient, redisOwned, err := factory.buildRedis(ctx, value)
 	if err != nil {
 		return nil, nil, err
@@ -333,6 +337,61 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return nil
 		},
 	}, nil
+}
+
+// buildMemory composes the explicitly development-only, single-process state
+// mode. It deliberately does not construct Redis, PostgreSQL, or an external
+// blob store; all state is held by the process-local implementations and is
+// lost on restart. Provider adapters are still built normally because memory
+// mode changes state durability, not the provider contract.
+func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter) (llm.Engine, app.ClientSet, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	clock := factory.options.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	keyring, err := factory.continuationKeyring(ctx, value)
+	if err != nil {
+		return nil, nil, err
+	}
+	admissionStore := memorystore.NewAdmissionStore(memorystore.AdmissionOptions{Clock: clock})
+	continuationStore, err := memorystore.NewContinuationStore(memorystore.ContinuationOptions{Keyring: keyring, Clock: clock, MaxDepth: value.Limits.ContinuationDepth})
+	if err != nil {
+		return nil, nil, fmt.Errorf("construct memory continuation store: %w", err)
+	}
+	var blobStore blob.Store = factory.options.BlobStore
+	if blobStore != nil {
+		if _, ok := blobStore.(*memorystore.BlobStore); !ok {
+			return nil, nil, fmt.Errorf("memory state requires the process-local memory blob store")
+		}
+	} else {
+		blobStore, err = memorystore.NewBlobStore(memorystore.BlobOptions{MaxBytes: int64(value.BlobStore.InlineBytes), Clock: clock})
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct memory blob store: %w", err)
+		}
+	}
+	results, err := NewBlobResultStore(blobStore, admissionStore, nil, clock)
+	if err != nil {
+		return nil, nil, err
+	}
+	estimator, err := buildEstimator(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	planner := factory.options.Planner
+	if planner == nil {
+		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
+	}
+	engineValue, err := engine.New(engine.Dependencies{
+		Snapshots: engine.StaticSnapshot{Value: engineSnapshot}, Planner: planner, Adapters: engine.AdapterMap(adapters), Admission: admissionStore, Continuations: continuationStore, Results: results,
+		Clock: clock, Estimator: estimator, MaxAttempts: value.Limits.RouteAttempts, FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("construct memory engine: %w", err)
+	}
+	return engineValue, &productionClientSet{close: func(context.Context) error { return nil }}, nil
 }
 
 func (factory *ProductionEngineFactory) buildPostgres(ctx context.Context, value config.Config) (DependencyProbe, io.Closer, error) {

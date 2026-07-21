@@ -47,6 +47,9 @@ func (config Config) Validate() error {
 	if err := config.BlobStore.validate(config.Environment); err != nil {
 		return err
 	}
+	if err := validateStateBlobComposition(config.State.Kind, config.BlobStore.Kind); err != nil {
+		return err
+	}
 	if err := config.Limits.validate(); err != nil {
 		return err
 	}
@@ -80,6 +83,16 @@ func (config Config) Validate() error {
 	}
 	if err := config.Telemetry.validate(config.Environment); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateStateBlobComposition(stateKind, blobKind string) error {
+	if stateKind == StateKindMemory && blobKind != "memory" {
+		return fmt.Errorf("blob_store.kind must be memory when state.kind is memory")
+	}
+	if stateKind != StateKindMemory && blobKind == "memory" {
+		return fmt.Errorf("blob_store.kind memory requires state.kind memory")
 	}
 	return nil
 }
@@ -153,7 +166,9 @@ func (state StateConfig) validate(environment string) error {
 			return fmt.Errorf("state.kind redis is not permitted in production; use durable")
 		}
 	case StateKindMemory:
-		return fmt.Errorf("state.kind memory is not supported by the production runtime yet")
+		if environment == "production" {
+			return fmt.Errorf("state.kind memory is not permitted in production; use durable")
+		}
 	default:
 		return fmt.Errorf("state.kind %q is unsupported", state.Kind)
 	}
@@ -173,10 +188,14 @@ func (state StateConfig) validate(environment string) error {
 	if state.AmbiguousRetention < state.OperationTerminalRetention {
 		return fmt.Errorf("state.ambiguous_retention must cover operation_terminal_retention")
 	}
-	if state.Kind != StateKindMemory {
-		if err := state.Redis.validate(environment); err != nil {
-			return err
-		}
+	if state.Kind == StateKindMemory {
+		// Memory mode intentionally does not validate, resolve, or dial the
+		// Redis/PostgreSQL sections. Their addresses and credentials are ignored
+		// and should normally be omitted from a development configuration.
+		return nil
+	}
+	if err := state.Redis.validate(environment); err != nil {
+		return err
 	}
 	if err := state.Postgres.validate(environment, state.Kind == StateKindDurable); err != nil {
 		return err
@@ -297,6 +316,14 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		return fmt.Errorf("blob_store.inline_bytes is outside safe bounds")
 	}
 	switch blob.Kind {
+	case "memory":
+		if environment != "development" {
+			return fmt.Errorf("blob_store.kind memory is supported only in development")
+		}
+		if blob.File.Root != "" || blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
+			return fmt.Errorf("blob_store.file and blob_store.s3 are not valid when blob_store.kind is memory")
+		}
+		return nil
 	case "s3":
 		if blob.File.Root != "" {
 			return fmt.Errorf("blob_store.file is only valid when blob_store.kind is file")

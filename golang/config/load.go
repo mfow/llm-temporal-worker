@@ -111,7 +111,11 @@ func applyDefaults(config *Config) {
 		config.State.Redis.KeyPrefix = "llmtw"
 	}
 	if config.BlobStore.Kind == "" {
-		config.BlobStore.Kind = "s3"
+		if config.State.Kind == StateKindMemory {
+			config.BlobStore.Kind = "memory"
+		} else {
+			config.BlobStore.Kind = "s3"
+		}
 	}
 	if config.Limits.RequestBytes == 0 {
 		config.Limits.RequestBytes = 1 << 20
