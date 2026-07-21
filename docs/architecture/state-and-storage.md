@@ -27,7 +27,9 @@ treats the write as idempotent after `HeadObject` proves the stored byte length,
 content type, digest metadata, and digest-length metadata match the requested
 reference. A present but unverified or replaced object is reported as a
 conflict, so a caller cannot persist a BlobRef for content that has not been
-proven to match.
+proven to match. Reads apply the same integrity boundary: the returned object
+must carry the reference's media type (and its bytes must still match the
+digest and length), otherwise the read fails closed as a digest mismatch.
 
 This is the current pre-release layout, not the accepted final division of
 responsibility. In the target design PostgreSQL is the durable system of record,
