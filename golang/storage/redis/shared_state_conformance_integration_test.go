@@ -30,6 +30,108 @@ func TestLiveRedisStoreFactoryConformance(t *testing.T) {
 	conformance.Run(t, liveRedisStoreFactory(client))
 }
 
+// TestLiveRedisTwoPrefixConformanceAndIsolation exercises the complete public
+// shared-state contract twice against one Redis server. The stores deliberately
+// share a client (and therefore a daemon) but receive different key namespaces;
+// this catches accidental process-local state and prefix omissions that a
+// single-prefix conformance run cannot observe.
+func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
+	client := openLiveRedis(t)
+	left := liveKeyOptions("prefix-a")
+	right := liveKeyOptions("prefix-b")
+	for _, test := range []struct {
+		name string
+		keys KeyOptions
+	}{
+		{name: "left", keys: left},
+		{name: "right", keys: right},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			conformance.Run(t, liveRedisStoreFactoryWithKeys(client, AdmissionModeFunction, test.keys))
+		})
+	}
+
+	// The full suite above proves each namespace independently. Keep one
+	// cross-namespace assertion here as a regression guard for replay,
+	// continuation, throttle, and cleanup behavior on a shared daemon.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cleanupLivePrefix(t, client, left.Prefix)
+	cleanupLivePrefix(t, client, right.Prefix)
+	now := time.Now().UTC()
+	leftAdmission, err := NewAdmissionStore(AdmissionOptions{Client: client, Mode: AdmissionModeFunction, Keys: left, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightAdmission, err := NewAdmissionStore(AdmissionOptions{Client: client, Mode: AdmissionModeFunction, Keys: right, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := liveBeginRequest("shared-prefix-operation", "shared-prefix-policy", 1, 10, now)
+	if _, err := leftAdmission.Begin(ctx, request); err != nil {
+		t.Fatalf("left admission = %v", err)
+	}
+	if _, err := rightAdmission.Begin(ctx, request); err != nil {
+		t.Fatalf("right admission = %v", err)
+	}
+
+	keyring := testKeyring(t)
+	leftContinuation, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: left, Keyring: keyring, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightContinuation, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: right, Keyring: keyring, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := testContinuation(t, now)
+	root.ExpiresAt = now.Add(time.Hour)
+	leftHandle, err := leftContinuation.CreateRoot(ctx, root)
+	if err != nil {
+		t.Fatalf("left continuation = %v", err)
+	}
+	if _, err := rightContinuation.Get(ctx, leftHandle); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("right continuation read = %v, want not found", err)
+	}
+	rightHandle, err := rightContinuation.CreateRoot(ctx, root)
+	if err != nil {
+		t.Fatalf("right continuation = %v", err)
+	}
+	if _, err := leftContinuation.Get(ctx, rightHandle); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("left continuation read = %v, want not found", err)
+	}
+
+	leftThrottle, err := NewThrottleStore(ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: left})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightThrottle, err := NewThrottleStore(ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: right})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := []ThrottleLimit{{Kind: ThrottleRequests, Scope: "shared-prefix-scope", Amount: 1, Limit: 2, Window: time.Minute}}
+	if _, err := leftThrottle.Acquire(ctx, "shared-prefix-throttle", limits); err != nil {
+		t.Fatalf("left throttle = %v", err)
+	}
+	if _, err := rightThrottle.Lookup(ctx, "shared-prefix-throttle"); !errors.Is(err, ErrThrottleNotFound) {
+		t.Fatalf("right throttle read = %v, want not found", err)
+	}
+
+	if err := deleteLivePrefix(ctx, client, right.Prefix); err != nil {
+		t.Fatalf("delete right namespace = %v", err)
+	}
+	if _, err := leftAdmission.Get(ctx, request.ID); err != nil {
+		t.Fatalf("left admission after right cleanup = %v", err)
+	}
+	if _, err := leftContinuation.Get(ctx, leftHandle); err != nil {
+		t.Fatalf("left continuation after right cleanup = %v", err)
+	}
+	if _, err := leftThrottle.Lookup(ctx, "shared-prefix-throttle"); err != nil {
+		t.Fatalf("left throttle after right cleanup = %v", err)
+	}
+}
+
 func TestLiveRedisLuaStoreFactoryConformance(t *testing.T) {
 	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -406,12 +508,19 @@ func liveRedisStoreFactory(client *redisclient.Client) conformance.StoreFactory 
 }
 
 func liveRedisStoreFactoryWithMode(client *redisclient.Client, mode AdmissionMode) conformance.StoreFactory {
+	return liveRedisStoreFactoryWithKeys(client, mode, KeyOptions{})
+}
+
+func liveRedisStoreFactoryWithKeys(client *redisclient.Client, mode AdmissionMode, configured KeyOptions) conformance.StoreFactory {
 	return conformance.StoreFactory{
 		Name: "redis-" + string(mode),
 		New: func(t testing.TB) conformance.Stores {
 			t.Helper()
 			now := time.Now().UTC()
-			keys := liveKeyOptions("conformance")
+			keys := configured
+			if keys.Prefix == "" {
+				keys = liveKeyOptions("conformance")
+			}
 			cleanupLivePrefix(t, client, keys.Prefix)
 			keyring, err := state.NewKeyring([]state.Key{{
 				ID:      "conformance",
@@ -482,25 +591,29 @@ func cleanupLivePrefix(t testing.TB, client *redisclient.Client, prefix string) 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		var cursor uint64
-		for {
-			keys, next, err := client.Scan(ctx, cursor, prefix+":*", 100).Result()
-			if err != nil {
-				t.Error("could not scan isolated Redis test keys during cleanup")
-				return
-			}
-			if len(keys) != 0 {
-				if err := client.Del(ctx, keys...).Err(); err != nil {
-					t.Error("could not remove isolated Redis test keys during cleanup")
-					return
-				}
-			}
-			cursor = next
-			if cursor == 0 {
-				return
-			}
+		if err := deleteLivePrefix(ctx, client, prefix); err != nil {
+			t.Error("could not remove isolated Redis test keys during cleanup")
 		}
 	})
+}
+
+func deleteLivePrefix(ctx context.Context, client redisclient.UniversalClient, prefix string) error {
+	var cursor uint64
+	for {
+		keys, next, err := client.Scan(ctx, cursor, prefix+":*", 100).Result()
+		if err != nil {
+			return err
+		}
+		if len(keys) != 0 {
+			if err := client.Del(ctx, keys...).Err(); err != nil {
+				return err
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			return nil
+		}
+	}
 }
 
 func runLiveRedisDocker(t *testing.T, arguments ...string) {
