@@ -18,6 +18,7 @@ func ValidateTranscript(items []llm.Item) ([]string, error) {
 func validateItems(items []llm.Item) ([]string, error) {
 	pending := make(map[string]struct{})
 	seenCalls := make(map[string]struct{})
+	resultsStarted := false
 	for index, item := range items {
 		if item == nil {
 			return nil, fmt.Errorf("transcript item %d is nil", index)
@@ -25,14 +26,22 @@ func validateItems(items []llm.Item) ([]string, error) {
 		if _, err := json.Marshal(item); err != nil {
 			return nil, fmt.Errorf("transcript item %d: %w", index, err)
 		}
+		if len(pending) == 0 {
+			// A fully resolved tool exchange ends the model turn. A subsequent
+			// call starts a new turn and may again contain parallel calls.
+			resultsStarted = false
+		}
 		if len(pending) > 0 {
-			if _, isResult := item.(llm.ToolResult); !isResult {
-				if _, isCall := item.(llm.ToolCall); isCall {
-					// Parallel tool calls are one model turn and may arrive
-					// consecutively before any result.
-				} else {
-					return nil, fmt.Errorf("transcript item %d starts a new turn before pending tool results", index)
+			switch item.(type) {
+			case llm.ToolResult:
+			case llm.ToolCall:
+				if resultsStarted {
+					return nil, fmt.Errorf("transcript item %d starts a new tool-call turn before pending tool results", index)
 				}
+				// Parallel tool calls are one model turn and may arrive
+				// consecutively before any result.
+			default:
+				return nil, fmt.Errorf("transcript item %d starts a new turn before pending tool results", index)
 			}
 		}
 		switch value := item.(type) {
@@ -49,6 +58,7 @@ func validateItems(items []llm.Item) ([]string, error) {
 			if _, exists := pending[value.CallID]; !exists {
 				return nil, fmt.Errorf("transcript item %d has an unmatched tool result %q", index, value.CallID)
 			}
+			resultsStarted = true
 			delete(pending, value.CallID)
 		}
 	}
