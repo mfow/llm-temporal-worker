@@ -56,10 +56,10 @@ var evidenceStatusForMode = map[string]string{
 // The release-evidence artifact recorded below was produced by this exact
 // protected master revision. Keep this candidate pin explicit so a later
 // catalog refresh cannot accidentally retain evidence from an older run.
-const expectedV1EvidenceRevision = "5c95ea9c8b799a6e6eafe0e44a25685b2a4408bb"
-const expectedV1EvidenceWorkflowRunID int64 = 29809154219
+const expectedV1EvidenceRevision = "1d5cdd2482e98dd57eea3b7e393ce42b7323edb5"
+const expectedV1EvidenceWorkflowRunID int64 = 29814306235
 const expectedV1EvidenceArtifactName = "release-evidence"
-const expectedV1EvidenceArtifactDigest = "90b394b58bbf54a8d0f0cac619532e8a70f2f8845a0b6621243b46fb0efb6d67"
+const expectedV1EvidenceArtifactDigest = "091c4158cb43a07397149c708729482271b2fa0ba61a1a281e17c2622b9b3e5f"
 
 type v1TraceabilityCatalog struct {
 	SchemaVersion int                         `json:"schema_version"`

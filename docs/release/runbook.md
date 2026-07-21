@@ -153,10 +153,10 @@ context.
 ## Current offline traceability record
 
 The latest protected master run with a retained `release-evidence` artifact is
-workflow run `29714835927` at revision
-`0048df00a772347d8e019e0ee3e4f9377328f017`. The artifact is named
+workflow run `29814306235` at revision
+`1d5cdd2482e98dd57eea3b7e393ce42b7323edb5`. The artifact is named
 `release-evidence` and has SHA-256 digest
-`97723049486b6f5ee4e76072ed143da18f78e647244cc96b07c11edbbfda9061`.
+`091c4158cb43a07397149c708729482271b2fa0ba61a1a281e17c2622b9b3e5f`.
 The v1 catalog binds offline implementation and conformance records to this
 run and digest. This is not production SLO evidence: the admission/compilation
 p99 and worker-error-rate requirements remain explicitly unrecorded, protected
