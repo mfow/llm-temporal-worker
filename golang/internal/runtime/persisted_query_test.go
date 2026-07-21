@@ -1,0 +1,115 @@
+package runtime
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
+)
+
+type fakePersistedProvider struct {
+	mu       sync.Mutex
+	status   postgresstore.ProviderStatusPage
+	credit   control.CreditStatusPage
+	lastOpts postgresstore.ProviderStatusListOptions
+}
+
+func (fake *fakePersistedProvider) ListRouteStatuses(_ context.Context, options postgresstore.ProviderStatusListOptions) (postgresstore.ProviderStatusPage, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.lastOpts = options
+	return fake.status, nil
+}
+
+func (fake *fakePersistedProvider) ListCreditStatuses(_ context.Context, _ postgresstore.CreditStatusListOptions) (control.CreditStatusPage, error) {
+	return fake.credit, nil
+}
+
+func persistedQueryTestService(t *testing.T, providerReader *fakePersistedProvider, audit control.AuditFunc) *control.QueryService {
+	t.Helper()
+	now := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
+	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	handler := &persistedQueryHandler{configDigest: sha256.Sum256([]byte("snapshot")), provider: providerReader, cursor: codec, clock: func() time.Time { return now }}
+	if audit == nil {
+		audit = func(context.Context, control.QueryAuditRecord) error { return nil }
+	}
+	return &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, Audit: audit, CursorCodec: codec, Clock: func() time.Time { return now }}
+}
+
+func providerQueryRequest(t *testing.T, cursor *control.QueryCursor) llm.QueryRequestV1 {
+	t.Helper()
+	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "query-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: llm.QueryProviderStatus, Filter: control.ProviderStatusQuery{IncludeHealthy: boolPtr(true), Page: control.QueryPage{Size: 1, Cursor: cursor}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func boolPtr(value bool) *bool { return &value }
+
+func TestPersistedQueryProviderStatusIsAuditedAndCursorBound(t *testing.T) {
+	observed := time.Date(2026, time.July, 21, 23, 0, 0, 0, time.UTC)
+	providerReader := &fakePersistedProvider{status: postgresstore.ProviderStatusPage{Routes: []control.RouteStatus{{RouteID: "route-a", EndpointID: "endpoint-a", Provider: "provider-a", Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, Circuit: control.CircuitClosed, ObservedAt: observed, StaleAfter: observed.Add(time.Hour)}}}}
+	var audited control.QueryAuditRecord
+	service := persistedQueryTestService(t, providerReader, func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil })
+	first, err := service.Execute(context.Background(), providerQueryRequest(t, nil))
+	if err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	if first.NextCursor != nil || !first.Complete || audited.Kind != llm.QueryProviderStatus || audited.ActualCostUSD == nil || *audited.ActualCostUSD != "0" {
+		t.Fatalf("unexpected first response/audit: response=%+v audit=%+v", first, audited)
+	}
+	if providerReader.lastOpts.SnapshotHorizon.IsZero() || providerReader.lastOpts.ConfigDigest == ([32]byte{}) {
+		t.Fatalf("handler did not bind snapshot options: %+v", providerReader.lastOpts)
+	}
+
+	providerReader.status.NextRouteID = "route-b"
+	first, err = service.Execute(context.Background(), providerQueryRequest(t, nil))
+	if err != nil || first.NextCursor == nil || first.Complete {
+		t.Fatalf("cursor page: response=%+v err=%v", first, err)
+	}
+	providerReader.status.NextRouteID = ""
+	next := control.QueryCursor(*first.NextCursor)
+	second, err := service.Execute(context.Background(), providerQueryRequest(t, &next))
+	if err != nil {
+		t.Fatalf("continuation query: %v", err)
+	}
+	if second.NextCursor != nil || providerReader.lastOpts.AfterRouteID != "route-b" {
+		t.Fatalf("continuation was not bound: response=%+v options=%+v", second, providerReader.lastOpts)
+	}
+}
+
+func TestPersistedQueryBudgetAndSpendFailClosed(t *testing.T) {
+	service := persistedQueryTestService(t, &fakePersistedProvider{}, nil)
+	for _, kind := range []llm.QueryKind{llm.QueryBudgetStatus, llm.QuerySpendSummary} {
+		request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "query-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: kind, Filter: budgetOrSpendFilter(kind)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = service.Execute(context.Background(), request)
+		var providerErr *provider.Error
+		if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+			t.Fatalf("kind %s error=%v, want non-retryable unsupported capability", kind, err)
+		}
+	}
+}
+
+func budgetOrSpendFilter(kind llm.QueryKind) control.QueryFilter {
+	if kind == llm.QueryBudgetStatus {
+		return control.BudgetStatusQuery{}
+	}
+	return control.SpendSummaryQuery{StartTime: time.Unix(1, 0).UTC(), EndTime: time.Unix(2, 0).UTC()}
+}
+
+func TestNewPersistedQueryServiceRequiresSecuritySeams(t *testing.T) {
+	if _, err := NewPersistedQueryService(nil, PostgresQueryRepositories{}, PersistedQueryOptions{}); err == nil {
+		t.Fatal("nil snapshot unexpectedly accepted")
+	}
+}

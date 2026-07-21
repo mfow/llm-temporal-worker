@@ -112,6 +112,10 @@ type ProductionFactoryOptions struct {
 	AzureCredentialFactory    AzureCredentialFactory
 	AnthropicAWSClientFactory AnthropicAWSClientFactory
 	AzureAPIVersions          map[string]string
+	// QueryServiceBuilder is optional by design. A deployment must provide
+	// authorization, cursor-key, and audit composition explicitly before the
+	// production factory exposes persisted control-plane queries.
+	QueryServiceBuilder QueryServiceBuilder
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -315,6 +319,13 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			postgresCloser.Close()
 		}
 		closeOwned()
+	}
+	if factory.options.QueryServiceBuilder != nil {
+		queryService, err = factory.options.QueryServiceBuilder(ctx, snapshot, queryRepos)
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("construct query service: %w", err)
+		}
 	}
 	bucket, ok := blobStore.(interface {
 		ProbeBucket(context.Context) error
