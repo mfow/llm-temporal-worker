@@ -115,6 +115,12 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 		if version != ContractVersion || string(stored) != string(digest[:]) {
 			return fmt.Errorf("PostgreSQL schema contract does not match %s", ContractVersion)
 		}
+		// Role grants are deliberately reconciled on every idempotent install.
+		// This repairs a namespace installed by an older worker version without
+		// mutating any schema objects or changing the contract digest.
+		if err := grantRuntimeRoles(ctx, tx, namespace); err != nil {
+			return err
+		}
 		return tx.Commit(ctx)
 	}
 	if _, err := tx.Exec(ctx, "SET LOCAL TIME ZONE 'UTC'"); err != nil {
@@ -212,20 +218,122 @@ func constraintKind(kind string) string {
 }
 
 func grantRuntimeRoles(ctx context.Context, tx pgx.Tx, namespace Namespace) error {
-	schema := pgx.Identifier{namespace.Schema}.Sanitize()
-	statement := fmt.Sprintf(`DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'llmtw_runtime') THEN
-    GRANT USAGE ON SCHEMA %s TO llmtw_runtime;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO llmtw_runtime;
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'llmtw_maintenance') THEN
-    GRANT USAGE ON SCHEMA %s TO llmtw_maintenance;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO llmtw_maintenance;
-  END IF;
-END $$;`, schema, schema, schema, schema)
+	statement, err := RenderRoleGrants(namespace)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, statement); err != nil {
 		return fmt.Errorf("grant PostgreSQL runtime roles: %w", err)
 	}
+	return nil
+}
+
+// RenderRoleGrants renders the role ACL reconciliation applied by Install.
+//
+// The runtime role is intentionally allow-listed. In particular, immutable
+// checkpoint/blob/provider/control records are append-only for the worker;
+// retention and other destructive operations belong to llmtw_maintenance.
+// The schema owner remains the only role that can create or alter objects.
+func RenderRoleGrants(namespace Namespace) (string, error) {
+	if err := namespace.Validate(); err != nil {
+		return "", err
+	}
+	schema := pgx.Identifier{namespace.Schema}.Sanitize()
+
+	// Keep this catalog in logical-name form so every physical relation still
+	// passes through Namespace.Render and receives the configured prefix.
+	allTables := []string{
+		"schema_contract", "scopes", "configuration_snapshots", "blobs",
+		"operations", "operation_attempts", "conversation_checkpoints",
+		"checkpoint_provider_state", "checkpoint_provider_affinities",
+		"response_cache_entries", "response_cache_uses", "response_cache_fills",
+		"budget_policies", "budget_windows", "budget_redis_generations",
+		"budget_journal_events", "budget_buckets", "operation_budget_reservations",
+		"price_catalogs", "price_entries", "provider_status_events",
+		"provider_route_status", "provider_inventory_snapshots",
+		"provider_inventory_models", "maintenance_outbox", "query_executions",
+	}
+	runtime := []roleGrant{
+		{table: "schema_contract", privileges: "SELECT"},
+		{table: "scopes", privileges: "SELECT, INSERT"},
+		{table: "scopes", privileges: "UPDATE (deleted_at)"},
+		{table: "configuration_snapshots", privileges: "SELECT, INSERT"},
+		{table: "blobs", privileges: "SELECT, INSERT"},
+		// Blob rows are immutable except for extending retention. Restrict the
+		// runtime update privilege to that one column.
+		{table: "blobs", privileges: "UPDATE (expires_at)"},
+		{table: "operations", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "operation_attempts", privileges: "SELECT, INSERT"},
+		{table: "conversation_checkpoints", privileges: "SELECT, INSERT"},
+		{table: "checkpoint_provider_state", privileges: "SELECT, INSERT"},
+		{table: "checkpoint_provider_affinities", privileges: "SELECT, INSERT"},
+		{table: "response_cache_entries", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "response_cache_uses", privileges: "SELECT, INSERT"},
+		{table: "response_cache_fills", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "budget_policies", privileges: "SELECT"},
+		{table: "budget_windows", privileges: "SELECT"},
+		{table: "budget_redis_generations", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "budget_journal_events", privileges: "INSERT"},
+		{table: "budget_buckets", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "operation_budget_reservations", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "price_catalogs", privileges: "SELECT"},
+		{table: "price_entries", privileges: "SELECT"},
+		{table: "provider_status_events", privileges: "SELECT, INSERT"},
+		{table: "provider_route_status", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "provider_inventory_snapshots", privileges: "SELECT, INSERT"},
+		{table: "provider_inventory_models", privileges: "SELECT, INSERT"},
+		{table: "maintenance_outbox", privileges: "SELECT, INSERT, UPDATE"},
+		{table: "query_executions", privileges: "SELECT, INSERT"},
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "DO $$\nBEGIN\n")
+	fmt.Fprintf(&b, "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'llmtw_runtime') THEN\n")
+	fmt.Fprintf(&b, "    REVOKE ALL ON ALL TABLES IN SCHEMA %s FROM llmtw_runtime;\n", schema)
+	fmt.Fprintf(&b, "    REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM llmtw_runtime;\n", schema)
+	fmt.Fprintf(&b, "    GRANT USAGE ON SCHEMA %s TO llmtw_runtime;\n", schema)
+	for _, grant := range runtime {
+		if err := appendRoleGrant(&b, namespace, grant, "llmtw_runtime"); err != nil {
+			return "", err
+		}
+	}
+	// Identity columns are used by append-only event tables. USAGE is enough
+	// for INSERT and does not allow a worker to alter or restart a sequence.
+	fmt.Fprintf(&b, "    GRANT USAGE ON ALL SEQUENCES IN SCHEMA %s TO llmtw_runtime;\n", schema)
+	fmt.Fprintf(&b, "  END IF;\n")
+
+	fmt.Fprintf(&b, "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'llmtw_maintenance') THEN\n")
+	fmt.Fprintf(&b, "    REVOKE ALL ON ALL TABLES IN SCHEMA %s FROM llmtw_maintenance;\n", schema)
+	fmt.Fprintf(&b, "    REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM llmtw_maintenance;\n", schema)
+	fmt.Fprintf(&b, "    GRANT USAGE ON SCHEMA %s TO llmtw_maintenance;\n", schema)
+	for _, table := range allTables {
+		if err := appendRoleGrant(&b, namespace, roleGrant{table: table, privileges: "SELECT"}, "llmtw_maintenance"); err != nil {
+			return "", err
+		}
+	}
+	for _, table := range allTables {
+		if table == "schema_contract" {
+			continue
+		}
+		if err := appendRoleGrant(&b, namespace, roleGrant{table: table, privileges: "INSERT, UPDATE, DELETE"}, "llmtw_maintenance"); err != nil {
+			return "", err
+		}
+	}
+	fmt.Fprintf(&b, "    GRANT USAGE ON ALL SEQUENCES IN SCHEMA %s TO llmtw_maintenance;\n", schema)
+	fmt.Fprintf(&b, "  END IF;\nEND $$;\n")
+	return b.String(), nil
+}
+
+type roleGrant struct {
+	table      string
+	privileges string
+}
+
+func appendRoleGrant(b *strings.Builder, namespace Namespace, grant roleGrant, role string) error {
+	relation, err := namespace.Render(grant.table)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(b, "    GRANT %s ON TABLE %s TO %s;\n", grant.privileges, relation, role)
 	return nil
 }

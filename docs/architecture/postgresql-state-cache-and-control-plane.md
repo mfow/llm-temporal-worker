@@ -985,9 +985,20 @@ operation completion and result publication occur in the same transaction.
 The deferred parent foreign key permits that ordered finalization without
 disabling integrity.
 
-The runtime role receives SELECT and INSERT on checkpoint tables but no UPDATE
-or DELETE. Retention uses a separate maintenance role and procedures. This
-database permission makes immutability stronger than a repository convention.
+The installer reconciles object privileges for the pre-provisioned roles on
+every install (including an idempotent install against an existing contract).
+The runtime role receives `SELECT, INSERT` on
+`conversation_checkpoints`, `checkpoint_provider_state`, and
+`checkpoint_provider_affinities`; it receives neither `UPDATE` nor `DELETE` on
+those tables. The same append-only rule applies to provider status events and
+inventory snapshots/models. Blob rows are immutable apart from a runtime
+`UPDATE (expires_at)` used to extend retention. Operations, cache fills/uses,
+and the mutable provider-route and budget projections receive only the writes
+their state machines require. The runtime role never receives `DELETE` on any
+worker table. Retention and other destructive work uses the separate
+`llmtw_maintenance` role, while the schema-owner role remains responsible for
+DDL. This database permission makes immutability stronger than a repository
+convention and prevents a broad `GRANT ... ON ALL TABLES` regression.
 
 ### Route-isolated cache identity
 
