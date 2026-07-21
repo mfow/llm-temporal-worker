@@ -397,16 +397,9 @@ shutdown. Schema installation remains a deployment concern (`postgres.Install`)
 and is never performed by a worker during readiness probing.
 
 `state.kind: redis` is retained only as a development/test fixture for the
-legacy Redis-only composition and is rejected in production. A memory store is
-not accepted yet: the production factory does not have a memory-store
-composition, so configuration validation keeps `state.kind: memory` rejected
-until that implementation is available.
-
-The planned memory mode is an explicitly non-durable single-process
-development mode, but it is not currently runnable through the production
-runtime factory. Configuration validation rejects `state.kind: memory` in
-every environment until the factory has a memory-store composition. The
-following is the intended shape once that support lands:
+legacy Redis-only composition and is rejected in production. `state.kind:
+memory` is an explicitly non-durable, single-process development composition.
+It is rejected in production and must use `blob_store.kind: memory`:
 
 ~~~yaml
 environment: development
@@ -418,18 +411,24 @@ state:
   reservation_lease: 2m
 blob_store:
   kind: memory
+  inline_bytes: 262144
 ~~~
 
-When implemented, it will use bounded process memory for operations,
-checkpoints, query audit, budget/throttle state, and blobs. Restart loses
-everything; provider-pending
-jobs cannot be recovered after process loss. Validation rejects **memory** when
-the mode is eventually enabled for development, and it must continue to reject
-configurations that request durable continuation/recovery guarantees or mix an
-external blob-store kind with memory state. Redis/PostgreSQL addresses and
-credentials will be omitted and not dialled. The mode will share semantic
-conformance tests with durable implementations but will never be evidence for
-crash recovery, multi-replica admission, backups, or production readiness.
+Memory mode is constructed by the production factory without dialing Redis or
+PostgreSQL and without creating an external blob client. It uses the shared
+in-process admission and continuation implementations plus a bounded,
+content-addressed process-local blob map. Provider adapters are still built
+normally, so provider credentials and egress remain subject to the same
+validation and authorization rules as durable mode.
+
+Operations, checkpoints, budget/throttle state, and blobs are process local;
+restart loses everything and provider-pending jobs cannot be recovered after
+process loss. The mode must not be used for durable continuation/recovery
+guarantees, multi-replica admission, backups, or production readiness. Redis
+and PostgreSQL addresses and credentials are ignored by the memory factory and
+should be omitted. `blob_store.kind: memory` is rejected unless
+`state.kind: memory` is also selected, and external blob kinds are rejected
+with memory state.
 
 **state.redis.key_prefix** has a
 default of **llmtw**. The optional **LLMTW_REDIS_KEY_PREFIX** environment

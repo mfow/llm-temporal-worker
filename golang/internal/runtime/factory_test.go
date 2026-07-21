@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
@@ -16,6 +17,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
@@ -97,6 +99,56 @@ func TestBuildPostgresSkipsRedisOnlyComposition(t *testing.T) {
 		t.Fatalf("Redis-only composition built PostgreSQL: probe=%#v closer=%#v err=%v called=%v", probe, closer, err, called)
 	}
 }
+
+func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
+	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	called := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		Clock: nowFunc(now),
+		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+			if ref.Name != "CONTINUATION_KEY" {
+				t.Fatalf("resolved unexpected secret %q", ref.Name)
+			}
+			return []byte("01234567890123456789012345678901"), nil
+		}),
+		RedisFactory: func(context.Context, config.RedisConfig, string, string) (redisclient.UniversalClient, error) {
+			called = true
+			return nil, errors.New("Redis must not be constructed for memory state")
+		},
+		PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
+			called = true
+			return nil, nil, errors.New("PostgreSQL must not be constructed for memory state")
+		},
+		BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
+			called = true
+			return nil, nil, errors.New("external blob store must not be constructed for memory state")
+		},
+	}}
+	value := config.Config{
+		State:        config.StateConfig{Kind: config.StateKindMemory, ContinuationRetention: config.Duration(time.Hour), ReservationLease: config.Duration(time.Minute)},
+		BlobStore:    config.BlobStoreConfig{Kind: "memory", InlineBytes: 256},
+		Limits:       config.LimitsConfig{RequestBytes: 1024, ContinuationDepth: 4, RouteAttempts: 1, TokenEstimateSafetyRatio: "1", MaxOutputTokens: 16},
+		Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{ID: "key-2026-07", Primary: true, Secret: config.SecretRef{Kind: config.SecretEnv, Name: "CONTINUATION_KEY"}}}},
+	}
+	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil)
+	if err != nil {
+		t.Fatalf("buildMemory() error = %v", err)
+	}
+	if engineValue == nil || clients == nil {
+		t.Fatalf("buildMemory() returned engine=%#v clients=%#v", engineValue, clients)
+	}
+	if called {
+		t.Fatal("memory composition constructed an external state or blob dependency")
+	}
+	if probes := clients.(*productionClientSet).DependencyProbes(); len(probes) != 0 {
+		t.Fatalf("memory composition exposed external dependency probes: %d", len(probes))
+	}
+	if err := clients.Close(context.Background()); err != nil {
+		t.Fatalf("memory client close = %v", err)
+	}
+}
+
+func nowFunc(now time.Time) func() time.Time { return func() time.Time { return now } }
 
 func TestDefaultRedisFactoryDisablesClientRetries(t *testing.T) {
 	client, err := defaultRedisFactory(context.Background(), config.RedisConfig{Addresses: []string{"127.0.0.1:6379"}}, "", "")
