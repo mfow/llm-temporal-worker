@@ -134,7 +134,7 @@ service-class facts already verified for that profile:
 | OpenAI Responses | `flex` | `default` | `priority` |
 | Azure Responses | only when deployment profile declares it | `default` | `priority` when declared |
 | OpenRouter Chat | only when pinned provider profile declares it | profile value | only when profile declares it |
-| Exa Chat | unsupported until verified | profile value | unsupported until verified |
+| Exa Chat | unsupported (enforced) | profile value | unsupported (enforced) |
 | Anthropic direct | unsupported synchronously | `standard_only` | `auto` only with priority-capacity claim |
 | Anthropic AWS | exact offering profile | exact offering profile | exact offering profile |
 | Bedrock Anthropic | `flex` when supported | `default` | `priority` when supported |
