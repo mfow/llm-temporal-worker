@@ -94,3 +94,19 @@ environment, and never silently falls back to the pre-release envelope.
 The boundary is one-shot by design. It does not register or dispatch
 `llm.StreamingEngine`, token events, or provider stream decoders. Provider
 fragment decoders remain parser-regression code only.
+
+## Checkpoint-aware composition seam
+
+`activity.MaterializingV1Runtime` is the bounded composition seam for durable
+checkpoint replay. A Generate request with a parent, and every Compact request,
+must resolve its opaque handle through an explicitly supplied scope resolver and
+handle-capable materializer before dispatch. The materialized state is passed to
+the runtime's `MaterializedGenerateRuntime` or `MaterializedCompactRuntime`
+extension; a runtime that does not implement the extension fails closed without
+provider dispatch. Root Generate requests have no parent to replay and continue
+through the ordinary `V1Runtime` method.
+
+The seam does not perform provider, cache, budget, or checkpoint publication
+work. Production composition must still provide those operations behind the
+state-aware runtime and must map authenticated request context to the durable
+scope identifier; raw tenant/project concatenation is intentionally not used.
