@@ -137,6 +137,10 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 		token = hex.EncodeToString(digest[:])
 	}
 	operation := admission.Operation{ID: request.ID, ScopeKey: request.ScopeKey, RequestDigest: request.RequestDigest, State: admission.StateReserved, ReservedMicroUSD: request.Reservation, Reservations: cloneReservations(request.Reservations), ConfigVersion: request.ConfigVersion, PriceVersion: request.PriceVersion, DispatchToken: token, LeaseUntil: request.LeaseUntil, CreatedAt: now, UpdatedAt: now, ExpiresAt: request.ExpiresAt}
+	if !request.ReservationUSD.IsZero() || request.Reservation == 0 {
+		reserved := request.ReservationUSD
+		operation.ReservedCostUSD = &reserved
+	}
 	store.operations[operation.ID] = operation
 	store.byScope[operation.ScopeKey] = operation.ID
 	return admission.BeginResult{Operation: operation.Clone()}, nil
@@ -195,6 +199,11 @@ func (store *AdmissionStore) Complete(ctx context.Context, request admission.Com
 	operation.State = admission.StateCompleted
 	operation.IncurredMicroUSD = request.Actual
 	operation.FinalMicroUSD = request.Actual
+	if !request.ActualCostUSD.IsZero() || request.Actual == 0 {
+		actual := request.ActualCostUSD
+		operation.ActualCostUSD = &actual
+		operation.IncurredCostUSD = &actual
+	}
 	operation.ReservedMicroUSD = 0
 	operation.ResultRef = cloneBlobRef(request.ResultRef)
 	operation.Attempt = request.Attempt
@@ -225,6 +234,10 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 		operation.State = admission.StateAmbiguous
 		operation.IncurredMicroUSD = request.Incurred
 		operation.FinalMicroUSD = operation.ReservedMicroUSD
+		if !request.IncurredCostUSD.IsZero() || request.Incurred == 0 {
+			incurred := request.IncurredCostUSD
+			operation.IncurredCostUSD = &incurred
+		}
 	} else {
 		if err := store.reconcile(operation.Reservations, operation.ReservedMicroUSD, request.Incurred); err != nil {
 			return err
@@ -232,6 +245,11 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 		operation.State = admission.StateDefiniteFailed
 		operation.IncurredMicroUSD = request.Incurred
 		operation.FinalMicroUSD = request.Incurred
+		if !request.IncurredCostUSD.IsZero() || request.Incurred == 0 {
+			incurred := request.IncurredCostUSD
+			operation.IncurredCostUSD = &incurred
+			operation.ActualCostUSD = &incurred
+		}
 		operation.ReservedMicroUSD = 0
 	}
 	operation.Attempt = request.Attempt
@@ -277,6 +295,10 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	operation.State = admission.StateReserved
 	operation.Reservations = cloneReservations(request.Reservations)
 	operation.ReservedMicroUSD = request.Remaining
+	if !request.RemainingUSD.IsZero() || request.Remaining == 0 {
+		remaining := request.RemainingUSD
+		operation.ReservedCostUSD = &remaining
+	}
 	operation.Attempt = request.Outcome.Attempt
 	operation.Attempt.Dispatch = admission.NotDispatched
 	operation.DispatchToken = fmt.Sprintf("%s-%d", operation.DispatchToken, operation.Attempt.AttemptNumber+1)

@@ -44,7 +44,14 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		if err != nil {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "response usage could not be priced", err), candidate.estimate.MicroUSD)
 		}
-		reservedUSD, _ := pricing.USDFromMicro(operation.ReservedMicroUSD)
+		reservedUSD := pricing.MustUSD("0")
+		if operation.ReservedCostUSD != nil {
+			reservedUSD = *operation.ReservedCostUSD
+		} else if operation.ReservedMicroUSD > 0 {
+			// Legacy stores may only return the bounded microUSD reservation.
+			// Preserve their behavior while preferring the exact durable value.
+			reservedUSD, _ = pricing.USDFromMicro(operation.ReservedMicroUSD)
+		}
 		response.Cost = llm.Cost{Status: llm.CostStatusKnown, ReservedCostUSD: &reservedUSD, ActualCostUSD: &actual.USD, Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
 	} else {
 		response.Cost = llm.Cost{Status: llm.CostStatusUnknown}
@@ -83,7 +90,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		copyRef := resultRef
 		ref = &copyRef
 	}
-	if err := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual.MicroUSD, ResultRef: ref, Attempt: attempt}); err != nil {
+	if err := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual.MicroUSD, ActualCostUSD: actual.USD, ResultRef: ref, Attempt: attempt, CostStatus: string(response.Cost.Status), CostMethod: response.Cost.Method}); err != nil {
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation completion failed", err)
 	}
 	recordCompletion(ctx, response)
