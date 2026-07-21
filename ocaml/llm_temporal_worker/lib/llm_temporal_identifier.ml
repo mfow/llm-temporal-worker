@@ -54,10 +54,41 @@ module Checkpoint = struct
 end
 
 module Query_cursor = struct
-  type t = string
-  let of_string value = if value = "" then Error "query cursor must not be empty" else Ok value
+  type kind =
+    | Provider_status
+    | Model_inventory
+    | Credit_status
+    | Budget_status
+    | Spend_summary
+
+  type t = { value : string; kind : kind option }
+
+  let kind_to_string = function
+    | Provider_status -> "provider_status"
+    | Model_inventory -> "model_inventory"
+    | Credit_status -> "credit_status"
+    | Budget_status -> "budget_status"
+    | Spend_summary -> "spend_summary"
+
+  let kind_of_string = function
+    | "provider_status" -> Ok Provider_status
+    | "model_inventory" -> Ok Model_inventory
+    | "credit_status" -> Ok Credit_status
+    | "budget_status" -> Ok Budget_status
+    | "spend_summary" -> Ok Spend_summary
+    | value -> Error (Printf.sprintf "unsupported query cursor kind %S" value)
+
+  let of_string value =
+    if value = "" then Error "query cursor must not be empty"
+    else Ok { value; kind = None }
+
+  let of_string_for_kind kind value =
+    if value = "" then Error "query cursor must not be empty"
+    else Ok { value; kind = Some kind }
+
   let of_string_exn value = match of_string value with Ok value -> value | Error message -> invalid_arg message
-  let to_string value = value
+  let to_string value = value.value
+  let kind value = value.kind
 end
 
 module Budget_stream_id = struct

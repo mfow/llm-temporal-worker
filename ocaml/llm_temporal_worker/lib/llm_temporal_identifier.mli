@@ -49,10 +49,22 @@ module Checkpoint : sig
 end
 
 module Query_cursor : sig
-  type t = private string
+  type kind =
+    | Provider_status
+    | Model_inventory
+    | Credit_status
+    | Budget_status
+    | Spend_summary
+
+  type t = private { value : string; kind : kind option }
+
+  val kind_to_string : kind -> string
+  val kind_of_string : string -> (kind, string) result
   val of_string : string -> (t, string) result
+  val of_string_for_kind : kind -> string -> (t, string) result
   val of_string_exn : string -> t
   val to_string : t -> string
+  val kind : t -> kind option
 end
 
 module Budget_stream_id : sig

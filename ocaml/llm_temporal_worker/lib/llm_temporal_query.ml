@@ -31,6 +31,34 @@ let to_envelope ~operation_key ~context query =
     context;
     query = query_request query }
 
+let expected_cursor_kind : type a. a t -> Query_cursor.kind = function
+  | Provider_status _ -> Query_cursor.Provider_status
+  | Model_inventory _ -> Query_cursor.Model_inventory
+  | Credit_status _ -> Query_cursor.Credit_status
+  | Budget_status _ -> Query_cursor.Budget_status
+  | Spend_summary _ -> Query_cursor.Spend_summary
+
+let query_cursor : type a. a t -> Query_cursor.t option = function
+  | Provider_status { cursor; _ }
+  | Model_inventory { cursor; _ }
+  | Credit_status { cursor; _ } -> cursor
+  | Budget_status _
+  | Spend_summary _ -> None
+
+let validate_cursor query =
+  match query_cursor query with
+  | None -> Ok ()
+  | Some cursor ->
+      (match Query_cursor.kind cursor with
+       | None -> Ok ()
+       | Some actual when actual = expected_cursor_kind query -> Ok ()
+       | Some actual ->
+           Error
+             (Temporal.Error.codec
+                ~message:(Printf.sprintf "query cursor kind mismatch: expected %s, got %s"
+                            (Query_cursor.kind_to_string (expected_cursor_kind query))
+                            (Query_cursor.kind_to_string actual))))
+
 let mismatch expected actual =
   Temporal.Error.codec
     ~message:(Printf.sprintf "query result kind mismatch: expected %s, got %s" expected actual)
@@ -72,10 +100,13 @@ type dispatcher =
   query_envelope -> (query_response, Temporal.Error.t) result
 
 let execute_with ?task_queue ~dispatch ~operation_key ~context query =
-  let envelope = to_envelope ~operation_key ~context query in
-  match Llm_temporal_invocation.invoke_query_once ?task_queue ~dispatch envelope with
+  match validate_cursor query with
   | Error error -> Error error
-  | Ok response -> of_response query response
+  | Ok () ->
+      let envelope = to_envelope ~operation_key ~context query in
+      match Llm_temporal_invocation.invoke_query_once ?task_queue ~dispatch envelope with
+      | Error error -> Error error
+      | Ok response -> of_response query response
 
 let activity_dispatch ?task_queue activity input =
   Temporal.Activity.execute
