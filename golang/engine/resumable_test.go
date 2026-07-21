@@ -11,10 +11,13 @@ import (
 )
 
 type resumableEngineAdapter struct {
-	mu       sync.Mutex
-	submits  int
-	polls    int
-	terminal bool
+	mu             sync.Mutex
+	submits        int
+	polls          int
+	terminal       bool
+	submitErr      error
+	pollResponses  []provider.ResumableResult
+	recoveryPollID string
 }
 
 func (adapter *resumableEngineAdapter) Name() string { return "resumable-fixture" }
@@ -38,6 +41,9 @@ func (adapter *resumableEngineAdapter) Submit(ctx context.Context, _ provider.Ca
 	adapter.mu.Lock()
 	adapter.submits++
 	adapter.mu.Unlock()
+	if adapter.submitErr != nil {
+		return provider.ResumableResult{}, adapter.submitErr
+	}
 	return provider.ResumableResult{State: provider.ResumablePending, ProviderOperationID: "fixture-provider-operation", Dispatch: provider.DispatchAccepted}, nil
 }
 
@@ -45,7 +51,18 @@ func (adapter *resumableEngineAdapter) Poll(_ context.Context, _ provider.Call, 
 	adapter.mu.Lock()
 	adapter.polls++
 	poll := adapter.polls
+	responses := adapter.pollResponses
+	recoveryPollID := adapter.recoveryPollID
 	adapter.mu.Unlock()
+	if len(responses) > 0 {
+		if recoveryPollID != "" && id != recoveryPollID {
+			return provider.ResumableResult{}, provider.NewError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "unexpected recovered provider id")
+		}
+		if poll > len(responses) {
+			return provider.ResumableResult{}, context.Canceled
+		}
+		return responses[poll-1], nil
+	}
 	if id != "fixture-provider-operation" {
 		return provider.ResumableResult{}, provider.NewError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "unexpected fixture provider id")
 	}
@@ -61,6 +78,21 @@ func (adapter *resumableEngineAdapter) Poll(_ context.Context, _ provider.Call, 
 	response.OperationKey = "resumable-retry"
 	return provider.ResumableResult{State: provider.ResumableCompleted, ProviderOperationID: id, Dispatch: provider.DispatchAccepted, Result: provider.Result{Response: response}}, nil
 }
+
+type idempotencyRecoveryAdapter struct {
+	*resumableEngineAdapter
+	recovered  provider.ResumableResult
+	recoveries int
+}
+
+func (adapter *idempotencyRecoveryAdapter) RecoverByIdempotencyKey(context.Context, provider.Call, provider.Observer) (provider.ResumableResult, error) {
+	adapter.mu.Lock()
+	adapter.recoveries++
+	adapter.mu.Unlock()
+	return adapter.recovered, nil
+}
+
+var _ provider.IdempotencyRecovery = (*idempotencyRecoveryAdapter)(nil)
 
 var _ provider.ResumableAdapter = (*resumableEngineAdapter)(nil)
 
@@ -109,6 +141,76 @@ func TestGenerateFinalizesTerminalFirstPollOutcome(t *testing.T) {
 	}
 	if operation.State != admission.StateAmbiguous {
 		t.Fatalf("operation state after terminal poll = %q, want ambiguous", operation.State)
+	}
+}
+
+func TestGenerateRecoversAcceptedSubmitFailureByIdempotencyKey(t *testing.T) {
+	completed := successfulResponse()
+	completed.OperationKey = "resumable-submit-recovery"
+	adapter := &idempotencyRecoveryAdapter{resumableEngineAdapter: &resumableEngineAdapter{
+		submitErr:      provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAccepted, provider.RetryNever, "submit response was lost"),
+		pollResponses:  []provider.ResumableResult{{State: provider.ResumableCompleted, ProviderOperationID: "recovered-provider-operation", Dispatch: provider.DispatchAccepted, Result: provider.Result{Response: completed}}},
+		recoveryPollID: "recovered-provider-operation",
+	}, recovered: provider.ResumableResult{State: provider.ResumablePending, ProviderOperationID: "recovered-provider-operation", Dispatch: provider.DispatchAccepted}}
+	harness := newHarness(t, adapter)
+	response, err := harness.engine.Generate(context.Background(), baseRequest("resumable-submit-recovery"))
+	if err != nil {
+		t.Fatalf("recovered submit failed: %v", err)
+	}
+	if response.Status != llm.ResponseStatusCompleted {
+		t.Fatalf("response status = %q, want completed", response.Status)
+	}
+	adapter.mu.Lock()
+	submits, recoveries, polls := adapter.submits, adapter.recoveries, adapter.polls
+	adapter.mu.Unlock()
+	if submits != 1 || recoveries != 1 || polls != 1 {
+		t.Fatalf("submit/recovery/poll calls = %d/%d/%d, want 1/1/1", submits, recoveries, polls)
+	}
+}
+
+func TestGenerateNotFoundRecoveryRemainsAmbiguous(t *testing.T) {
+	adapter := &idempotencyRecoveryAdapter{resumableEngineAdapter: &resumableEngineAdapter{
+		submitErr: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "submit response was lost"),
+	}, recovered: provider.ResumableResult{State: provider.ResumableNotFound, Dispatch: provider.DispatchAmbiguous}}
+	harness := newHarness(t, adapter)
+	_, err := harness.engine.Generate(context.Background(), baseRequest("resumable-submit-not-found"))
+	if err == nil {
+		t.Fatal("not-found recovery unexpectedly completed")
+	}
+	operation, getErr := harness.admission.Get(context.Background(), operationIDForTest(t, baseRequest("resumable-submit-not-found")))
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if operation.State != admission.StateAmbiguous {
+		t.Fatalf("operation state = %q, want ambiguous", operation.State)
+	}
+	adapter.mu.Lock()
+	submits, recoveries, polls := adapter.submits, adapter.recoveries, adapter.polls
+	adapter.mu.Unlock()
+	if submits != 1 || recoveries != 1 || polls != 0 {
+		t.Fatalf("submit/recovery/poll calls = %d/%d/%d, want 1/1/0", submits, recoveries, polls)
+	}
+}
+
+func TestGenerateAcceptedSubmitFailureWithoutRecoveryRemainsAmbiguous(t *testing.T) {
+	adapter := &resumableEngineAdapter{submitErr: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAccepted, provider.RetryNever, "submit response was lost")}
+	harness := newHarness(t, adapter)
+	request := baseRequest("resumable-submit-no-recovery")
+	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
+		t.Fatal("unsupported recovery unexpectedly completed")
+	}
+	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.State != admission.StateAmbiguous {
+		t.Fatalf("operation state = %q, want ambiguous", operation.State)
+	}
+	adapter.mu.Lock()
+	submits := adapter.submits
+	adapter.mu.Unlock()
+	if submits != 1 {
+		t.Fatalf("submit calls = %d, want one with no recovery or resubmission", submits)
 	}
 }
 
