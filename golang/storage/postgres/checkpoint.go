@@ -147,6 +147,16 @@ func (repository DurableCheckpointRepository) Get(ctx context.Context, scopeID s
 		value := state.CheckpointID(compactedID.String())
 		checkpoint.CompactedThroughID = &value
 	}
+	if parentID != nil {
+		if err := repository.ensureCheckpointScope(ctx, scope, *parentID, "parent checkpoint"); err != nil {
+			return state.DurableCheckpoint{}, err
+		}
+	}
+	if compactedID != nil {
+		if err := repository.ensureCheckpointScope(ctx, scope, *compactedID, "compacted-through checkpoint"); err != nil {
+			return state.DurableCheckpoint{}, err
+		}
+	}
 	checkpoint.DeltaBlob, err = repository.readBlob(ctx, scope, deltaID, "delta")
 	if err != nil {
 		return state.DurableCheckpoint{}, err
@@ -199,6 +209,27 @@ func (repository DurableCheckpointRepository) readBlob(ctx context.Context, scop
 	reference.ID = state.BlobID(id.String())
 	copy(reference.Digest[:], digest)
 	return reference, nil
+}
+
+// ensureCheckpointScope protects lineage references on reads as well as
+// publication. The foreign key proves existence but, because scope_id is not
+// duplicated in that key, it cannot prove tenant ownership.
+func (repository DurableCheckpointRepository) ensureCheckpointScope(ctx context.Context, scope, checkpoint uuid.UUID, label string) error {
+	relation, err := repository.relation("conversation_checkpoints")
+	if err != nil {
+		return err
+	}
+	var checkpointScope uuid.UUID
+	if err := repository.Pool.QueryRow(ctx, "SELECT scope_id FROM "+relation+" WHERE checkpoint_id=$1", checkpoint).Scan(&checkpointScope); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("checkpoint %s does not exist", label)
+		}
+		return redactPostgresError(fmt.Errorf("check PostgreSQL %s scope: %w", label, err))
+	}
+	if checkpointScope != scope {
+		return fmt.Errorf("checkpoint %s belongs to a different scope", label)
+	}
+	return nil
 }
 
 func (repository DurableCheckpointRepository) readProviderState(ctx context.Context, scope uuid.UUID, checkpointID state.CheckpointID) ([]state.CheckpointProviderState, error) {
@@ -390,6 +421,11 @@ func (unit *checkpointUnitOfWork) PutCheckpoint(ctx context.Context, write state
 			return err
 		}
 	}
+	if compactedID != nil {
+		if err := unit.ensureCheckpointScope(ctx, scope, *compactedID, "compacted-through checkpoint"); err != nil {
+			return err
+		}
+	}
 	originOperationID, err := parseOperationUUID(checkpoint.OriginOperationID)
 	if err != nil {
 		return err
@@ -458,6 +494,29 @@ func (unit *checkpointUnitOfWork) ensureParent(ctx context.Context, scope, paren
 	}
 	if depth != parentDepth+1 {
 		return errors.New("checkpoint depth must be parent depth plus one")
+	}
+	return nil
+}
+
+// ensureCheckpointScope closes the schema's intentionally simple UUID foreign
+// key by checking that a lineage reference belongs to the publishing scope.
+// PostgreSQL can enforce that the referenced checkpoint exists, but the
+// checkpoint schema does not duplicate scope_id in the foreign key. Without
+// this check, compacted_through_checkpoint_id could point across tenants.
+func (unit *checkpointUnitOfWork) ensureCheckpointScope(ctx context.Context, scope, checkpoint uuid.UUID, label string) error {
+	relation, err := unit.namespace.Render("conversation_checkpoints")
+	if err != nil {
+		return err
+	}
+	var checkpointScope uuid.UUID
+	if err := unit.tx.QueryRow(ctx, "SELECT scope_id FROM "+relation+" WHERE checkpoint_id=$1", checkpoint).Scan(&checkpointScope); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("checkpoint %s does not exist", label)
+		}
+		return redactPostgresError(fmt.Errorf("check PostgreSQL %s scope: %w", label, err))
+	}
+	if checkpointScope != scope {
+		return fmt.Errorf("checkpoint %s belongs to a different scope", label)
 	}
 	return nil
 }
