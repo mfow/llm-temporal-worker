@@ -31,6 +31,12 @@ var (
 	// given a provider/state-backed engine factory. Failing before worker start
 	// is safer than accepting Activities that can never perform inference.
 	ErrEngineFactoryUnavailable = errors.New("provider-backed engine factory is not configured")
+	// ErrV1RuntimeUnavailable is returned before listeners or Temporal polling
+	// start when the process has not been given the durable v1 implementation.
+	// The Activity adapter remains fail-closed as a second line of defense, but
+	// a process that advertises the v1 Activity names must not report readiness
+	// while every invocation would return a permanent configuration error.
+	ErrV1RuntimeUnavailable = errors.New("durable v1 runtime is not configured")
 	// ErrTemporalClientUnavailable is returned when the Temporal factory gives
 	// runtime an unusable client.
 	ErrTemporalClientUnavailable = errors.New("Temporal client factory returned no client")
@@ -85,7 +91,11 @@ type Options struct {
 
 	TemporalFactory TemporalClientFactory
 	EngineFactory   EngineFactory
-	WorkerFactory   app.WorkerFactory
+	// V1Runtime supplies the durable implementation behind the one-shot v1
+	// Activity boundary. Production must provide this before Start; leaving it
+	// unset keeps construction inspectable but fails closed at startup.
+	V1Runtime     activity.V1Runtime
+	WorkerFactory app.WorkerFactory
 	// DependencyProbes supplements production snapshot probes for embeddings
 	// and tests. ProductionEngineFactory contributes Redis and bucket probes
 	// through its ClientSet; provider endpoints are never probes.
@@ -123,6 +133,7 @@ type Runtime struct {
 
 	readinessProbeInterval time.Duration
 	readinessProbeTimeout  time.Duration
+	v1RuntimeConfigured    bool
 	monitorCancel          context.CancelFunc
 	monitorDone            chan struct{}
 
@@ -216,6 +227,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if identity == "" {
 		identity = (DefaultTemporalClientFactory{}).identity(configuration.Temporal.IdentityPrefix)
 	}
+	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, options.V1Runtime, &snapshotQueryService{application: application})
 	worker, err := app.NewWorker(app.WorkerOptions{
 		Client:                         temporalClient,
 		TaskQueue:                      configuration.Temporal.TaskQueue,
@@ -223,7 +235,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		MaxConcurrentActivities:        configuration.Temporal.Worker.MaxConcurrentActivities,
 		MaxConcurrentActivityTaskPolls: configuration.Temporal.Worker.MaxConcurrentActivityTaskPolls,
 		GracefulStopTimeout:            time.Duration(configuration.Temporal.Worker.GracefulStopTimeout),
-		Activities:                     newRuntimeActivities(configuration, dynamic, metrics, tracer, &snapshotQueryService{application: application}),
+		Activities:                     activities,
 		Health:                         health,
 		Metrics:                        metrics,
 		Factory:                        options.WorkerFactory,
@@ -285,7 +297,39 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		shutdown: coordinator, timeout: timeout,
 		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
 		readinessProbeTimeout:  time.Duration(configuration.Server.ReadinessProbeTimeout),
+		v1RuntimeConfigured:    !v1RuntimeRequired(configuration) || isV1RuntimeConfigured(activities.V1Runtime),
 	}, nil
+}
+
+func v1RuntimeRequired(configuration config.Config) bool {
+	// Only the checked-in development composition is allowed to start without
+	// the durable v1 seam. Every other environment, including production and
+	// unknown values, must fail closed before advertising readiness.
+	return configuration.Environment != "development"
+}
+
+func composeRuntimeActivities(configuration config.Config, engine llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer, v1Runtime activity.V1Runtime, queryService activity.QueryService) *activity.Activities {
+	activities := newRuntimeActivities(configuration, engine, metrics, tracer, queryService)
+	if v1Runtime != nil {
+		activities.V1Runtime = v1Runtime
+	}
+	if !v1RuntimeRequired(configuration) && !isV1RuntimeConfigured(activities.V1Runtime) {
+		// The local Compose profile is a parser/configuration/readiness fixture,
+		// not a v1 worker. Omit all v1 seams so it cannot advertise the versioned
+		// Activity names while no durable implementation is present.
+		activities.V1Runtime = nil
+		activities.QueryService = nil
+	}
+	return activities
+}
+
+func isV1RuntimeConfigured(runtime activity.V1Runtime) bool {
+	switch runtime.(type) {
+	case nil, activity.UnconfiguredV1Runtime, *activity.UnconfiguredV1Runtime:
+		return false
+	default:
+		return true
+	}
 }
 
 // newRuntimeActivities keeps the worker's Activity-bound configuration in one
@@ -353,6 +397,12 @@ func (runtime *Runtime) Start() error {
 	if runtime == nil || runtime.Worker == nil {
 		return errors.New("runtime is not initialized")
 	}
+	if !runtime.v1RuntimeConfigured {
+		if runtime.Health != nil {
+			runtime.Health.SetReady(false)
+		}
+		return ErrV1RuntimeUnavailable
+	}
 	runtime.mu.Lock()
 	if runtime.started {
 		runtime.mu.Unlock()
@@ -418,7 +468,12 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 		ctx = context.Background()
 	}
 	if err := runtime.Start(); err != nil {
-		return err
+		// Start may fail before listeners are bound (for example when the
+		// durable v1 runtime is absent), but New has already allocated the
+		// Temporal client, worker, and snapshot resources. Close those resources
+		// before returning the startup error so a fail-closed process does not
+		// leak credentials, connections, or telemetry goroutines.
+		return errors.Join(err, runtime.Shutdown(context.Background()))
 	}
 	var healthErrors <-chan error
 	var metricsErrors <-chan error

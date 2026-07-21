@@ -150,6 +150,10 @@ services:
   # `docker compose --profile worker up worker`. The checked-in provider mock
   # is intentionally Docker-private and is denied by the provider egress
   # policy, so this profile proves boot/readiness rather than live inference.
+  # The mounted development config is intentionally a parser/configuration/
+  # readiness fixture. Without a durable V1Runtime it omits v1 Activity
+  # registration and cannot dispatch inference; every other environment keeps
+  # the production startup guard.
   worker:
     profiles: [worker]
     build:
