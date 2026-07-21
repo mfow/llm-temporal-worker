@@ -63,12 +63,40 @@ let mismatch expected actual =
   Temporal.Error.codec
     ~message:(Printf.sprintf "query result kind mismatch: expected %s, got %s" expected actual)
 
+let cursor_mismatch expected actual =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf "query response cursor kind mismatch: expected %s, got %s"
+                (Query_cursor.kind_to_string expected)
+                (Query_cursor.kind_to_string actual))
+
+let cursor_missing_kind expected =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf "query response cursor is missing its %s kind"
+                (Query_cursor.kind_to_string expected))
+
+let cursor_forbidden kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf "query response.%s must not include next_cursor"
+                (Query_cursor.kind_to_string kind))
+
 let result_kind = function
   | Provider_status_result _ -> "provider_status"
   | Model_inventory_result _ -> "model_inventory"
   | Credit_status_result _ -> "credit_status"
   | Budget_status_result _ -> "budget_status"
   | Spend_summary_result _ -> "spend_summary"
+
+let validate_response_cursor : type a. a t -> query_response -> (unit, Temporal.Error.t) result =
+  fun query response ->
+    let expected = expected_cursor_kind query in
+    match query, response.next_cursor with
+    | (Budget_status _ | Spend_summary _), Some _ -> Error (cursor_forbidden expected)
+    | (_, None) -> Ok ()
+    | (_, Some cursor) ->
+        (match Query_cursor.kind cursor with
+         | Some actual when actual = expected -> Ok ()
+         | Some actual -> Error (cursor_mismatch expected actual)
+         | None -> Error (cursor_missing_kind expected))
 
 let response_metadata (response : query_response) value =
   { value;
@@ -82,17 +110,20 @@ let response_metadata (response : query_response) value =
 
 let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t) result =
   fun query response ->
-    match query, response.result with
-    | Provider_status _, Provider_status_result value -> Ok (response_metadata response value)
-    | Model_inventory _, Model_inventory_result value -> Ok (response_metadata response value)
-    | Credit_status _, Credit_status_result value -> Ok (response_metadata response value)
-    | Budget_status _, Budget_status_result value -> Ok (response_metadata response value)
-    | Spend_summary _, Spend_summary_result value -> Ok (response_metadata response value)
-    | Provider_status _, result -> Error (mismatch "provider_status" (result_kind result))
-    | Model_inventory _, result -> Error (mismatch "model_inventory" (result_kind result))
-    | Credit_status _, result -> Error (mismatch "credit_status" (result_kind result))
-    | Budget_status _, result -> Error (mismatch "budget_status" (result_kind result))
-    | Spend_summary _, result -> Error (mismatch "spend_summary" (result_kind result))
+    match validate_response_cursor query response with
+    | Error error -> Error error
+    | Ok () ->
+        match query, response.result with
+        | Provider_status _, Provider_status_result value -> Ok (response_metadata response value)
+        | Model_inventory _, Model_inventory_result value -> Ok (response_metadata response value)
+        | Credit_status _, Credit_status_result value -> Ok (response_metadata response value)
+        | Budget_status _, Budget_status_result value -> Ok (response_metadata response value)
+        | Spend_summary _, Spend_summary_result value -> Ok (response_metadata response value)
+        | Provider_status _, result -> Error (mismatch "provider_status" (result_kind result))
+        | Model_inventory _, result -> Error (mismatch "model_inventory" (result_kind result))
+        | Credit_status _, result -> Error (mismatch "credit_status" (result_kind result))
+        | Budget_status _, result -> Error (mismatch "budget_status" (result_kind result))
+        | Spend_summary _, result -> Error (mismatch "spend_summary" (result_kind result))
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
@@ -118,15 +149,23 @@ let execute ?task_queue ~operation_key ~context query =
   execute_with ?task_queue ~dispatch:activity_dispatch ~operation_key ~context query
 
 let start ?task_queue ~operation_key ~context query =
-  let envelope = to_envelope ~operation_key ~context query in
-  let future =
-    Temporal.Activity.start
-      ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-      ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-      Llm_temporal_invocation.query_v1_activity envelope
-  in
-  (* [Temporal.Future.map] preserves the Activity's error channel and the
-     public SDK intentionally has no constructor for turning a successful
-     value into a future error. Keep protocol mismatches in the value channel
-     rather than raising from a workflow callback. *)
-  Temporal.Future.map (fun response -> of_response query response) future
+  match validate_cursor query with
+  | Error error ->
+      (* The public SDK intentionally has no constructor for turning a
+         successful Future value into a Future error.  Preserve the same
+         value-channel validation contract as [execute_with] without
+         dispatching an Activity.  [Future.all []] is an owner-aware ready
+         future inside a Workflow and remains a safe ready value in tests. *)
+      Temporal.Future.map (fun _ -> Error error) (Temporal.Future.all [])
+  | Ok () ->
+      let envelope = to_envelope ~operation_key ~context query in
+      let future =
+        Temporal.Activity.start
+          ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
+          ~retry_policy:Llm_temporal_invocation.activity_retry_policy
+          Llm_temporal_invocation.query_v1_activity envelope
+      in
+      (* [Temporal.Future.map] preserves the Activity's error channel and
+         keeps protocol-kind mismatches in the successful value channel
+         rather than raising from a workflow callback. *)
+      Temporal.Future.map (fun response -> of_response query response) future

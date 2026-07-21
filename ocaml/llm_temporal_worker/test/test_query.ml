@@ -150,6 +150,56 @@ let () =
    | Error error -> failf "unexpected mismatch error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched query result was accepted");
 
+  (* A typed response must carry a cursor associated with the same query
+     constructor.  Dispatchers injected by deterministic tests bypass the
+     JSON codec, so the ergonomic facade validates this boundary as well. *)
+  let wrong_response_cursor =
+    { (response (Provider_status_result { routes = [] })) with
+      next_cursor = Some (tagged_cursor Query_cursor.Model_inventory "model-page-2") }
+  in
+  (match Query.of_response provider wrong_response_cursor with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response cursor kind mismatch: expected provider_status, got model_inventory" -> ()
+   | Error error -> failf "unexpected response cursor error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "mismatched response cursor was accepted");
+
+  let untagged_response_cursor =
+    { (response (Provider_status_result { routes = [] })) with
+      next_cursor = Some (Query_cursor.of_string_exn "provider:untagged-page-2") }
+  in
+  (match Query.of_response provider untagged_response_cursor with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response cursor is missing its provider_status kind" -> ()
+   | Error error -> failf "unexpected untagged response cursor error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "untagged response cursor was accepted");
+
+  let non_paginated_response_cursor =
+    { (response (Budget_status_result {
+          active_at = time "2026-01-01T00:00:00Z";
+          generation_id = Budget_generation_id.of_string "generation-1";
+          manifest_digest = digest (String.make 64 'a');
+          stream_high_water_mark = stream_id "1-0";
+          windows = [] })) with
+      next_cursor = Some (tagged_cursor Query_cursor.Budget_status "unexpected-page-2") }
+  in
+  (match Query.of_response budget non_paginated_response_cursor with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.budget_status must not include next_cursor" -> ()
+   | Error error -> failf "unexpected non-paginated cursor error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "non-paginated response cursor was accepted");
+
+  (* [start] performs the same cursor validation before scheduling an
+     Activity.  Its error is kept in the successful result channel, matching
+     the existing Temporal.Future contract for protocol mismatches. *)
+  let invalid_start = Query.start ~operation_key ~context wrong_kind in
+  (match Temporal.Future.peek invalid_start with
+   | Some (Ok (Error error)) when String.equal (Temporal.Error.message error)
+                                      "query cursor kind mismatch: expected model_inventory, got provider_status" -> ()
+   | Some (Ok (Error error)) -> failf "unexpected start cursor error: %s" (Temporal.Error.message error)
+   | Some (Ok (Ok _)) -> failwith "start accepted a mismatched cursor"
+   | Some (Error error) -> failf "start returned a Temporal error: %s" (Temporal.Error.message error)
+   | None -> failwith "invalid start did not produce a ready validation result");
+
   let activity_error = Temporal.Error.make ~category:`Activity ~message:"query failed" () in
   let failing_dispatch ?task_queue:_ _activity _envelope = Error activity_error in
   (match Query.execute_with ~dispatch:failing_dispatch ~operation_key ~context provider with

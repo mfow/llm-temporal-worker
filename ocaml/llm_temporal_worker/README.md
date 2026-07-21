@@ -207,6 +207,13 @@ OCaml facade before an Activity is dispatched. `Query_cursor.of_string` remains
 available for manually supplied or fixture cursors whose origin is unknown;
 those cursors are still validated by the server.
 
+The same boundary applies to injected deterministic dispatchers and to
+`Query.start`: a response cursor must carry the constructor's query kind, and
+budget/spend responses cannot carry a cursor. A mismatched cursor is returned
+as a typed codec error and no Activity is scheduled for an invalid `start`
+request. This keeps pagination type-associated even when a caller tests the
+facade without going through the JSON codec.
+
 Each `*_id` module is an opaque wrapper around arbitrary text—not a provider
 enum or whitelist.  For example, `Operation_key.t`, `Endpoint_id.t`, and
 `Provider_request_id.t` cannot be interchanged, while `of_string` and
