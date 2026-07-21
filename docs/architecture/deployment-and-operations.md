@@ -85,6 +85,11 @@ workload-identity overlays.
 | `/health/ready` | valid snapshot, worker polling, required state stores healthy | remove from service/polling |
 | `/metrics` | Prometheus exposition | none |
 
+The liveness and readiness probes are read-only: they accept `GET` and
+`HEAD` and return `405 Method Not Allowed` for other methods with an explicit
+`Allow: GET, HEAD` header. `HEAD` preserves the probe status without a response
+body, so health checks cannot accidentally become a write surface.
+
 Provider endpoints are excluded from readiness because one route can be down
 while another is valid. A configuration with zero eligible routes is not ready.
 
