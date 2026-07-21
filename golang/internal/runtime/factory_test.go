@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
@@ -115,6 +116,49 @@ func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
 	}
 	if recorder := newPostgresProviderStatusRecorder(closer); recorder == nil {
 		t.Fatal("same-pool status recorder was not composed")
+	}
+	repositories := queryRepositoriesFromCloser(closer)
+	if repositories.ProviderStatus == nil || repositories.ProviderStatus.Pool != closer.pool {
+		t.Fatalf("query repository bundle = %#v, want same-pool provider status repository", repositories)
+	}
+	if repositories.Inventory != nil || repositories.QueryAudit != nil {
+		t.Fatal("default closer exposed unconfigured inventory or query-audit repositories")
+	}
+}
+
+type queryCompositionCloser struct {
+	postgresPoolCloser
+	repositories PostgresQueryRepositories
+	service      activity.QueryService
+}
+
+type queryServiceStub struct{}
+
+func (queryServiceStub) Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return llm.QueryResponseV1{}, nil
+}
+
+func (closer queryCompositionCloser) QueryRepositories() PostgresQueryRepositories {
+	return closer.repositories
+}
+
+func (closer queryCompositionCloser) QueryService() activity.QueryService { return closer.service }
+
+func TestProductionClientSetRetainsSnapshotQueryBundleAndService(t *testing.T) {
+	var service activity.QueryService = queryServiceStub{}
+	queryCloser := queryCompositionCloser{
+		repositories: PostgresQueryRepositories{Inventory: &postgresstore.InventoryRepository{}},
+		service:      service,
+	}
+	set := &productionClientSet{queryRepos: queryRepositoriesFromCloser(queryCloser), queryService: queryCloser.QueryService()}
+	if set.QueryRepositories().Inventory == nil {
+		t.Fatal("inventory repository was not retained in snapshot client set")
+	}
+	if set.QueryService() != service {
+		t.Fatal("query service was not retained in snapshot client set")
+	}
+	if got := (&productionClientSet{}).QueryRepositories(); got.ProviderStatus != nil || got.Inventory != nil || got.QueryAudit != nil {
+		t.Fatalf("nil capability set = %#v", got)
 	}
 }
 

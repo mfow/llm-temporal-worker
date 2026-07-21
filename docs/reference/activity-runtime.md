@@ -27,8 +27,11 @@ including the opaque storage position and horizon, so a repeatable-read
 adapter can enforce the same snapshot before reading its next page. Cursors
 must be issued with the worker's typed `CursorCodec` key; the raw `Handler`
 seam remains available for adapters migrating from the legacy cursor envelope.
-Query-specific persisted reads, provider refreshes, and Activity
-composition remain follow-up work tracked in
+The production client set forwards a query service only when it is supplied by
+the same snapshot-scoped PostgreSQL closer as its repositories; the default
+composition does not invent authorization, cursor keys, or handlers. Query
+families without a configured service therefore fail closed. Query-specific
+refreshes and complete Activity composition remain follow-up work tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
 `QueryService.Audit` is the storage-neutral seam for the audit requirement: it
