@@ -37,6 +37,7 @@ targets=(
   "./routing FuzzProviderCacheKeyForkIdentity"
   "./state FuzzVerifyHandleNeverPanics"
   "./state FuzzCheckpointBlobCodecDecodeDeltaNeverPanics"
+  "./storage/redis FuzzBudgetManifestMemberOrder"
   "./storage/redis FuzzOperationCodecRoundTrip"
 )
 
