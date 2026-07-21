@@ -39,6 +39,22 @@ returns; a sink error becomes retryable state-unavailable/finalize failure.
 The production Activity factory still has to connect this hook to the
 repository-only [query execution audit ledger](query-audit-ledger.md).
 
+## Query service snapshot composition
+
+During each immutable snapshot build, runtime first checks whether the client
+set exposes a query service through `runtime.QueryServiceSource`. If the
+`EngineFactory` also implements `runtime.QueryServiceFactory`, its
+`BuildQueryService` result is authoritative and replaces the client-provided
+value. A factory error aborts snapshot construction and closes the clients that
+were already built, so a query repository cannot leak across a failed reload.
+
+A factory that returns no query service without an error leaves the snapshot
+valid, but `llm.query.v1` remains fail-closed with a non-retryable configuration
+error and performs no provider or storage read. Each query execution acquires
+the application snapshot lease before dispatch and releases it afterward;
+configuration reload therefore waits for in-flight query work before closing
+the old snapshot's query clients.
+
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
 control-plane implementation. Production composition currently installs an
 explicit fail-closed runtime until that implementation is wired. A missing or
