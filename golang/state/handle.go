@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 const handleVersion = "ctn_v1"
@@ -76,14 +79,33 @@ func (keyring *Keyring) Issue(tenant string) (string, error) {
 	if keyring == nil || tenant == "" {
 		return "", ErrInvalidHandle
 	}
-	keyID := keyring.order[0]
 	randomID := make([]byte, 16)
 	if _, err := io.ReadFull(keyring.reader, randomID); err != nil {
 		return "", fmt.Errorf("generate continuation handle: %w", err)
 	}
+	return keyring.issue(tenant, randomID)
+}
+
+func (keyring *Keyring) issue(scope string, randomID []byte) (string, error) {
+	if keyring == nil || strings.TrimSpace(scope) == "" || len(randomID) != 16 {
+		return "", ErrInvalidHandle
+	}
+	keyID := keyring.order[0]
 	encodedID := base64.RawURLEncoding.EncodeToString(randomID)
-	mac := keyring.mac(keyID, randomID, tenant)
+	mac := keyring.mac(keyID, randomID, scope)
 	return strings.Join([]string{handleVersion, keyID, encodedID, base64.RawURLEncoding.EncodeToString(mac)}, "."), nil
+}
+
+// IssueCheckpointHandle creates the same opaque MAC-bound handle format as a
+// continuation, but uses the durable checkpoint UUID as its 16-byte payload.
+// The UUID never appears in the returned token; it is recovered only after a
+// successful, scope-bound verification.
+func (keyring *Keyring) IssueCheckpointHandle(scope string, checkpointID CheckpointID) (string, error) {
+	parsed, err := uuid.Parse(string(checkpointID))
+	if err != nil || parsed == uuid.Nil || parsed.String() != string(checkpointID) {
+		return "", fmt.Errorf("checkpoint ID must be a canonical UUID: %w", ErrInvalidHandle)
+	}
+	return keyring.issue(scope, parsed[:])
 }
 
 // Verify validates a handle and returns its random identifier. The result is
@@ -113,6 +135,38 @@ func (keyring *Keyring) Verify(tenant, handle string) ([]byte, error) {
 		return nil, ErrInvalidHandle
 	}
 	return append([]byte(nil), randomID...), nil
+}
+
+// CheckpointHandleVerifier is the capability required by a durable
+// materializer to turn an opaque caller handle into a scoped checkpoint ID.
+// Implementations must fail closed for unknown keys, malformed IDs, and scope
+// mismatches; they must not expose a database locator in an error.
+type CheckpointHandleVerifier interface {
+	VerifyCheckpointHandle(context.Context, string, string) (CheckpointID, error)
+}
+
+// VerifyCheckpointHandle verifies the MAC against scope and requires that the
+// hidden identifier is a canonical non-nil UUID. The context is checked before
+// and after verification so callers can bound CPU spent on hostile tokens.
+func (keyring *Keyring) VerifyCheckpointHandle(ctx context.Context, scope, handle string) (CheckpointID, error) {
+	if ctx == nil {
+		return "", ErrInvalidHandle
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	randomID, err := keyring.Verify(scope, handle)
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	parsed, err := uuid.FromBytes(randomID)
+	if err != nil || parsed == uuid.Nil || parsed.String() != strings.ToLower(parsed.String()) {
+		return "", ErrInvalidHandle
+	}
+	return CheckpointID(parsed.String()), nil
 }
 
 func (keyring *Keyring) mac(keyID string, randomID []byte, tenant string) []byte {

@@ -47,3 +47,26 @@ provider, implement retention, or wire `V1Runtime`, `llm.generate.v1`, or
 `llm.compact.v1`. Those integrations still require transaction fault-injection,
 schema/ACL, and Activity-level idempotency evidence before production
 composition can claim end-to-end durable checkpoint support.
+
+## Blob codec and materialization adapter
+
+`state.CheckpointBlobCodec` defines the bounded `checkpoint-blob/v1` envelope
+for the four immutable blob roles: `delta`, `response`, `settings_patch`, and
+`materialized_snapshot`. The payload is canonical JSON and is decoded through
+the closed item/settings codecs; callers must treat a version, kind, duplicate
+key, media-type, or size/depth error as non-retryable integrity failure.
+
+`state.CheckpointBlobReader` accepts `(context, scope ID, BlobReference)` and
+returns verified bytes. `state.ScopedBlobReader` is the reusable adapter for a
+content-addressed `blob.Store`: its resolver is passed the scope and typed blob
+ID, and the adapter compares the resolved store reference with the durable
+digest, byte length, and media type before reading. It then rechecks the byte
+length and SHA-256. No caller-provided locator is accepted.
+
+`state.DurableCheckpointMaterializer` combines the repository, reader, codec,
+and optional `CheckpointHandleVerifier`. It resolves the complete parent chain,
+rejects cycles/depth gaps/cross-scope rows, and delegates replay/frontier/
+snapshot checks to `CheckpointGraph`. `MaterializeHandle` verifies the opaque
+scope-bound handle before lookup. This is a read-side prerequisite only: it
+does not publish blobs or checkpoint rows and is not wired into Generate or
+Compact.

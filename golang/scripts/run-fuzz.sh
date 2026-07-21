@@ -36,6 +36,7 @@ targets=(
   "./routing FuzzPlannerCanonicalizesServiceClassFallbacks"
   "./routing FuzzProviderCacheKeyForkIdentity"
   "./state FuzzVerifyHandleNeverPanics"
+  "./state FuzzCheckpointBlobCodecDecodeDeltaNeverPanics"
   "./storage/redis FuzzOperationCodecRoundTrip"
 )
 
