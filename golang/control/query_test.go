@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 type queryHandlerFunc func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
@@ -173,5 +174,71 @@ func TestQueryServiceRejectsResponseMismatchAndUnsafeScope(t *testing.T) {
 	request.Context.Actor = " workflow"
 	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "unsafe") {
 		t.Fatalf("unsafe scope error = %v", err)
+	}
+}
+
+func TestQueryServiceClassifiesRawHandlerFailureAsRetryableStateUnavailable(t *testing.T) {
+	request := queryRequest()
+	backendErr := errors.New("postgres unavailable: dsn=postgres://secret")
+	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return llm.QueryResponseV1{}, backendErr
+	}), func(context.Context, Authorization) error { return nil })
+
+	_, err := service.Execute(context.Background(), request)
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want provider.Error", err, err)
+	}
+	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetrySameOperation {
+		t.Fatalf("provider error = %#v", providerErr)
+	}
+	if !errors.Is(err, backendErr) {
+		t.Fatalf("wrapped error = %v, want original cause for local diagnostics", err)
+	}
+	if strings.Contains(err.Error(), "postgres") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error leaked backend details: %v", err)
+	}
+}
+
+func TestQueryServicePreservesPreclassifiedProviderFailure(t *testing.T) {
+	request := queryRequest()
+	providerErr := provider.NewError(provider.CodePermissionDenied, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "query access denied")
+	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return llm.QueryResponseV1{}, providerErr
+	}), func(context.Context, Authorization) error { return nil })
+
+	_, err := service.Execute(context.Background(), request)
+	if err != providerErr {
+		t.Fatalf("error = %p, want original provider error %p", err, providerErr)
+	}
+}
+
+func TestQueryServicePreservesCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	service := testQueryService(queryHandlerFunc(func(handlerCtx context.Context, _ llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		cancel()
+		return llm.QueryResponseV1{}, handlerCtx.Err()
+	}), func(context.Context, Authorization) error { return nil })
+	_, err := service.Execute(ctx, queryRequest())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want caller cancellation", err)
+	}
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		t.Fatalf("error = %#v, caller cancellation must not be remapped", providerErr)
+	}
+}
+
+func TestQueryServiceMapsChildDeadlineToRetryableStateUnavailable(t *testing.T) {
+	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return llm.QueryResponseV1{}, context.DeadlineExceeded
+	}), func(context.Context, Authorization) error { return nil })
+	_, err := service.Execute(context.Background(), queryRequest())
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want provider.Error", err, err)
+	}
+	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseStateLoad || providerErr.Retry != provider.RetrySameOperation {
+		t.Fatalf("provider error = %#v", providerErr)
 	}
 }
