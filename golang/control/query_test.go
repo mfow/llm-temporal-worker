@@ -335,6 +335,37 @@ func TestQueryServiceTypedHandlerBindsCursorClaimsAndValidatesOutgoingCursor(t *
 	}
 }
 
+func TestQueryServiceTypedHandlerRejectsChangedContinuationHorizon(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	horizon := base.Add(-time.Minute)
+	codec := &CursorCodec{Key: []byte("typed-query-key"), TTL: 15 * time.Minute}
+	request := typedProviderRequest()
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, got QueryRequest, claims *BoundCursorClaims) (QueryResponse, error) {
+			nextHorizon := horizon
+			if claims != nil {
+				nextHorizon = horizon.Add(time.Minute)
+			}
+			next, err := codec.Sign(got, "route-2", nextHorizon, base)
+			if err != nil {
+				t.Fatalf("CursorCodec.Sign() error = %v", err)
+			}
+			return typedProviderResponse(got, &next), nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: codec,
+		Clock:       func() time.Time { return base },
+	}
+	first, err := service.Execute(context.Background(), typedRequestWire(t, request))
+	if err != nil || first.NextCursor == nil {
+		t.Fatalf("first typed Execute() response = %#v, error = %v", first, err)
+	}
+	request.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: (*QueryCursor)(first.NextCursor)}}
+	if _, err := service.Execute(context.Background(), typedRequestWire(t, request)); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("changed continuation horizon error = %v, want %v", err, ErrQueryCursor)
+	}
+}
+
 func TestQueryServiceRawHandlerAcceptsTypedCursorCodec(t *testing.T) {
 	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
 	codec := &CursorCodec{Key: []byte("typed-query-key")}

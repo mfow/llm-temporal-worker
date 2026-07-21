@@ -194,8 +194,12 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 			if cursor == nil {
 				return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", ErrQueryCursor)
 			}
-			if _, err := service.CursorCodec.Decode(typedRequest, *cursor, service.now()); err != nil {
+			outgoingClaims, err := service.CursorCodec.Decode(typedRequest, *cursor, service.now())
+			if err != nil {
 				return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", err)
+			}
+			if typedClaims != nil && !outgoingClaims.Horizon.Equal(typedClaims.Horizon) {
+				return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", ErrQueryCursor)
 			}
 		} else if err := service.ValidateCursor(request, *response.NextCursor, service.now()); err != nil {
 			return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", err)
