@@ -818,11 +818,12 @@ directory unless a command explicitly says otherwise.
 - [ ] Test three siblings from one parent, no inherited fields on wire, decimal
   exactness, compaction tool/output isolation, query type inference/mismatch,
   and unchanged Temporal errors.
-- [ ] Compile the exact end-to-end sample in the OCaml architecture document as
-  an external package that imports only **Llm_temporal**. The fixture must run
-  all five typed Query constructors, a cache-enabled root call, three sibling
-  forks from one immutable parent using variants 0/1/2, explicit compaction,
-  and a post-compaction Generate that restores tools and structured output.
+- [x] Compile the exact end-to-end sample in the OCaml architecture document
+  as the external `ocaml/consumer_workflow_smoke` package importing only
+  **Llm_temporal**. The compile-only fixture type-checks all five typed Query
+  constructors, a cache-enabled root call, three sibling forks from one
+  immutable parent using variants 0/1/2, explicit compaction, and a
+  post-compaction Generate that restores tools and structured output.
 - [ ] Type-check both the natural facade and the low-level Activity descriptor
   examples. Assert the facade returns Temporal futures that can be composed
   with **Temporal.Future.all** without a hidden mutable conversation head.
