@@ -164,11 +164,17 @@ func (checkpoint DurableCheckpoint) Validate(_ time.Time) error {
 	if checkpoint.ParentID != nil && *checkpoint.ParentID == "" {
 		return fmt.Errorf("checkpoint parent ID is empty")
 	}
+	if checkpoint.ParentID != nil && *checkpoint.ParentID == checkpoint.ID {
+		return fmt.Errorf("checkpoint parent ID must differ from checkpoint ID")
+	}
 	if checkpoint.OriginOperationID == "" {
 		return fmt.Errorf("checkpoint origin operation ID is required")
 	}
 	if checkpoint.OriginCacheEntryID != nil && *checkpoint.OriginCacheEntryID == "" {
 		return fmt.Errorf("checkpoint origin cache entry ID is empty")
+	}
+	if checkpoint.Kind == CheckpointCacheReplay && checkpoint.OriginCacheEntryID == nil {
+		return fmt.Errorf("checkpoint cache replay origin cache entry ID is required")
 	}
 	for name, reference := range map[string]CheckpointBlobReference{
 		"delta": checkpoint.DeltaBlob, "response": checkpoint.ResponseBlob,
@@ -230,6 +236,17 @@ func (checkpoint DurableCheckpoint) CanonicalDigest() ([32]byte, error) {
 	encodeBlob := func(reference CheckpointBlobReference) blobDigest {
 		return blobDigest{ID: reference.ID, Digest: hex.EncodeToString(reference.Digest[:]), ByteLength: reference.ByteLength, MediaType: reference.MediaType}
 	}
+	// Repositories may hydrate zero child rows as either nil or an allocated
+	// empty slice. Normalize both representations before hashing so the same
+	// immutable checkpoint has one canonical digest.
+	providerState := checkpoint.ProviderState
+	if providerState == nil {
+		providerState = []CheckpointProviderState{}
+	}
+	affinities := checkpoint.Affinities
+	if affinities == nil {
+		affinities = ProviderCacheAffinitySet{}
+	}
 	payload := struct {
 		SchemaVersion              int
 		ID                         CheckpointID
@@ -262,7 +279,7 @@ func (checkpoint DurableCheckpoint) CanonicalDigest() ([32]byte, error) {
 		encodeBlob(checkpoint.DeltaBlob), encodeBlob(checkpoint.ResponseBlob), encodeBlob(checkpoint.SettingsPatchBlob), nil,
 		hex.EncodeToString(checkpoint.CanonicalLineageDigest[:]), hex.EncodeToString(checkpoint.MaterializedSettingsDigest[:]), hex.EncodeToString(checkpoint.ToolFrontierDigest[:]),
 		checkpoint.CompilerEpoch, checkpoint.CompactionPolicyVersion, checkpoint.CompactionPromptVersion, checkpoint.CompactedThroughID,
-		checkpoint.ProviderState, checkpoint.Affinities, checkpoint.CreatedAt.UTC(), checkpoint.ExpiresAt.UTC(),
+		providerState, affinities, checkpoint.CreatedAt.UTC(), checkpoint.ExpiresAt.UTC(),
 	}
 	if checkpoint.MaterializedSnapshotBlob != nil {
 		encoded := encodeBlob(*checkpoint.MaterializedSnapshotBlob)

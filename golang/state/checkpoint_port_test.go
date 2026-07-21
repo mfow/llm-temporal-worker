@@ -66,6 +66,8 @@ func TestDurableCheckpointValidationRejectsUnsafeRows(t *testing.T) {
 		{name: "missing scope", edit: func(value *DurableCheckpoint) { value.ScopeID = "" }},
 		{name: "invalid kind", edit: func(value *DurableCheckpoint) { value.Kind = "future" }},
 		{name: "parent depth mismatch", edit: func(value *DurableCheckpoint) { parent := CheckpointID("parent"); value.ParentID = &parent }},
+		{name: "self parent", edit: func(value *DurableCheckpoint) { parent := value.ID; value.ParentID = &parent; value.Depth = 1 }},
+		{name: "cache replay missing provenance", edit: func(value *DurableCheckpoint) { value.Kind = CheckpointCacheReplay }},
 		{name: "missing digest", edit: func(value *DurableCheckpoint) { value.ToolFrontierDigest = [32]byte{} }},
 		{name: "expired before creation", edit: func(value *DurableCheckpoint) { value.ExpiresAt = value.CreatedAt }},
 		{name: "negative blob length", edit: func(value *DurableCheckpoint) { value.DeltaBlob.ByteLength = -1 }},
@@ -78,6 +80,25 @@ func TestDurableCheckpointValidationRejectsUnsafeRows(t *testing.T) {
 				t.Fatal("Validate() accepted an invalid durable row")
 			}
 		})
+	}
+}
+
+func TestDurableCheckpointCanonicalDigestNormalizesEmptyChildren(t *testing.T) {
+	nilChildren := validDurableCheckpoint()
+	emptyChildren := nilChildren
+	emptyChildren.ProviderState = []CheckpointProviderState{}
+	emptyChildren.Affinities = ProviderCacheAffinitySet{}
+
+	nilDigest, err := nilChildren.CanonicalDigest()
+	if err != nil {
+		t.Fatalf("nil child digest error = %v", err)
+	}
+	emptyDigest, err := emptyChildren.CanonicalDigest()
+	if err != nil {
+		t.Fatalf("empty child digest error = %v", err)
+	}
+	if nilDigest != emptyDigest {
+		t.Fatalf("nil and empty child slices produced different digests: nil=%x empty=%x", nilDigest, emptyDigest)
 	}
 }
 
