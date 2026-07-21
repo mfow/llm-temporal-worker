@@ -23,6 +23,7 @@ type AdmissionStore struct {
 	clock       func() time.Time
 	operations  map[string]admission.Operation
 	providerIDs map[string]string
+	pollAfter   map[string]time.Time
 	byScope     map[string]string
 	buckets     map[budgetKey]map[int64]pricing.MicroUSD
 }
@@ -33,7 +34,7 @@ func NewAdmissionStore(options AdmissionOptions) *AdmissionStore {
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
-	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD)}
+	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), pollAfter: make(map[string]time.Time), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD)}
 }
 
 // MarkProviderPending mirrors the durable repository transition used by
@@ -68,6 +69,7 @@ func (store *AdmissionStore) MarkProviderPending(ctx context.Context, request ad
 	operation.UpdatedAt = store.clock()
 	store.operations[operation.ID] = operation
 	store.providerIDs[operation.ID] = request.ProviderOperationID
+	store.pollAfter[operation.ID] = request.PollAfter
 	return nil
 }
 
@@ -85,6 +87,23 @@ func (store *AdmissionStore) ProviderOperation(ctx context.Context, id string) (
 		return "", fmt.Errorf("provider operation envelope is incomplete")
 	}
 	return providerID, nil
+}
+
+// ProviderPollAfter returns the provider's persisted next-poll guidance for a
+// pending operation. A zero time means that the provider supplied no delay.
+func (store *AdmissionStore) ProviderPollAfter(ctx context.Context, id string) (time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		return time.Time{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, ok := store.operations[id]; !ok {
+		return time.Time{}, admission.ErrOperationNotFound
+	}
+	if _, ok := store.providerIDs[id]; !ok {
+		return time.Time{}, fmt.Errorf("provider operation envelope is incomplete")
+	}
+	return store.pollAfter[id], nil
 }
 
 func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginRequest) (admission.BeginResult, error) {

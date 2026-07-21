@@ -103,6 +103,31 @@ func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
 	}
 }
 
+func TestAdmissionProviderPendingRetainsPollGuidance(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
+	operation := beginMemoryOperation(t, store, now, "pending-guidance", memoryReservation(1, 10))
+	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
+	pollAfter := now.Add(5 * time.Second)
+	if err := store.MarkProviderPending(context.Background(), admission.ProviderPendingRequest{
+		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
+		ProviderOperationID: "provider-operation", EndpointID: "endpoint", PollAfter: pollAfter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	schedule, ok := any(store).(admission.ProviderPendingSchedule)
+	if !ok {
+		t.Fatal("memory admission store does not expose provider poll schedule")
+	}
+	got, err := schedule.ProviderPollAfter(context.Background(), operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(pollAfter) {
+		t.Fatalf("poll schedule = %s, want %s", got, pollAfter)
+	}
+}
+
 func TestAdmissionDefiniteFailureReconcilesIncurredCost(t *testing.T) {
 	now := time.Unix(100, 0)
 	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})

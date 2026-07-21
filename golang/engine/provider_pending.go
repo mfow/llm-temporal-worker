@@ -21,7 +21,10 @@ const (
 type ProviderPollOptions struct {
 	MaxPolls        int
 	MaxPollInterval time.Duration
-	Sleep           func(context.Context, time.Duration) error
+	// InitialDelay is provider guidance captured before the first poll. It is
+	// capped by MaxPollInterval just like guidance returned by Poll.
+	InitialDelay time.Duration
+	Sleep        func(context.Context, time.Duration) error
 }
 
 // PollProviderOperation resumes a provider operation whose identifier was
@@ -53,9 +56,20 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 	if maxInterval < 0 {
 		return provider.Result{}, errors.New("max provider poll interval must not be negative")
 	}
+	if options.InitialDelay < 0 {
+		return provider.Result{}, errors.New("initial provider poll delay must not be negative")
+	}
 	sleep := options.Sleep
 	if sleep == nil {
 		sleep = sleepWithContext
+	}
+	if initialDelay := minPollDelay(options.InitialDelay, maxInterval); initialDelay > 0 {
+		if err := sleep(ctx, initialDelay); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return provider.Result{}, pollStoppedError(err)
+			}
+			return provider.Result{}, err
+		}
 	}
 	for poll := 1; poll <= maxPolls; poll++ {
 		if err := ctx.Err(); err != nil {
@@ -95,10 +109,7 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 			// are durable state, never heartbeat data.
 			observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhasePoll), OutputItems: poll})
 		}
-		delay := result.NextPollAfter
-		if delay > maxInterval {
-			delay = maxInterval
-		}
+		delay := minPollDelay(result.NextPollAfter, maxInterval)
 		if err := sleep(ctx, delay); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return provider.Result{}, pollStoppedError(err)
@@ -107,6 +118,16 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 		}
 	}
 	return provider.Result{}, provider.NewError(provider.CodeInternal, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider polling loop exhausted")
+}
+
+func minPollDelay(delay, maximum time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+	if maximum > 0 && delay > maximum {
+		return maximum
+	}
+	return delay
 }
 
 func pollStoppedError(cause error) *provider.Error {

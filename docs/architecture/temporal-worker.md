@@ -194,7 +194,9 @@ record and must retain tracing identifiers without prompt data.
 
 Adapters that implement the optional `ResumableAdapter` port submit once and
 return a provider-owned operation identifier. The worker envelope-encrypts that
-identifier in the durable operation ledger before its first poll. If the
+identifier and the provider's next-poll guidance in the durable operation
+ledger before its first poll. It waits for that initial guidance before
+polling, and restores the persisted schedule after a retry. If the
 Activity is retried while the operation is `provider_pending`, the worker loads
 the encrypted identifier and calls `Poll` on the pinned endpoint; it never
 calls `Submit` or `Invoke` again. Polls honor provider delay guidance subject
