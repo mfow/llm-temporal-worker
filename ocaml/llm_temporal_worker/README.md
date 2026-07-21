@@ -5,13 +5,12 @@ Activity. The package contains no provider credentials, token streaming,
 continuation loop, polling, or application retry loop. The generated workflow
 schedules exactly one activity attempt.
 
-The public API mirrors the v1 request and response records: service classes
-are exactly `Economy | Standard | Priority`; request controls include
-portability, instructions, items, tools, output, temperature, reasoning
-effort/summary, and extensions; responses retain route, service, usage, cost,
-provider, continuation, and diagnostics. Only deliberately open contract
-leaves (schemas, tool arguments, extension/provider metadata) use
-`Yojson.Safe.t`.
+The public v1 API uses exact request and response records: service classes are
+exactly `Economy | Standard | Priority`; request controls include portability,
+instructions, items, tools, output, temperature, reasoning effort/summary, and
+extensions; responses carry the v1 checkpoint, route, usage, settled cost, and
+diagnostics. Only deliberately open contract leaves (schemas, tool arguments,
+extension/provider metadata) use `Yojson.Safe.t`.
 
 ## Install
 
@@ -42,20 +41,22 @@ cannot detect.
 open Llm_temporal
 
 let request =
-  Request.make
+  Generate.make
     ~operation_key:(Operation_key.of_string "invoice-42")
+    ~context
     ~model:(Model_selector.of_string "gpt-5")
-    ~service_class:Priority
+    ~settings:(Generate.Settings.make
+                 ~service_class:Priority
+                 ~instructions:[ Text_instruction { level = Application; text = "Return JSON." } ]
+                 ~service_class_fallbacks:[ Standard ]
+                 ~output:{ max_tokens = Some 200; format = Json_format }
+                 ())
     ~input:[ Message { actor = Human; content = [ Text "Summarise this invoice." ] } ]
-    ~instructions:[ Text_instruction { level = Application; text = "Return JSON." } ]
-    ~service_class_fallbacks:[ Standard ]
-    ~output:{ max_tokens = Some 200; format = Json_format }
     ()
 
-let definition =
-  Llm_temporal.workflow
-    ~task_queue:(Llm_temporal.Temporal_task_queue.of_string "go-activities") ()
-(* Register [definition] with the OCaml workflow worker. *)
+let result = Generate.invoke
+  ~task_queue:(Temporal_task_queue.of_string "go-activities") request
+(* Handle [result] in the application Workflow. *)
 ```
 
 ## Immutable conversations
@@ -157,9 +158,11 @@ match Llm_temporal.Generate.invoke request with
 `llm.generate.v1` Activity. `Generate.invoke_with` accepts the same typed
 dispatcher used by deterministic tests, and `Generate.start` returns a
 workflow-owned Temporal future. The legacy `Request`, `execute`, and
-`workflow` names remain available unchanged for compatibility; new code should
-prefer `Generate` or `Conversation` so it cannot accidentally construct the
-pre-checkpoint wire shape.
+`workflow` names remain available only as source-compatibility shims for the
+unreleased pre-checkpoint API. Their records and codecs are deliberately
+outside the v1 boundary and must not be used to call the production Go
+`llm.generate.v1` Activity. New code must use `Generate` or `Conversation`,
+which emit the exact v1 wire shape.
 
 `Conversation.compact` creates an explicit compaction child from a checkpoint;
 the following Generate restores the branch's application tools and output
