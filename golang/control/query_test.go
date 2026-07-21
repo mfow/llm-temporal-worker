@@ -41,6 +41,28 @@ func queryResponse(request llm.QueryRequestV1) llm.QueryResponseV1 {
 	}
 }
 
+func queryResponseForKind(request llm.QueryRequestV1) llm.QueryResponseV1 {
+	response := queryResponse(request)
+	switch request.Kind {
+	case llm.QueryModelInventory:
+		response.Result = llm.ModelInventoryPage{Models: []json.RawMessage{}}
+	case llm.QueryCreditStatus:
+		response.Result = llm.CreditStatusPage{Endpoints: []json.RawMessage{}}
+	case llm.QueryBudgetStatus:
+		response.Result = llm.BudgetStatus{
+			ActiveAt: "2026-07-20T00:00:00Z", GenerationID: "generation-1",
+			ManifestDigest: strings.Repeat("a", 64), StreamHighWaterMark: "stream-1",
+			Windows: []json.RawMessage{},
+		}
+	case llm.QuerySpendSummary:
+		response.Result = llm.SpendSummary{
+			StartTime: "2026-07-19T00:00:00Z", EndTime: "2026-07-20T00:00:00Z",
+			Buckets: []json.RawMessage{},
+		}
+	}
+	return response
+}
+
 func stringPointer(value string) *string { return &value }
 
 func typedProviderRequest() QueryRequest {
@@ -60,6 +82,36 @@ func typedModelRequest() QueryRequest {
 	request.Kind = llm.QueryModelInventory
 	request.Filter = ModelInventoryQuery{Page: QueryPage{Size: 10}}
 	return request
+}
+
+func typedBudgetRequest() QueryRequest {
+	activeAt := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	policy := PolicyKey("daily")
+	return QueryRequest{
+		OperationKey: "budget-query",
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Kind:         llm.QueryBudgetStatus,
+		Filter:       BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &activeAt, IncludeWindows: boolPointer(true)},
+	}
+}
+
+func typedSpendRequest() QueryRequest {
+	start := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
+	return QueryRequest{
+		OperationKey: "spend-query",
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Kind:         llm.QuerySpendSummary,
+		Filter:       SpendSummaryQuery{StartTime: start, EndTime: start.Add(24 * time.Hour), GroupBy: []SpendDimension{SpendByProvider}, OperationKinds: []OperationKind{OperationGenerate}},
+	}
+}
+
+func allTypedQueryRequests() []QueryRequest {
+	return []QueryRequest{typedProviderRequest(), typedModelRequest(), {
+		OperationKey: "credit-query",
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Kind:         llm.QueryCreditStatus,
+		Filter:       CreditStatusQuery{Page: QueryPage{Size: 10}},
+	}, typedBudgetRequest(), typedSpendRequest()}
 }
 
 func typedRequestWire(t *testing.T, request QueryRequest) llm.QueryRequestV1 {
@@ -108,9 +160,70 @@ func TestQueryServiceAuthorizesAndValidatesResponse(t *testing.T) {
 	}
 }
 
+func TestQueryServiceRawHandlerAdmitsAllQueryKinds(t *testing.T) {
+	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return queryResponseForKind(request), nil
+	}), func(context.Context, Authorization) error { return nil })
+
+	for _, typedRequest := range allTypedQueryRequests() {
+		t.Run(string(typedRequest.Kind), func(t *testing.T) {
+			request := typedRequestWire(t, typedRequest)
+			response, err := service.Execute(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if response.Kind != typedRequest.Kind {
+				t.Fatalf("response kind = %q, want %q", response.Kind, typedRequest.Kind)
+			}
+		})
+	}
+}
+
+func TestQueryServiceTypedHandlerAdmitsAllQueryKinds(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, request QueryRequest, claims *BoundCursorClaims) (QueryResponse, error) {
+			if claims != nil {
+				t.Fatalf("non-paginated query received cursor claims: %#v", claims)
+			}
+			response := typedProviderResponse(request, nil)
+			switch request.Kind {
+			case llm.QueryModelInventory:
+				response.Result = ModelInventoryResult{Models: []ModelInventoryRow{}}
+			case llm.QueryCreditStatus:
+				response.Result = CreditStatusResult{Endpoints: []CreditStatusRow{}}
+			case llm.QueryBudgetStatus:
+				response.Result = BudgetStatusResult{ActiveAt: base, GenerationID: "generation-1", ManifestDigest: ManifestDigest(strings.Repeat("a", 64)), StreamHighWaterMark: "stream-1", Windows: []BudgetWindow{}}
+			case llm.QuerySpendSummary:
+				response.Result = SpendSummaryResult{StartTime: base.Add(-24 * time.Hour), EndTime: base, Buckets: []SpendBucket{}}
+			}
+			return response, nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: &CursorCodec{Key: []byte("all-five-query-key")},
+		Clock:       func() time.Time { return base },
+	}
+
+	for _, typedRequest := range allTypedQueryRequests() {
+		t.Run(string(typedRequest.Kind), func(t *testing.T) {
+			response, err := service.Execute(context.Background(), typedRequestWire(t, typedRequest))
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			decoded, err := DecodeQueryResponse(response)
+			if err != nil {
+				t.Fatalf("DecodeQueryResponse() error = %v", err)
+			}
+			if decoded.Kind != typedRequest.Kind || decoded.NextCursor != nil {
+				t.Fatalf("decoded response = %#v, want kind %q without cursor", decoded, typedRequest.Kind)
+			}
+		})
+	}
+}
+
 func TestQueryServiceRejectsUnsupportedKindAndAuthorization(t *testing.T) {
 	request := queryRequest()
-	request.Kind = llm.QueryBudgetStatus
+	request.Kind = llm.QueryKind("future_query")
 	service := testQueryService(queryHandlerFunc(func(_ context.Context, got llm.QueryRequestV1) (llm.QueryResponseV1, error) {
 		return queryResponse(got), nil
 	}), func(context.Context, Authorization) error { return nil })
