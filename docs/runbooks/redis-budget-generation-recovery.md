@@ -6,6 +6,15 @@
 > production paid work. This runbook never authorizes direct Redis key edits,
 > `FLUSHDB`, or an unfenced PostgreSQL rebuild.
 
+The Go `storage/redis` package now provides the bounded, storage-neutral
+`budget-manifest/v1` record and deterministic validator used by this runbook's
+manifest checks. It verifies generation/incarnation provenance, config/price
+and policy/window hashes, concrete journal/Stream high-water marks, complete
+coverage, every expected member, catalog identity, and the conservative
+rounding version. It does not yet publish the active pointer, materialize
+window keys, or execute the Redis admission Function; those integration steps
+remain subject to the fenced procedures below.
+
 ## Purpose and safety invariant
 
 PostgreSQL is the durable financial system of record. Redis is the required
