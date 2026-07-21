@@ -23,9 +23,18 @@ and one of `control_query_zero`, `provider_reported`, or `catalog_usage`;
 and must provide a bounded lower-snake-case reason code. The repository applies
 the configured retention interval when a caller omits the expiry timestamp.
 
-This slice does not wire query Activities, provider refreshes, or query-specific
-read/index APIs. Those callers remain responsible for selecting a query model
-and for passing redacted control data to `Record`.
+`QueryExecutionRepository.RecordAudit` adapts the storage-neutral
+`control.QueryService.Audit` callback to this ledger. It canonicalizes and
+fingerprint-checks the request, converts exact USD text without floating-point
+rounding, and delegates to `Record` for redaction, retention, and idempotency:
+
+```go
+queryService.Audit = repository.RecordAudit
+```
+
+The production factory still owns construction of the repository, query
+handlers, and authorization policy; this adapter does not select provider
+refreshes or implement query-specific read/index plans.
 
 Focused checks:
 
