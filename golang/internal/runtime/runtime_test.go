@@ -106,13 +106,17 @@ func (factory testQueryEngineFactory) BuildQueryService(context.Context, *config
 var _ EngineFactory = testQueryEngineFactory{}
 var _ QueryServiceFactory = testQueryEngineFactory{}
 
-type testRegistry struct{}
+type testRegistry struct {
+	names []string
+}
 
-func (testRegistry) RegisterActivity(interface{})                                         {}
-func (testRegistry) RegisterActivityWithOptions(interface{}, activity.RegisterOptions)    {}
+func (testRegistry) RegisterActivity(interface{}) {}
+func (registry *testRegistry) RegisterActivityWithOptions(_ interface{}, options activity.RegisterOptions) {
+	registry.names = append(registry.names, options.Name)
+}
 func (testRegistry) RegisterDynamicActivity(interface{}, activity.DynamicRegisterOptions) {}
 
-var _ worker.ActivityRegistry = testRegistry{}
+var _ worker.ActivityRegistry = (*testRegistry)(nil)
 
 type testWorker struct {
 	started atomic.Bool
@@ -141,7 +145,7 @@ func testRuntimeOptions(t *testing.T, workerController *testWorker, closed *atom
 		}),
 		V1Runtime: testV1Runtime{},
 		WorkerFactory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
-			return workerController, testRegistry{}, nil
+			return workerController, &testRegistry{}, nil
 		},
 	}
 }
@@ -160,6 +164,46 @@ func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
 	}
 	if controller.started.Load() || !closed.Load() || runtime.Health.Ready() {
 		t.Fatalf("unconfigured runtime lifecycle started=%v closed=%v ready=%v", controller.started.Load(), closed.Load(), runtime.Health.Ready())
+	}
+}
+
+func TestDevelopmentRuntimeAllowsFailClosedV1Runtime(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, controller, &closed)
+	options.V1Runtime = nil
+	data := []byte(strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", 1))
+	runtime, err := New(context.Background(), data, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	if !controller.started.Load() || !runtime.Health.Ready() {
+		t.Fatalf("development runtime did not start: started=%v ready=%v", controller.started.Load(), runtime.Health.Ready())
+	}
+}
+
+func TestDevelopmentRuntimeOmitsV1ActivitiesWithoutRuntime(t *testing.T) {
+	activities := composeRuntimeActivities(config.Config{Environment: "development"}, testEngine{}, nil, nil, nil, &testQueryService{})
+	if activities.V1Runtime != nil || activities.QueryService != nil {
+		t.Fatalf("development fixture retained v1 seams: runtime=%T query=%T", activities.V1Runtime, activities.QueryService)
+	}
+	registry := &testRegistry{}
+	activities.Register(registry)
+	if len(registry.names) != 1 || registry.names[0] != appactivity.GenerateActivityName {
+		t.Fatalf("development fixture registered activities = %v, want only %q", registry.names, appactivity.GenerateActivityName)
+	}
+}
+
+func TestUnknownEnvironmentStillRequiresV1Runtime(t *testing.T) {
+	if !v1RuntimeRequired(config.Config{Environment: "staging"}) {
+		t.Fatal("staging environment must require durable v1 runtime")
 	}
 }
 
@@ -430,7 +474,7 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	var closed atomic.Bool
 	options := testRuntimeOptions(t, &testWorker{}, &closed)
 	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
-		return controller, testRegistry{}, nil
+		return controller, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
 	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
@@ -482,9 +526,9 @@ func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
 	options := testRuntimeOptions(t, &testWorker{}, &closed)
 	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
 		if built.Add(1) == 1 {
-			return first, testRegistry{}, nil
+			return first, &testRegistry{}, nil
 		}
-		return replacement, testRegistry{}, nil
+		return replacement, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
 	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)

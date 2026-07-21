@@ -227,10 +227,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if identity == "" {
 		identity = (DefaultTemporalClientFactory{}).identity(configuration.Temporal.IdentityPrefix)
 	}
-	activities := newRuntimeActivities(configuration, dynamic, metrics, tracer, &snapshotQueryService{application: application})
-	if options.V1Runtime != nil {
-		activities.V1Runtime = options.V1Runtime
-	}
+	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, options.V1Runtime, &snapshotQueryService{application: application})
 	worker, err := app.NewWorker(app.WorkerOptions{
 		Client:                         temporalClient,
 		TaskQueue:                      configuration.Temporal.TaskQueue,
@@ -300,8 +297,30 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		shutdown: coordinator, timeout: timeout,
 		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
 		readinessProbeTimeout:  time.Duration(configuration.Server.ReadinessProbeTimeout),
-		v1RuntimeConfigured:    isV1RuntimeConfigured(activities.V1Runtime),
+		v1RuntimeConfigured:    !v1RuntimeRequired(configuration) || isV1RuntimeConfigured(activities.V1Runtime),
 	}, nil
+}
+
+func v1RuntimeRequired(configuration config.Config) bool {
+	// Only the checked-in development composition is allowed to start without
+	// the durable v1 seam. Every other environment, including production and
+	// unknown values, must fail closed before advertising readiness.
+	return configuration.Environment != "development"
+}
+
+func composeRuntimeActivities(configuration config.Config, engine llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer, v1Runtime activity.V1Runtime, queryService activity.QueryService) *activity.Activities {
+	activities := newRuntimeActivities(configuration, engine, metrics, tracer, queryService)
+	if v1Runtime != nil {
+		activities.V1Runtime = v1Runtime
+	}
+	if !v1RuntimeRequired(configuration) && !isV1RuntimeConfigured(activities.V1Runtime) {
+		// The local Compose profile is a parser/configuration/readiness fixture,
+		// not a v1 worker. Omit all v1 seams so it cannot advertise the versioned
+		// Activity names while no durable implementation is present.
+		activities.V1Runtime = nil
+		activities.QueryService = nil
+	}
+	return activities
 }
 
 func isV1RuntimeConfigured(runtime activity.V1Runtime) bool {

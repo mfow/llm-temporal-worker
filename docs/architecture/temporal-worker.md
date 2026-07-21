@@ -62,13 +62,17 @@ Provider/state construction is an explicit `EngineFactory` seam. The CLI uses
 Redis state, and blob-backed results; tests and custom deployments can inject a
 different factory, and unsupported configured dependencies still fail closed
 before a worker starts. The durable implementation for the `V1Runtime` seam is
-an additional required composition input: until it is supplied, `Runtime.Start`
-returns `ErrV1RuntimeUnavailable` before opening listeners or allowing Temporal
-polling. This keeps readiness truthful while the v1 Activity names remain
-registered for contract inspection and fail-closed behavior.
-The guard applies equally to development `state.kind: memory` compositions:
-memory storage can avoid external dependencies, but it does not make an
-unconfigured Activity implementation executable.
+an additional required composition input for every environment except the
+checked-in `development` fixture: until it is supplied, `Runtime.Start`
+returns `ErrV1RuntimeUnavailable` before opening listeners or allowing
+Temporal polling. This keeps production readiness truthful while the v1
+Activity names remain registered for contract inspection and fail-closed
+behavior. The local Compose worker mounts `environment: development`
+specifically as a parser/configuration/readiness fixture. When that
+development composition has no durable v1 implementation, it omits the v1
+Activity registrations entirely; it does not dispatch inference or advertise
+a partially configured v1 worker. Any other environment value, including
+`production`, remains fail-closed.
 
 ## Payload contract
 
