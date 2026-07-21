@@ -26,10 +26,11 @@ cannot begin until the frontier is empty, after which the next item starts a
 new turn. Call IDs remain unique across the complete lineage, including calls
 that have already been resolved.
 
-This is the durable-state-independent slice of the design. PostgreSQL
-publication, blob ordering, Activity payload wiring, and retention remain
-separate concerns and must use this contract rather than reimplementing
-materialization in an adapter. The storage-neutral DTO and repository/UoW
-ports are documented in [Durable checkpoint repository port](../reference/checkpoint-repository-port.md).
-They define the validation, canonical digest, scope, and immutable-publication
-boundary only; no PostgreSQL adapter or Generate/Compact wiring is implied.
+The storage-neutral DTO and repository/UoW ports are documented in [Durable
+checkpoint repository port](../reference/checkpoint-repository-port.md). The
+PostgreSQL adapter now supplies scoped reads and immutable metadata/child-row
+publication through that port. Blob bytes must be uploaded first, and the
+adapter verifies blob scope and metadata before entering the checkpoint row.
+Operation/result publication, retention, Activity payload wiring, and
+Generate/Compact runtime composition remain separate concerns; this slice does
+not imply end-to-end durable runtime support.
