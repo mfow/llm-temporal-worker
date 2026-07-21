@@ -43,6 +43,24 @@ type EngineFactory interface {
 	Build(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error)
 }
 
+// QueryServiceFactory is an optional companion to EngineFactory. A factory
+// that owns the durable control-plane repositories can implement this seam to
+// publish a query service alongside the engine for each immutable snapshot.
+// Keeping it optional preserves the fail-closed behaviour while allowing
+// query state and authorization clients to be replaced atomically on reload.
+// The returned service must not retain references to a previous snapshot.
+type QueryServiceFactory interface {
+	BuildQueryService(context.Context, *config.Snapshot) (activity.QueryService, error)
+}
+
+// QueryServiceSource lets a ClientSet expose a query service it constructed
+// with the same snapshot as its engine. It is intentionally small so custom
+// composition can opt in without coupling the app package to control-plane
+// storage types.
+type QueryServiceSource interface {
+	QueryService() activity.QueryService
+}
+
 // EngineFactoryFunc adapts a function to EngineFactory.
 type EngineFactoryFunc func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error)
 
@@ -151,7 +169,14 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			if source, ok := clients.(dependencyProbeSource); ok {
 				probes = append(probes, source.DependencyProbes()...)
 			}
-			return &snapshotClients{engine: engine, clients: clients, probes: probes}, nil
+			queryService, err := composeQueryService(buildContext, snapshot, engineFactory, clients)
+			if err != nil {
+				if clients != nil {
+					_ = clients.Close(context.Background())
+				}
+				return nil, &engineFactoryError{cause: err}
+			}
+			return &snapshotClients{engine: engine, clients: clients, probes: probes, queryService: queryService}, nil
 		},
 		Verify: verifySnapshotDependencies,
 	})
@@ -198,7 +223,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		MaxConcurrentActivities:        configuration.Temporal.Worker.MaxConcurrentActivities,
 		MaxConcurrentActivityTaskPolls: configuration.Temporal.Worker.MaxConcurrentActivityTaskPolls,
 		GracefulStopTimeout:            time.Duration(configuration.Temporal.Worker.GracefulStopTimeout),
-		Activities:                     newRuntimeActivities(configuration, dynamic, metrics, tracer),
+		Activities:                     newRuntimeActivities(configuration, dynamic, metrics, tracer, &snapshotQueryService{application: application}),
 		Health:                         health,
 		Metrics:                        metrics,
 		Factory:                        options.WorkerFactory,
@@ -266,7 +291,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 // newRuntimeActivities keeps the worker's Activity-bound configuration in one
 // composition point. In particular, the periodic provider-wait cadence is a
 // worker setting, never a provider SDK timeout.
-func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer) *activity.Activities {
+func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer, queryService activity.QueryService) *activity.Activities {
 	return &activity.Activities{
 		Engine:                     dynamic,
 		HeartbeatKeepaliveInterval: time.Duration(configuration.Temporal.Worker.HeartbeatKeepaliveInterval),
@@ -281,7 +306,8 @@ func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metri
 		// provider-backed V1Runtime. Until that composition is present, fail
 		// closed before any provider dispatch rather than registering the
 		// pre-release envelope or silently bypassing durable state.
-		V1Runtime: activity.UnconfiguredV1Runtime{},
+		V1Runtime:    activity.UnconfiguredV1Runtime{},
+		QueryService: queryService,
 	}
 }
 
@@ -539,9 +565,10 @@ func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 }
 
 type snapshotClients struct {
-	engine  llm.Engine
-	clients app.ClientSet
-	probes  []DependencyProbe
+	engine       llm.Engine
+	clients      app.ClientSet
+	probes       []DependencyProbe
+	queryService activity.QueryService
 }
 
 func (clients *snapshotClients) Engine() llm.Engine {
@@ -567,6 +594,28 @@ func (clients *snapshotClients) DependencyProbes() []DependencyProbe {
 		return nil
 	}
 	return append([]DependencyProbe(nil), clients.probes...)
+}
+
+func (clients *snapshotClients) QueryService() activity.QueryService {
+	if clients == nil {
+		return nil
+	}
+	return clients.queryService
+}
+
+func queryServiceFromClients(clients app.ClientSet) activity.QueryService {
+	if source, ok := clients.(QueryServiceSource); ok {
+		return source.QueryService()
+	}
+	return nil
+}
+
+func composeQueryService(ctx context.Context, snapshot *config.Snapshot, engineFactory EngineFactory, clients app.ClientSet) (activity.QueryService, error) {
+	queryService := queryServiceFromClients(clients)
+	if source, ok := engineFactory.(QueryServiceFactory); ok {
+		return source.BuildQueryService(ctx, snapshot)
+	}
+	return queryService, nil
 }
 
 func verifySnapshotDependencies(ctx context.Context, snapshot *config.Snapshot, clients app.ClientSet) error {
