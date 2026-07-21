@@ -205,6 +205,9 @@ func validateQueryExecutionRequest(request QueryExecutionRequest, now time.Time)
 	if request.RequestFingerprint == ([32]byte{}) {
 		return errors.New("query execution request fingerprint is required")
 	}
+	if sha256.Sum256(request.RequestJSON) != request.RequestFingerprint {
+		return errors.New("query execution request fingerprint does not match request JSON")
+	}
 	if request.APIVersion != llm.QueryAPIVersion {
 		return fmt.Errorf("query execution api version %q is unsupported", request.APIVersion)
 	}

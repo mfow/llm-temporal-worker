@@ -45,7 +45,8 @@ func TestQueryExecutionPersistenceIntegration(t *testing.T) {
 	}
 
 	conflict := request
-	conflict.RequestFingerprint = sha256.Sum256([]byte("different request"))
+	conflict.RequestJSON = []byte(`{"api_version":"llm.temporal/query/v1","kind":"provider_status","query":{"include_healthy":true}}`)
+	conflict.RequestFingerprint = sha256.Sum256(conflict.RequestJSON)
 	if _, err := repository.Record(ctx, conflict); !errors.Is(err, ErrQueryExecutionConflict) {
 		t.Fatalf("request fingerprint conflict error = %v", err)
 	}

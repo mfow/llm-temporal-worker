@@ -32,6 +32,10 @@ rounding, and delegates to `Record` for redaction, retention, and idempotency:
 queryService.Audit = repository.RecordAudit
 ```
 
+`Record` also verifies that every request fingerprint matches the canonical
+request JSON before it writes the row, so direct repository callers cannot
+persist an audit identity that is detached from its request payload.
+
 The production factory still owns construction of the repository, query
 handlers, and authorization policy; this adapter does not select provider
 refreshes or implement query-specific read/index plans.
