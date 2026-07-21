@@ -605,6 +605,18 @@ hints and reloads the manifest/policy state directly from Redis. Readiness
 validates the Stream key/type/retention policy when enabled, but a recoverable
 cursor gap does not invalidate an otherwise complete budget generation.
 
+The active-generation manifest is a bounded `budget-manifest/v1` value. Its
+immutable generation and Redis-incarnation IDs, configuration/price versions,
+policy/window hashes, journal and Stream high-water marks, coverage bounds,
+rounding version, member-count catalog digest, and complete policy/window
+member set are validated before adoption. Every member must cover the same
+positive horizon, have matching provenance, and account for its complete
+bucket count; duplicate or missing members, non-concrete Stream IDs, digest
+mismatches, and oversized values fail closed. The current Go validator is
+storage-neutral and does not itself publish a Redis pointer or run an atomic
+budget Function; deployment wiring must still perform those operations under
+the recovery procedure below.
+
 Workers keep leases and broadcast cursors in the configured Redis budget
 namespace. Joining an existing live lease set, restarting one worker, handling
 a Stream gap, checking readiness, and serving `budget_status` read budget state
