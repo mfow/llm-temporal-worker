@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	appactivity "github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	runtimepkg "github.com/mfow/llm-temporal-worker/golang/internal/runtime"
@@ -72,6 +73,7 @@ func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 		EngineFactory: runtimepkg.EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
 			return provider, app.ClientSetFunc(func(context.Context) error { return nil }), nil
 		}),
+		V1Runtime:        readinessV1Runtime{},
 		WorkerFactory:    controllers.Build,
 		DependencyProbes: []runtimepkg.DependencyProbe{redisProbe, bucketProbe},
 	})
@@ -185,6 +187,27 @@ func readinessStatus(address, path string) (int, error) {
 }
 
 type readinessNoProviderEngine struct{ calls atomic.Int32 }
+
+// readinessV1Runtime is intentionally inert: this integration test exercises
+// dependency readiness and worker lifecycle, not provider-backed v1 work. The
+// production environment still requires an explicitly composed V1Runtime;
+// injecting this fixture keeps that fail-closed guard enabled while making the
+// test's startup contract explicit.
+type readinessV1Runtime struct{}
+
+func (readinessV1Runtime) GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
+	return llm.GenerateResponseV1{}, nil
+}
+
+func (readinessV1Runtime) CompactV1(context.Context, llm.CompactRequestV1) (llm.CompactResponseV1, error) {
+	return llm.CompactResponseV1{}, nil
+}
+
+func (readinessV1Runtime) QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return llm.QueryResponseV1{}, nil
+}
+
+var _ appactivity.V1Runtime = readinessV1Runtime{}
 
 func TestReadinessNoProviderEngineRejectsGeneration(t *testing.T) {
 	engine := &readinessNoProviderEngine{}
