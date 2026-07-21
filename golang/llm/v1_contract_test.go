@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -127,6 +128,7 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 		}},
 		{name: "cost method", edit: func(response *llm.QueryResponseV1) { response.Cost.Method = "estimate" }},
 		{name: "nonzero control cost", edit: func(response *llm.QueryResponseV1) { response.Cost.ActualCostUSD = stringPointer("0.1") }},
+		{name: "spend pagination cursor", edit: func(response *llm.QueryResponseV1) { response.NextCursor = stringPointer("spend-page-2") }},
 	} {
 		t.Run("response_"+test.name, func(t *testing.T) {
 			candidate := valid
@@ -135,6 +137,13 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 				t.Fatalf("invalid response %s was accepted", test.name)
 			}
 		})
+	}
+	budget := valid
+	budget.Kind = llm.QueryBudgetStatus
+	budget.Result = llm.BudgetStatus{ActiveAt: "2026-07-19T00:00:00Z", GenerationID: "generation-1", ManifestDigest: strings.Repeat("0", 64), StreamHighWaterMark: "1-0"}
+	budget.NextCursor = stringPointer("budget-page-2")
+	if _, err := json.Marshal(budget); err == nil {
+		t.Fatal("budget response with a pagination cursor was accepted")
 	}
 }
 

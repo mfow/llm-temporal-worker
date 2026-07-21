@@ -704,7 +704,9 @@ variants with catch-all values, or an unchecked JSON cast.
 Pagination remains typed: the cursor can be supplied only to the same query
 constructor/filter digest. The server is authoritative for cursor binding; the
 OCaml client also retains query kind in the cursor wrapper to reject obvious
-cross-kind reuse before dispatch.
+cross-kind reuse before dispatch. **Budget_status** and **Spend_summary** are
+bounded snapshots rather than pages, so their filters and responses must not
+carry a cursor.
 
 ## Activity descriptors and Workflow determinism
 

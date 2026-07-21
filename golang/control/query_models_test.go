@@ -2,6 +2,7 @@ package control
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,26 @@ func TestTypedQueryResponseRejectsUnknownWireRow(t *testing.T) {
 	wire := llm.QueryResponseV1{APIVersion: llm.QueryAPIVersion, OperationKey: "op", QueryExecutionID: "exec", Kind: llm.QueryProviderStatus, ObservedAt: "2026-07-21T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true, Result: result, Cost: llm.CostV1{Status: "unknown", UnknownReason: "not_metered"}}
 	if _, err := DecodeQueryResponse(wire); err == nil {
 		t.Fatal("expected unknown row field to be rejected")
+	}
+}
+
+func TestTypedQueryResponseRejectsNonPaginatedCursor(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+	for _, test := range []struct {
+		name   string
+		kind   llm.QueryKind
+		result QueryResult
+	}{
+		{name: "budget", kind: llm.QueryBudgetStatus, result: BudgetStatusResult{ActiveAt: now, GenerationID: "generation", ManifestDigest: ManifestDigest(strings.Repeat("0", 64)), StreamHighWaterMark: "1-0", Windows: []BudgetWindow{}}},
+		{name: "spend", kind: llm.QuerySpendSummary, result: SpendSummaryResult{StartTime: now.Add(-time.Hour), EndTime: now, Buckets: []SpendBucket{}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cursor := QueryCursor("unexpected-page-2")
+			_, err := EncodeQueryResponse(QueryResponse{OperationKey: OperationKey(test.name), ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, NextCursor: &cursor, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
+			if err == nil {
+				t.Fatal("non-paginated query response with a cursor was accepted")
+			}
+		})
 	}
 }
 

@@ -1363,6 +1363,12 @@ func (response QueryResponseV1) validate() error {
 	if response.NextCursor != nil && (len(*response.NextCursor) == 0 || len(*response.NextCursor) > 512) {
 		return fmt.Errorf("query next_cursor is invalid")
 	}
+	// Budget and spend queries are bounded snapshots rather than keyset pages.
+	// A continuation on either result would be ambiguous: there is no matching
+	// cursor field in their filters and the caller cannot safely resume it.
+	if response.NextCursor != nil && (response.Kind == QueryBudgetStatus || response.Kind == QuerySpendSummary) {
+		return fmt.Errorf("query %s response must not include next_cursor", response.Kind)
+	}
 	if response.Cost.Status == "exact" && response.Cost.Method != "control_query_zero" && response.Cost.Method != "provider_reported" && response.Cost.Method != "catalog_usage" {
 		return fmt.Errorf("query cost method %q is invalid", response.Cost.Method)
 	}
