@@ -212,3 +212,27 @@ func TestQueryServicePreservesPreclassifiedProviderFailure(t *testing.T) {
 		t.Fatalf("error = %p, want original provider error %p", err, providerErr)
 	}
 }
+
+func TestQueryServicePreservesHandlerContextErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+				return llm.QueryResponseV1{}, test.err
+			}), func(context.Context, Authorization) error { return nil })
+			_, err := service.Execute(context.Background(), queryRequest())
+			if !errors.Is(err, test.err) {
+				t.Fatalf("error = %v, want %v", err, test.err)
+			}
+			var providerErr *provider.Error
+			if errors.As(err, &providerErr) {
+				t.Fatalf("error = %#v, context error must not be remapped", providerErr)
+			}
+		})
+	}
+}
