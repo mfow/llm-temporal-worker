@@ -146,4 +146,6 @@ composition work behind `control.QueryService`.
 the query kind, full tenant/project/actor scope (including tags), canonical
 filter digest, and an explicit snapshot horizon. Tokens are base64url encoded,
 expire by default after 15 minutes, reject future-issued or oversized values,
-and are never accepted for a different scope, filter, key, or horizon.
+and are never accepted for a different scope, filter, or key. The signed
+horizon is returned in `BoundCursorClaims` for the storage adapter to enforce
+against its repeatable-read snapshot before using the opaque position.

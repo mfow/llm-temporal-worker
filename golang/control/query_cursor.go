@@ -19,7 +19,6 @@ import (
 type CursorCodec struct {
 	Key         []byte
 	TTL         time.Duration
-	Clock       func() time.Time
 	MaxPosition int
 }
 
