@@ -21,7 +21,7 @@
     },
     {
       "path": "github.com/anthropics/anthropic-sdk-go",
-      "version": "v1.57.0",
+      "version": "v1.58.0",
       "license": "MIT",
       "source": "https://github.com/anthropics/anthropic-sdk-go"
     },
@@ -60,6 +60,12 @@
       "version": "v1.6.0",
       "license": "BSD-3-Clause",
       "source": "https://github.com/google/uuid"
+    },
+    {
+      "path": "github.com/jackc/pgx/v5",
+      "version": "v5.10.0",
+      "license": "MIT",
+      "source": "https://github.com/jackc/pgx"
     },
     {
       "path": "github.com/openai/openai-go/v3",
