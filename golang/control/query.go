@@ -46,20 +46,40 @@ type Handler interface {
 	ExecuteQuery(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
 }
 
+// TypedHandler owns a typed control-plane read. The service validates the
+// closed wire envelope before this seam is called, authenticates the optional
+// cursor, and converts the typed response back to the wire envelope. Claims
+// are nil for the first page and otherwise contain the authenticated storage
+// position and snapshot horizon.
+//
+// Handler remains supported for storage adapters that have not migrated to the
+// typed model yet. New adapters should implement TypedHandler so they cannot
+// accidentally consume an unsigned or horizon-free cursor.
+type TypedHandler interface {
+	ExecuteTypedQuery(context.Context, QueryRequest, *BoundCursorClaims) (QueryResponse, error)
+}
+
 // QueryService is safe to share between Activity invocations. Clock is a test
 // seam and must return UTC time. CursorKey is an HMAC key kept in worker
 // configuration; cursors are never accepted without one.
 type QueryService struct {
-	Handler   Handler
-	Authorize AuthorizeFunc
-	CursorKey []byte
-	CursorTTL time.Duration
-	Clock     func() time.Time
+	Handler      Handler
+	TypedHandler TypedHandler
+	Authorize    AuthorizeFunc
+	// CursorCodec is required when TypedHandler is set. It is optional for the
+	// legacy Handler seam, whose CursorKey path remains source-compatible.
+	CursorCodec *CursorCodec
+	CursorKey   []byte
+	CursorTTL   time.Duration
+	Clock       func() time.Time
 }
 
 func (service *QueryService) Execute(ctx context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-	if service == nil || service.Handler == nil || service.Authorize == nil {
+	if service == nil || (service.Handler == nil && service.TypedHandler == nil) || service.Authorize == nil {
 		return llm.QueryResponseV1{}, fmt.Errorf("query service is not configured")
+	}
+	if service.TypedHandler != nil && service.CursorCodec == nil {
+		return llm.QueryResponseV1{}, fmt.Errorf("typed query service cursor codec is not configured")
 	}
 	if ctx == nil {
 		return llm.QueryResponseV1{}, fmt.Errorf("query context is nil")
@@ -92,14 +112,47 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 		return llm.QueryResponseV1{}, fmt.Errorf("%w: %v", ErrQueryAuthorization, err)
 	}
 	now := service.now()
-	if cursor, ok, err := requestCursor(request.Query); err != nil {
+	var typedRequest QueryRequest
+	var typedClaims *BoundCursorClaims
+	if service.CursorCodec != nil {
+		var err error
+		typedRequest, err = DecodeQueryRequest(request)
+		if err != nil {
+			return llm.QueryResponseV1{}, fmt.Errorf("typed query request: %w", err)
+		}
+		cursor := typedQueryCursor(typedRequest.Filter)
+		if cursor != nil {
+			claims, err := service.CursorCodec.Decode(typedRequest, *cursor, now)
+			if err != nil {
+				return llm.QueryResponseV1{}, err
+			}
+			typedClaims = &claims
+		}
+	} else if cursor, ok, err := requestCursor(request.Query); err != nil {
 		return llm.QueryResponseV1{}, err
 	} else if ok {
 		if err := service.ValidateCursor(request, cursor, now); err != nil {
 			return llm.QueryResponseV1{}, err
 		}
 	}
-	response, err := service.Handler.ExecuteQuery(ctx, request)
+	var response llm.QueryResponseV1
+	var typedResponse QueryResponse
+	var err error
+	if service.TypedHandler != nil {
+		typedResponse, err = service.TypedHandler.ExecuteTypedQuery(ctx, typedRequest, typedClaims)
+		if err == nil {
+			response, err = EncodeQueryResponse(typedResponse)
+			if err != nil {
+				// A typed handler returned a response that violates the closed
+				// model contract. This is analogous to validateResponse below,
+				// not a transient state outage, so preserve the contract error
+				// instead of mapping it to provider.CodeStateUnavailable.
+				return llm.QueryResponseV1{}, fmt.Errorf("typed query response: %w", err)
+			}
+		}
+	} else {
+		response, err = service.Handler.ExecuteQuery(ctx, request)
+	}
 	if err != nil {
 		var providerErr *provider.Error
 		if errors.As(err, &providerErr) {
@@ -129,11 +182,53 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 		// allowed future-skew window relative to the pre-handler timestamp.
 		// Keep `now` for the incoming cursor check, but validate outgoing
 		// cursors against a fresh clock sample after the handler completes.
-		if err := service.ValidateCursor(request, *response.NextCursor, service.now()); err != nil {
+		if service.CursorCodec != nil {
+			if typedResponse.NextCursor == nil {
+				decoded, err := DecodeQueryResponse(response)
+				if err != nil {
+					return llm.QueryResponseV1{}, fmt.Errorf("next_cursor response: %w", err)
+				}
+				typedResponse = decoded
+			}
+			cursor := typedResponse.NextCursor
+			if cursor == nil {
+				return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", ErrQueryCursor)
+			}
+			if _, err := service.CursorCodec.Decode(typedRequest, *cursor, service.now()); err != nil {
+				return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", err)
+			}
+		} else if err := service.ValidateCursor(request, *response.NextCursor, service.now()); err != nil {
 			return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", err)
 		}
 	}
 	return response, nil
+}
+
+// typedQueryCursor extracts the cursor from the three paginated query
+// filters. Budget and spend queries are not admitted by this Activity slice,
+// but handling them here keeps the typed seam closed if that allow-list grows.
+func typedQueryCursor(filter QueryFilter) *QueryCursor {
+	switch value := filter.(type) {
+	case ProviderStatusQuery:
+		return value.Page.Cursor
+	case *ProviderStatusQuery:
+		if value != nil {
+			return value.Page.Cursor
+		}
+	case ModelInventoryQuery:
+		return value.Page.Cursor
+	case *ModelInventoryQuery:
+		if value != nil {
+			return value.Page.Cursor
+		}
+	case CreditStatusQuery:
+		return value.Page.Cursor
+	case *CreditStatusQuery:
+		if value != nil {
+			return value.Page.Cursor
+		}
+	}
+	return nil
 }
 
 func supportedQueryKind(kind llm.QueryKind) bool {

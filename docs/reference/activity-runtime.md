@@ -19,9 +19,14 @@ provided before the Generate/Compact runtime is composed; the Activity still
 fails closed when neither seam is configured. The boundary authorizes the
 tenant/project/actor scope, accepts only the provider-status, model-inventory,
 and credit-status query kinds in this slice, and verifies HMAC cursors bound to
-the query kind, scope, and filter. Cursors must be issued with the worker's
-query cursor key. Budget-status and spend-summary handlers, query-specific
-persisted reads, and Activity composition remain follow-up work tracked in
+the query kind, scope/tags, canonical filter, and snapshot horizon. Typed
+handlers receive the authenticated cursor claims, including the opaque storage
+position and horizon, so a repeatable-read adapter can enforce the same
+snapshot before reading its next page. Cursors must be issued with the
+worker's typed `CursorCodec` key; the raw `Handler` seam remains available for
+adapters migrating from the legacy cursor envelope. Budget-status and
+spend-summary handlers, query-specific persisted reads, and Activity
+composition remain follow-up work tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
 The repository-only query execution audit boundary now validates and persists
