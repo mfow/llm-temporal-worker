@@ -34,3 +34,30 @@ adapter verifies blob scope and metadata before entering the checkpoint row.
 Operation/result publication, retention, Activity payload wiring, and
 Generate/Compact runtime composition remain separate concerns; this slice does
 not imply end-to-end durable runtime support.
+
+## Durable blob prerequisite
+
+The durable materialization prerequisite uses the versioned
+`checkpoint-blob/v1` JSON envelope. Its closed `kind` values are `delta`,
+`response`, `settings_patch`, and `materialized_snapshot`. Transcript values
+are decoded through the provider-neutral item codec, while settings patches
+use the strict v1 sparse-patch codec; unknown envelope fields, duplicate JSON
+keys, unsupported versions/kinds, trailing values, invalid item values, and
+resource-limit violations fail closed. Encoders normalize omitted empty item
+arrays to `[]`, so retries have one canonical byte representation.
+
+`state.ScopedBlobReader` is the only byte capability consumed by the durable
+materializer. A caller supplies a scope-filtered ID-to-locator resolver, never
+a raw locator. The reader checks the returned store, locator, digest, byte
+length, media type, scope binding, expiry, and the SHA-256 of the bytes before
+returning a copy. A locator or object from another scope is an integrity fault,
+not a cache miss.
+
+`state.DurableCheckpointMaterializer` reads the leaf-to-root metadata graph,
+decodes every referenced delta/response/patch (and an optional verified
+self-contained snapshot), then delegates final validation to the existing
+bounded `CheckpointGraph` materializer. It can accept an opaque handle only
+through the scope-bound `CheckpointHandleVerifier`; the UUID hidden inside a
+verified handle is not exposed in the Activity payload. The adapter has no SQL
+transaction, blob publication, retention, provider call, or Generate/Compact
+dispatch path. Those runtime integrations remain explicitly unimplemented.
