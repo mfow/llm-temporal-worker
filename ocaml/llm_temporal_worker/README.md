@@ -86,6 +86,31 @@ match Llm_temporal.Conversation.respond
 | Error error -> handle_temporal_error error
 ```
 
+When the facade is opened, the ergonomic builders are also available as
+`Settings`, `Cache_policy`, `Decimal`, and `Compaction_policy`.  These are
+aliases over the same types used by `Conversation`; they do not introduce a
+second protocol or package.  `tool` and `output_config` are source-level
+aliases for the v1 function-tool and output records, so the following is
+valid in an external Dune package that depends only on
+`llm-temporal-ocaml`:
+
+```ocaml
+let temperature =
+  match Decimal.of_string "0.5" with
+  | Ok value -> value
+  | Error message -> invalid_arg message
+
+let settings = Settings.make ~temperature ()
+let root = Conversation.root ~context ~model ~settings ()
+```
+
+The repository's `ocaml/consumer_smoke` project is that downstream-package
+check.  It executes deterministic injected dispatchers for one root Generate,
+three immutable sibling forks, Compact, the post-compaction Generate, and all
+five typed Query constructors.  It never starts a Temporal server or contacts
+a provider; CI first installs the package through its Git subpath and then
+builds and runs the smoke executable against the installed public interface.
+
 `Conversation.to_request` is available when a workflow needs to inspect or
 inject the exact low-level v1 request. `respond_with` accepts an injectable
 typed dispatcher for deterministic tests; production code normally uses
