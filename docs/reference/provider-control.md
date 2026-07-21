@@ -147,5 +147,10 @@ the query kind, full tenant/project/actor scope (including tags), canonical
 filter digest, and an explicit snapshot horizon. Tokens are base64url encoded,
 expire by default after 15 minutes, reject future-issued or oversized values,
 and are never accepted for a different scope, filter, or key. The signed
-horizon is returned in `BoundCursorClaims` for the storage adapter to enforce
-against its repeatable-read snapshot before using the opaque position.
+horizon is validated by `control.QueryService` before a typed handler runs and
+is returned in `BoundCursorClaims` for the storage adapter to enforce against
+its repeatable-read snapshot before using the opaque position. The service
+also validates any outgoing cursor against the same typed request and a fresh
+clock sample, so a handler cannot return an unsigned or horizon-free
+continuation. The raw `Handler` interface remains source-compatible while
+adapters migrate; new storage adapters should implement `TypedHandler`.

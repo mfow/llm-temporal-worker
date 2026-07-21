@@ -18,6 +18,12 @@ func (handler queryHandlerFunc) ExecuteQuery(ctx context.Context, request llm.Qu
 	return handler(ctx, request)
 }
 
+type typedQueryHandlerFunc func(context.Context, QueryRequest, *BoundCursorClaims) (QueryResponse, error)
+
+func (handler typedQueryHandlerFunc) ExecuteTypedQuery(ctx context.Context, request QueryRequest, claims *BoundCursorClaims) (QueryResponse, error) {
+	return handler(ctx, request, claims)
+}
+
 func queryRequest() llm.QueryRequestV1 {
 	return llm.QueryRequestV1{
 		APIVersion: llm.QueryAPIVersion, OperationKey: "query-1", Kind: llm.QueryProviderStatus,
@@ -36,6 +42,49 @@ func queryResponse(request llm.QueryRequestV1) llm.QueryResponseV1 {
 }
 
 func stringPointer(value string) *string { return &value }
+
+func typedProviderRequest() QueryRequest {
+	return QueryRequest{
+		OperationKey: "query-1",
+		Scope: QueryScope{
+			Tenant: "tenant", Project: "project", Actor: "workflow",
+			Tags: map[string]string{"env": "test"},
+		},
+		Kind:   llm.QueryProviderStatus,
+		Filter: ProviderStatusQuery{Page: QueryPage{Size: 10}},
+	}
+}
+
+func typedModelRequest() QueryRequest {
+	request := typedProviderRequest()
+	request.Kind = llm.QueryModelInventory
+	request.Filter = ModelInventoryQuery{Page: QueryPage{Size: 10}}
+	return request
+}
+
+func typedRequestWire(t *testing.T, request QueryRequest) llm.QueryRequestV1 {
+	t.Helper()
+	wire, err := EncodeQueryRequest(request)
+	if err != nil {
+		t.Fatalf("EncodeQueryRequest() error = %v", err)
+	}
+	return wire
+}
+
+func typedProviderResponse(request QueryRequest, next *QueryCursor) QueryResponse {
+	return QueryResponse{
+		OperationKey: request.OperationKey, ExecutionID: "query-execution-typed", Kind: request.Kind,
+		Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)},
+		Complete:   true, NextCursor: next,
+		Result: ProviderStatusResult{Routes: []ProviderStatusRow{}},
+		Cost:   QueryCost{Status: QueryCostExact, ActualUSD: decimalUSDPointer("0"), Method: QueryCostControlZero},
+	}
+}
+
+func decimalUSDPointer(value string) *DecimalUSD {
+	amount := DecimalUSD(value)
+	return &amount
+}
 
 func testQueryService(handler Handler, authorize AuthorizeFunc) *QueryService {
 	return &QueryService{Handler: handler, Authorize: authorize, CursorKey: []byte("query-test-key"), Clock: func() time.Time { return time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC) }}
@@ -240,5 +289,232 @@ func TestQueryServiceMapsChildDeadlineToRetryableStateUnavailable(t *testing.T) 
 	}
 	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseStateLoad || providerErr.Retry != provider.RetrySameOperation {
 		t.Fatalf("provider error = %#v", providerErr)
+	}
+}
+
+func TestQueryServiceTypedHandlerBindsCursorClaimsAndValidatesOutgoingCursor(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	horizon := base.Add(-time.Minute)
+	codec := &CursorCodec{Key: []byte("typed-query-key"), TTL: 15 * time.Minute}
+	request := typedProviderRequest()
+	var incoming *BoundCursorClaims
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, got QueryRequest, claims *BoundCursorClaims) (QueryResponse, error) {
+			incoming = claims
+			return typedProviderResponse(got, func() *QueryCursor {
+				next, err := codec.Sign(got, "route-2", horizon, base)
+				if err != nil {
+					t.Fatalf("CursorCodec.Sign() error = %v", err)
+				}
+				return &next
+			}()), nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: codec,
+		Clock:       func() time.Time { return base },
+	}
+	first, err := service.Execute(context.Background(), typedRequestWire(t, request))
+	if err != nil {
+		t.Fatalf("first typed Execute() error = %v", err)
+	}
+	if first.NextCursor == nil {
+		t.Fatal("first typed response did not contain a cursor")
+	}
+	claims, err := codec.Decode(request, QueryCursor(*first.NextCursor), base)
+	if err != nil || claims.Position != "route-2" || !claims.Horizon.Equal(horizon) {
+		t.Fatalf("outgoing claims = %#v, error = %v", claims, err)
+	}
+
+	request.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: (*QueryCursor)(first.NextCursor)}}
+	second, err := service.Execute(context.Background(), typedRequestWire(t, request))
+	if err != nil {
+		t.Fatalf("second typed Execute() error = %v", err)
+	}
+	if second.NextCursor == nil || incoming == nil || incoming.Position != "route-2" || !incoming.Horizon.Equal(horizon) {
+		t.Fatalf("incoming claims = %#v, response = %#v", incoming, second)
+	}
+}
+
+func TestQueryServiceTypedHandlerRejectsChangedContinuationHorizon(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	horizon := base.Add(-time.Minute)
+	codec := &CursorCodec{Key: []byte("typed-query-key"), TTL: 15 * time.Minute}
+	request := typedProviderRequest()
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, got QueryRequest, claims *BoundCursorClaims) (QueryResponse, error) {
+			nextHorizon := horizon
+			if claims != nil {
+				nextHorizon = horizon.Add(time.Minute)
+			}
+			next, err := codec.Sign(got, "route-2", nextHorizon, base)
+			if err != nil {
+				t.Fatalf("CursorCodec.Sign() error = %v", err)
+			}
+			return typedProviderResponse(got, &next), nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: codec,
+		Clock:       func() time.Time { return base },
+	}
+	first, err := service.Execute(context.Background(), typedRequestWire(t, request))
+	if err != nil || first.NextCursor == nil {
+		t.Fatalf("first typed Execute() response = %#v, error = %v", first, err)
+	}
+	request.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: (*QueryCursor)(first.NextCursor)}}
+	if _, err := service.Execute(context.Background(), typedRequestWire(t, request)); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("changed continuation horizon error = %v, want %v", err, ErrQueryCursor)
+	}
+}
+
+func TestQueryServiceRawHandlerAcceptsTypedCursorCodec(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	codec := &CursorCodec{Key: []byte("typed-query-key")}
+	typed := typedProviderRequest()
+	token, err := codec.Sign(typed, "route-2", base.Add(-time.Minute), base)
+	if err != nil {
+		t.Fatalf("CursorCodec.Sign() error = %v", err)
+	}
+	typed.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: &token}}
+	request := typedRequestWire(t, typed)
+	service := &QueryService{
+		Handler: queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+			return queryResponse(request), nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: codec,
+		Clock:       func() time.Time { return base },
+	}
+	if _, err := service.Execute(context.Background(), request); err != nil {
+		t.Fatalf("raw Handler with typed cursor error = %v", err)
+	}
+}
+
+func TestQueryServiceTypedCursorBridgeRejectsInvalidClaims(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	codec := &CursorCodec{Key: []byte("typed-query-key"), TTL: time.Minute}
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, request QueryRequest, _ *BoundCursorClaims) (QueryResponse, error) {
+			return typedProviderResponse(request, nil), nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: codec,
+		Clock:       func() time.Time { return base },
+	}
+	valid := typedProviderRequest()
+	validToken, err := codec.Sign(valid, "route-2", base.Add(-time.Minute), base)
+	if err != nil {
+		t.Fatalf("CursorCodec.Sign() error = %v", err)
+	}
+	withCursor := func(request QueryRequest, token QueryCursor) llm.QueryRequestV1 {
+		switch request.Kind {
+		case llm.QueryProviderStatus:
+			filter := request.Filter.(ProviderStatusQuery)
+			filter.Page.Cursor = &token
+			request.Filter = filter
+		case llm.QueryModelInventory:
+			filter := request.Filter.(ModelInventoryQuery)
+			filter.Page.Cursor = &token
+			request.Filter = filter
+		case llm.QueryCreditStatus:
+			filter := request.Filter.(CreditStatusQuery)
+			filter.Page.Cursor = &token
+			request.Filter = filter
+		}
+		return typedRequestWire(t, request)
+	}
+	mutateToken := func(token QueryCursor) QueryCursor {
+		value := string(token)
+		replacement := byte('A')
+		if value[0] == replacement {
+			replacement = 'B'
+		}
+		return QueryCursor(string(replacement) + value[1:])
+	}
+	tests := []struct {
+		name    string
+		request llm.QueryRequestV1
+		wantErr error
+	}{
+		{name: "tamper", request: withCursor(valid, mutateToken(validToken)), wantErr: ErrQueryCursor},
+		{name: "scope", request: withCursor(func() QueryRequest { copy := valid; copy.Scope.Tenant = "other"; return copy }(), validToken), wantErr: ErrQueryCursor},
+		{name: "tag", request: withCursor(func() QueryRequest {
+			copy := valid
+			copy.Scope.Tags = map[string]string{"env": "production"}
+			return copy
+		}(), validToken), wantErr: ErrQueryCursor},
+		{name: "filter", request: withCursor(func() QueryRequest {
+			copy := valid
+			copy.Filter = ProviderStatusQuery{Page: QueryPage{Size: 11}}
+			return copy
+		}(), validToken), wantErr: ErrQueryCursor},
+		{name: "cross-kind", request: withCursor(typedModelRequest(), validToken), wantErr: ErrQueryCursor},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := service.Execute(context.Background(), test.request); !errors.Is(err, test.wantErr) {
+				t.Fatalf("Execute() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+
+	expired, err := codec.Sign(valid, "route-2", base.Add(-2*time.Minute), base.Add(-2*time.Minute))
+	if err != nil {
+		t.Fatalf("expired CursorCodec.Sign() error = %v", err)
+	}
+	if _, err := service.Execute(context.Background(), withCursor(valid, expired)); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("expired cursor error = %v", err)
+	}
+	future, err := codec.Sign(valid, "route-2", base, base.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("future CursorCodec.Sign() error = %v", err)
+	}
+	if _, err := service.Execute(context.Background(), withCursor(valid, future)); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("future cursor error = %v", err)
+	}
+	if _, err := codec.Sign(valid, "route-2", time.Time{}, base); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("zero-horizon sign error = %v", err)
+	}
+	limited := *codec
+	limited.MaxPosition = 4
+	if _, err := limited.Sign(valid, "route-2", base, base); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("oversized position sign error = %v", err)
+	}
+}
+
+func TestQueryServiceTypedCursorBridgeRejectsInvalidOutgoingCursor(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, request QueryRequest, _ *BoundCursorClaims) (QueryResponse, error) {
+			invalid := QueryCursor("not-a-signed-cursor")
+			return typedProviderResponse(request, &invalid), nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: &CursorCodec{Key: []byte("typed-query-key")},
+		Clock:       func() time.Time { return base },
+	}
+	if _, err := service.Execute(context.Background(), typedRequestWire(t, typedProviderRequest())); !errors.Is(err, ErrQueryCursor) {
+		t.Fatalf("invalid outgoing cursor error = %v", err)
+	}
+}
+
+func TestQueryServiceTypedHandlerResponseContractErrorIsNotMappedToStateUnavailable(t *testing.T) {
+	base := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	service := &QueryService{
+		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, request QueryRequest, _ *BoundCursorClaims) (QueryResponse, error) {
+			response := typedProviderResponse(request, nil)
+			response.OperationKey = ""
+			return response, nil
+		}),
+		Authorize:   func(context.Context, Authorization) error { return nil },
+		CursorCodec: &CursorCodec{Key: []byte("typed-query-key")},
+		Clock:       func() time.Time { return base },
+	}
+	_, err := service.Execute(context.Background(), typedRequestWire(t, typedProviderRequest()))
+	if err == nil || !strings.Contains(err.Error(), "typed query response") {
+		t.Fatalf("typed response contract error = %v", err)
+	}
+	var providerErr *provider.Error
+	if errors.As(err, &providerErr) {
+		t.Fatalf("typed response contract error was mapped to provider error: %#v", providerErr)
 	}
 }
