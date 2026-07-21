@@ -36,6 +36,22 @@ func TestCursorCodecBindsScopeFilterAndHorizon(t *testing.T) {
 	}
 }
 
+func TestCursorCodecIgnoresContinuationCursorInFilterDigest(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
+	first := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{Page: QueryPage{Size: 20}}}
+	cursor := QueryCursor("continuation")
+	continuation := first
+	continuation.Filter = ProviderStatusQuery{Page: QueryPage{Size: 20, Cursor: &cursor}}
+	codec := CursorCodec{Key: []byte("key")}
+	token, err := codec.Sign(first, "position", now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.Decode(continuation, token, now); err != nil {
+		t.Fatalf("continuation cursor changed binding: %v", err)
+	}
+}
+
 func TestCursorCodecCanonicalizesUnorderedSpendDimensions(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
 	codec := CursorCodec{Key: []byte("test-key")}
@@ -97,5 +113,18 @@ func TestCursorCodecSupportsEveryQueryKind(t *testing.T) {
 		if _, err := codec.Decode(query, token, now); err != nil {
 			t.Fatalf("%s decode: %v", query.Kind, err)
 		}
+	}
+}
+
+func TestCursorCodecRejectsTypedNilFilter(t *testing.T) {
+	var filter *ProviderStatusQuery
+	query := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: filter}
+	codec := CursorCodec{Key: []byte("key")}
+	now := time.Now().UTC()
+	if _, err := codec.Sign(query, "position", now, now); err == nil {
+		t.Fatal("typed nil filter was signed")
+	}
+	if _, err := codec.Decode(query, "bad", now); err == nil {
+		t.Fatal("typed nil filter was decoded")
 	}
 }

@@ -43,14 +43,15 @@ type boundCursorEnvelope struct {
 }
 
 func (codec *CursorCodec) Sign(request QueryRequest, position string, horizon, issuedAt time.Time) (QueryCursor, error) {
-	if codec == nil || len(codec.Key) == 0 || request.Filter == nil || position == "" {
+	filterQueryKind, ok := filterKind(request.Filter)
+	if codec == nil || len(codec.Key) == 0 || !ok || filterQueryKind != request.Kind || position == "" {
 		return "", ErrQueryCursor
 	}
 	max := codec.MaxPosition
 	if max <= 0 {
 		max = 128
 	}
-	if len(position) > max || request.Filter.queryKind() != request.Kind || horizon.IsZero() || issuedAt.IsZero() {
+	if len(position) > max || horizon.IsZero() || issuedAt.IsZero() {
 		return "", ErrQueryCursor
 	}
 	issuedAt = issuedAt.UTC()
@@ -80,7 +81,10 @@ func (codec *CursorCodec) Sign(request QueryRequest, position string, horizon, i
 
 func (codec *CursorCodec) Decode(request QueryRequest, token QueryCursor, now time.Time) (BoundCursorClaims, error) {
 	var claims BoundCursorClaims
-	if codec == nil || len(codec.Key) == 0 || len(token) == 0 || len(token) > 512 || request.Filter == nil {
+	if codec == nil || len(codec.Key) == 0 || len(token) == 0 || len(token) > 512 {
+		return claims, ErrQueryCursor
+	}
+	if _, ok := filterKind(request.Filter); !ok {
 		return claims, ErrQueryCursor
 	}
 	parts := strings.Split(string(token), ".")
@@ -124,7 +128,8 @@ func (codec *CursorCodec) Decode(request QueryRequest, token QueryCursor, now ti
 }
 
 func cursorDigests(request QueryRequest) (string, string, error) {
-	if request.Filter == nil || request.Filter.queryKind() != request.Kind {
+	kind, ok := filterKind(request.Filter)
+	if !ok || kind != request.Kind {
 		return "", "", errors.New("query filter kind mismatch")
 	}
 	scope := struct {
@@ -149,6 +154,36 @@ func cursorDigests(request QueryRequest) (string, string, error) {
 
 func canonicalFilter(filter QueryFilter) QueryFilter {
 	switch value := filter.(type) {
+	case ProviderStatusQuery:
+		value.Page.Cursor = nil
+		return value
+	case *ProviderStatusQuery:
+		if value == nil {
+			return filter
+		}
+		copy := *value
+		copy.Page.Cursor = nil
+		return &copy
+	case ModelInventoryQuery:
+		value.Page.Cursor = nil
+		return value
+	case *ModelInventoryQuery:
+		if value == nil {
+			return filter
+		}
+		copy := *value
+		copy.Page.Cursor = nil
+		return &copy
+	case CreditStatusQuery:
+		value.Page.Cursor = nil
+		return value
+	case *CreditStatusQuery:
+		if value == nil {
+			return filter
+		}
+		copy := *value
+		copy.Page.Cursor = nil
+		return &copy
 	case BudgetStatusQuery:
 		if value.ActiveAt != nil {
 			normalized := value.ActiveAt.UTC()

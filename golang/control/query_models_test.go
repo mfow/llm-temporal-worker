@@ -52,6 +52,17 @@ func TestTypedQueryRequestAcceptsPointerFilters(t *testing.T) {
 	}
 }
 
+func TestTypedQueryAPIsRejectTypedNilPointers(t *testing.T) {
+	var filter *ProviderStatusQuery
+	if _, err := EncodeQueryRequest(QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: filter}); err == nil {
+		t.Fatal("typed nil filter was accepted")
+	}
+	var result *ProviderStatusResult
+	if _, err := EncodeQueryResponse(QueryResponse{OperationKey: "op", ExecutionID: "exec", Kind: llm.QueryProviderStatus, Provenance: QueryProvenance{ObservedAt: time.Now().UTC()}, Result: result}); err == nil {
+		t.Fatal("typed nil result was accepted")
+	}
+}
+
 func TestTypedQueryRequestSupportsAllWireKinds(t *testing.T) {
 	start := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
@@ -110,6 +121,36 @@ func TestTypedQueryResponseRejectsUnknownWireRow(t *testing.T) {
 	}
 }
 
-func testScope() QueryScope                       { return QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"} }
-func boolPointer(value bool) *bool                { return &value }
-func decimalPointer(value DecimalUSD) *DecimalUSD { return &value }
+func TestBudgetWindowRetryDurationUsesWireSeconds(t *testing.T) {
+	window := BudgetWindow{PolicyKey: "daily", WindowKey: "hour", CoverageStart: time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), CoverageEnd: time.Date(2026, time.July, 21, 1, 0, 0, 0, time.UTC), LimitUSD: "10", ReservedCostUSD: "1", AccountedCostUSD: "2", AvailableUSD: "7", RetryAfter: durationPointer(30 * time.Second)}
+	data, err := json.Marshal(window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) == "" || !json.Valid(data) || !containsJSONNumber(data, "retry_after_seconds", 30) {
+		t.Fatalf("retry duration was not encoded as seconds: %s", data)
+	}
+	var decoded BudgetWindow
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.RetryAfter == nil || *decoded.RetryAfter != 30*time.Second {
+		t.Fatalf("retry duration round-trip mismatch: %#v", decoded.RetryAfter)
+	}
+}
+
+func testScope() QueryScope                              { return QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"} }
+func boolPointer(value bool) *bool                       { return &value }
+func decimalPointer(value DecimalUSD) *DecimalUSD        { return &value }
+func durationPointer(value time.Duration) *time.Duration { return &value }
+func containsJSONNumber(data []byte, key string, want int64) bool {
+	var value map[string]json.RawMessage
+	if json.Unmarshal(data, &value) != nil {
+		return false
+	}
+	var got int64
+	if json.Unmarshal(value[key], &got) != nil {
+		return false
+	}
+	return got == want
+}

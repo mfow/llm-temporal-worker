@@ -35,6 +35,8 @@ type ManifestDigest string
 type SafeCode string
 type QueryCursor string
 
+const maxDurationSeconds int64 = 9223372036
+
 type QueryAvailability string
 
 const (
@@ -277,7 +279,7 @@ func (window BudgetWindow) MarshalJSON() ([]byte, error) {
 	}
 	var retry *int64
 	if window.RetryAfter != nil {
-		if *window.RetryAfter > time.Duration(int64(^uint64(0)>>1)/int64(time.Second)) {
+		if int64(*window.RetryAfter/time.Second) > maxDurationSeconds {
 			return nil, fmt.Errorf("retry_after is too large")
 		}
 		seconds := int64(*window.RetryAfter / time.Second)
@@ -309,7 +311,7 @@ func (window *BudgetWindow) UnmarshalJSON(data []byte) error {
 		if *value.RetryAfter < 0 {
 			return fmt.Errorf("retry_after_seconds must be nonnegative")
 		}
-		if *value.RetryAfter > int64(^uint64(0)>>1)/int64(time.Second) {
+		if *value.RetryAfter > maxDurationSeconds {
 			return fmt.Errorf("retry_after_seconds is too large")
 		}
 		d := time.Duration(*value.RetryAfter) * time.Second
@@ -392,7 +394,8 @@ type requestWire struct {
 }
 
 func EncodeQueryRequest(request QueryRequest) (llm.QueryRequestV1, error) {
-	if request.Filter == nil || request.Filter.queryKind() != request.Kind || request.OperationKey == "" {
+	kind, ok := filterKind(request.Filter)
+	if !ok || kind != request.Kind || request.OperationKey == "" {
 		return llm.QueryRequestV1{}, fmt.Errorf("typed query request is incomplete")
 	}
 	filter, err := encodeFilter(request.Filter)
@@ -571,7 +574,8 @@ func DecodeQueryResponse(wire llm.QueryResponseV1) (QueryResponse, error) {
 }
 
 func EncodeQueryResponse(response QueryResponse) (llm.QueryResponseV1, error) {
-	if response.Result == nil || response.Result.queryKind() != response.Kind || response.OperationKey == "" || response.ExecutionID == "" || response.Provenance.ObservedAt.IsZero() {
+	kind, ok := resultKind(response.Result)
+	if !ok || kind != response.Kind || response.OperationKey == "" || response.ExecutionID == "" || response.Provenance.ObservedAt.IsZero() {
 		return llm.QueryResponseV1{}, fmt.Errorf("typed query response is incomplete")
 	}
 	result, err := encodeResult(response.Kind, response.Result)
@@ -586,6 +590,23 @@ func EncodeQueryResponse(response QueryResponse) (llm.QueryResponseV1, error) {
 }
 
 func encodeResult(kind llm.QueryKind, value QueryResult) (llm.QueryResult, error) {
+	if _, ok := resultKind(value); !ok {
+		return nil, fmt.Errorf("nil typed query result")
+	}
+	// Pointers are accepted for ergonomic parity with the request models; the
+	// closed wire value is still reconstructed below.
+	switch typed := value.(type) {
+	case *ProviderStatusResult:
+		value = *typed
+	case *ModelInventoryResult:
+		value = *typed
+	case *CreditStatusResult:
+		value = *typed
+	case *BudgetStatusResult:
+		value = *typed
+	case *SpendSummaryResult:
+		value = *typed
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -769,6 +790,74 @@ func valueOrZeroTime(value *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *value
+}
+
+func filterKind(filter QueryFilter) (llm.QueryKind, bool) {
+	switch value := filter.(type) {
+	case nil:
+		return "", false
+	case *ProviderStatusQuery:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *ModelInventoryQuery:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *CreditStatusQuery:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *BudgetStatusQuery:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *SpendSummaryQuery:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	default:
+		return filter.queryKind(), true
+	}
+}
+
+func resultKind(result QueryResult) (llm.QueryKind, bool) {
+	switch value := result.(type) {
+	case nil:
+		return "", false
+	case *ProviderStatusResult:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *ModelInventoryResult:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *CreditStatusResult:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *BudgetStatusResult:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	case *SpendSummaryResult:
+		if value == nil {
+			return "", false
+		}
+		return value.queryKind(), true
+	default:
+		return result.queryKind(), true
+	}
 }
 func stringPtr(value *QueryCursor) *string {
 	if value == nil {
