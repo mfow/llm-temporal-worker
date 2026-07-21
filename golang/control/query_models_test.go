@@ -1,0 +1,115 @@
+package control
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/golang/llm"
+)
+
+func TestTypedQueryRequestRoundTrip(t *testing.T) {
+	provider := ProviderID("openai")
+	endpoint := EndpointID("primary")
+	refresh := 30 * time.Second
+	pageCursor := QueryCursor("cursor")
+	request := QueryRequest{
+		OperationKey: "query-op",
+		Scope:        QueryScope{Tenant: "tenant-a", Project: "project-a", Actor: "actor-a", Tags: map[string]string{"region": "au"}},
+		Kind:         llm.QueryProviderStatus,
+		Filter:       ProviderStatusQuery{Provider: &provider, Endpoint: &endpoint, IncludeHealthy: boolPointer(true), RefreshIfOlderThan: refresh, Page: QueryPage{Size: 25, Cursor: &pageCursor}},
+	}
+	wire, err := EncodeQueryRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	data, _ := json.Marshal(wire)
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["api_version"] != llm.QueryAPIVersion {
+		t.Fatalf("wrong version: %#v", fields["api_version"])
+	}
+	decoded, err := DecodeQueryRequest(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter, ok := decoded.Filter.(ProviderStatusQuery)
+	if !ok || filter.Page.Size != 25 || filter.RefreshIfOlderThan != refresh || filter.Provider == nil || *filter.Provider != provider || filter.Page.Cursor == nil || *filter.Page.Cursor != pageCursor {
+		t.Fatalf("decoded filter lost typed values: %#v", decoded.Filter)
+	}
+}
+
+func TestTypedQueryRequestAcceptsPointerFilters(t *testing.T) {
+	filter := &ProviderStatusQuery{}
+	wire, err := EncodeQueryRequest(QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: filter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeQueryRequest(wire); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTypedQueryRequestSupportsAllWireKinds(t *testing.T) {
+	start := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	policy := PolicyKey("daily")
+	queries := []QueryRequest{
+		{OperationKey: "provider", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{}},
+		{OperationKey: "inventory", Scope: testScope(), Kind: llm.QueryModelInventory, Filter: ModelInventoryQuery{}},
+		{OperationKey: "credit", Scope: testScope(), Kind: llm.QueryCreditStatus, Filter: CreditStatusQuery{}},
+		{OperationKey: "budget", Scope: testScope(), Kind: llm.QueryBudgetStatus, Filter: BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &start, IncludeWindows: boolPointer(true)}},
+		{OperationKey: "spend", Scope: testScope(), Kind: llm.QuerySpendSummary, Filter: SpendSummaryQuery{StartTime: start, EndTime: end, GroupBy: []SpendDimension{SpendByProvider, SpendByModel}, OperationKinds: []OperationKind{OperationGenerate}}},
+	}
+	for _, query := range queries {
+		wire, err := EncodeQueryRequest(query)
+		if err != nil {
+			t.Fatalf("%s: %v", query.OperationKey, err)
+		}
+		if _, err := DecodeQueryRequest(wire); err != nil {
+			t.Fatalf("%s decode: %v", query.OperationKey, err)
+		}
+	}
+}
+
+func TestTypedQueryRequestRejectsInvalidRefreshDuration(t *testing.T) {
+	for _, refresh := range []time.Duration{500 * time.Millisecond, -time.Second, 86401 * time.Second} {
+		_, err := EncodeQueryRequest(QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{RefreshIfOlderThan: refresh}})
+		if err == nil {
+			t.Fatalf("refresh %s was accepted", refresh)
+		}
+	}
+}
+
+func TestTypedQueryResponseRoundTrip(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+	credit := QueryCreditLow
+	billing := QueryBillingBlocked
+	response := QueryResponse{OperationKey: "credit-op", ExecutionID: "execution-1", Kind: llm.QueryCreditStatus, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: CreditStatusResult{Endpoints: []CreditStatusRow{{Provider: "openai", Endpoint: "primary", Credit: credit, Billing: billing, EvidenceSource: QueryEvidenceProviderAPI}}}, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}}
+	wire, err := EncodeQueryResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeQueryResponse(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := decoded.Result.(CreditStatusResult)
+	if !ok || len(result.Endpoints) != 1 || result.Endpoints[0].Credit != credit || result.Endpoints[0].Billing != billing {
+		t.Fatalf("decoded result lost typed values: %#v", decoded.Result)
+	}
+}
+
+func TestTypedQueryResponseRejectsUnknownWireRow(t *testing.T) {
+	result := llm.ProviderStatusPage{Routes: []json.RawMessage{json.RawMessage(`{"route_id":"r","provider":"p","endpoint":"e","availability":"available","observed_at":"2026-07-21T00:00:00Z","stale_after":"2026-07-21T01:00:00Z","unexpected":true`)}}
+	wire := llm.QueryResponseV1{APIVersion: llm.QueryAPIVersion, OperationKey: "op", QueryExecutionID: "exec", Kind: llm.QueryProviderStatus, ObservedAt: "2026-07-21T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true, Result: result, Cost: llm.CostV1{Status: "unknown", UnknownReason: "not_metered"}}
+	if _, err := DecodeQueryResponse(wire); err == nil {
+		t.Fatal("expected unknown row field to be rejected")
+	}
+}
+
+func testScope() QueryScope                       { return QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"} }
+func boolPointer(value bool) *bool                { return &value }
+func decimalPointer(value DecimalUSD) *DecimalUSD { return &value }
