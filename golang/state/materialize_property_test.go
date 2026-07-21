@@ -208,4 +208,28 @@ func TestMaterializationAllowsParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestMaterializationRejectsToolCallAfterParallelResultsBegin(t *testing.T) {
+	graph := NewCheckpointGraph(MaterializeLimits{})
+	root := rootCheckpoint("interleaved", "tenant-a", "op-interleaved-root")
+	root.Delta = []llm.Item{
+		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"one"}`)},
+		llm.ToolCall{ID: "call-2", Name: "lookup", Arguments: []byte(`{"q":"two"}`)},
+	}
+	if err := graph.PutRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	parent := Handle("interleaved")
+	child := childCheckpoint("bad-interleaved", parent.String(), "tenant-a", "op-interleaved-child", "")
+	child.Delta = []llm.Item{
+		llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "one"}}},
+		llm.ToolCall{ID: "call-3", Name: "lookup", Arguments: []byte(`{"q":"three"}`)},
+	}
+	if err := graph.PutChild(child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graph.Materialize("tenant-a", child.Handle); err == nil {
+		t.Fatal("materialization accepted a new tool call after parallel results began")
+	}
+}
+
 func ptr(value string) *string { return &value }
