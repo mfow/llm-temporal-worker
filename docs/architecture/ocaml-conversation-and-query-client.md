@@ -540,19 +540,19 @@ let branch_c = Conversation.fork parent in
 
 let a =
   Conversation.respond
-    ~operation_key:(Operation_key.of_string_exn "case-a")
+    ~operation_key:(Operation_key.of_string "case-a")
     ~append:[Message { actor = Human; content = [Text "Try A"] }]
     branch_a
 in
 let b =
   Conversation.respond
-    ~operation_key:(Operation_key.of_string_exn "case-b")
+    ~operation_key:(Operation_key.of_string "case-b")
     ~append:[Message { actor = Human; content = [Text "Try B"] }]
     branch_b
 in
 let c =
   Conversation.respond
-    ~operation_key:(Operation_key.of_string_exn "case-c")
+    ~operation_key:(Operation_key.of_string "case-c")
     ~append:[Message { actor = Human; content = [Text "Try C"] }]
     branch_c
 in
@@ -679,7 +679,7 @@ the answer as a spend summary:
 ~~~ocaml
 let result =
   Query.execute
-    ~operation_key:(Operation_key.of_string_exn "budget-check-481")
+    ~operation_key:(Operation_key.of_string "budget-check-481")
     ~context
     (Query.Budget_status {
        policy_key = None;
@@ -729,12 +729,13 @@ not use an OCaml thread, Lwt promise, or process-global scheduler.
 
 ## End-to-end mock OCaml Workflow
 
-The following is the required shape of the downstream compile example. It is
-written against the proposed public facade and therefore will compile only
-after the implementation tasks in this plan are complete. Names in this sample
-are the target API, not private helper aliases. Application-owned Workflow
-input/output codec definitions are omitted; the **Llm_temporal** calls and
-Temporal scheduling primitives are concrete.
+The following is the required shape of the downstream compile example. The
+checked-in `ocaml/consumer_workflow_smoke` Dune project compiles this sample
+against the installed package, importing only **Llm_temporal**. Names in this
+sample are the public API, not private helper aliases. Application-owned
+Workflow input/output codec definitions are omitted; the **Llm_temporal**
+calls and Temporal scheduling primitives are concrete. The fixture is
+compile-only: it does not contact a Temporal server or provider.
 
 The example exercises all three Activities and all five typed Query variants:
 
@@ -775,7 +776,7 @@ type workflow_output = {
 }
 
 let operation_key input suffix =
-  Operation_key.of_string_exn (input.run_key ^ ":" ^ suffix)
+  Operation_key.of_string (input.run_key ^ ":" ^ suffix)
 
 let decimal_constant value =
   match Decimal.of_string value with
@@ -798,12 +799,8 @@ let message text =
   Message { actor = Human; content = [ Text text ] }
 
 let exactly_three_results = function
-  | [ Ok branch_0; Ok branch_1; Ok branch_2 ] ->
+  | [ branch_0; branch_1; branch_2 ] ->
       Ok (branch_0, branch_1, branch_2)
-  | [ Error error; _; _ ]
-  | [ _; Error error; _ ]
-  | [ _; _; Error error ] ->
-      Error error
   | _ ->
       invalid_arg "Temporal.Future.all changed result cardinality"
 
@@ -845,9 +842,8 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
           ~model:input.model
           ~settings:(Settings.make
             ~temperature:(decimal_constant "0")
-            ~reasoning_effort:Medium
             ~tools:input.tools
-            ~tool_policy:Auto
+            ~tool_policy:{ choice = Auto; parallel = false }
             ~output:input.output
             ())
           ()
@@ -879,10 +875,12 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
       let branch_0 = start_branch "branch-0" cache_0 in
       let branch_1 = start_branch "branch-1" cache_1 in
       let branch_2 = start_branch "branch-2" cache_2 in
+      let* branch_results =
+        Temporal.Future.await
+          (Temporal.Future.all [ branch_0; branch_1; branch_2 ])
+      in
       let* (branch_0, branch_1, branch_2) =
-        exactly_three_results
-          (Temporal.Future.await
-             (Temporal.Future.all [ branch_0; branch_1; branch_2 ]))
+        exactly_three_results branch_results
       in
       let branches = [ branch_0; branch_1; branch_2 ] in
       let chosen = branch_0 in
@@ -956,8 +954,9 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
       })
 ~~~
 
-The result matcher is exhaustive over Activity failures and treats a changed
-future cardinality as a source-code invariant violation. The chosen branch is
+The result matcher is exhaustive over the Activity Future's typed error channel
+and treats a changed future cardinality as a source-code invariant violation.
+The chosen branch is
 selected by stable input order. Choosing from recorded model output is also
 deterministic, but application policy should make that choice explicit and test
 replay.
