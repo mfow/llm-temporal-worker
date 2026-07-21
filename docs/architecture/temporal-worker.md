@@ -2,43 +2,56 @@
 
 > This chapter describes current worker behavior. Target phase status and
 > authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
-> The staged design replaces the unreleased **llm.generate.v1** in place and
-> later adds **llm.compact.v1** and **llm.query.v1**, while retaining the rule
-> that caller Workflows execute tools and own agent loops. See
+> The current v1 composition registers **llm.generate.v1**,
+> **llm.compact.v1**, and **llm.query.v1** as one-shot Activities. The staged
+> design continues that boundary while adding the durable implementations
+> behind it; caller Workflows still execute tools and own agent loops. See
 > [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md)
 > and [the typed OCaml client](ocaml-conversation-and-query-client.md).
 
 ## Activity boundary
 
-The worker registers one versioned Activity:
+The production v1 registration installs three exact versioned Activities on the
+configured task queue:
 
 ```text
 llm.generate.v1
+llm.compact.v1
+llm.query.v1
 ```
 
-The Activity performs exactly one inference turn. It can return model output or
-tool calls, but it never executes tools or loops until a final answer. Agent
+`llm.generate.v1` performs exactly one inference turn and may return model
+output or tool calls. `llm.compact.v1` returns one final compacted checkpoint
+response. `llm.query.v1` returns one final control-plane response. None of these
+Activities executes tools, owns an agent loop, or exposes token events; agent
 orchestration belongs in caller Workflows so every tool result and decision is
-durable and visible.
+durable and visible. The closed request/response records and registration
+behavior are specified in the [v1 Activity runtime boundary](../reference/activity-runtime.md).
 
-The reusable engine is usable without Temporal. The Activity is a thin adapter:
+The reusable engine remains usable without Temporal. The v1 Activity adapter
+receives its durable implementation through a one-shot runtime seam:
 
 ```go
-type Activities struct {
-	Engine       llm.Engine
-	Heartbeater  Heartbeater
-	Logger       *slog.Logger
+type V1Runtime interface {
+	GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error)
+	CompactV1(context.Context, llm.CompactRequestV1) (llm.CompactResponseV1, error)
+	QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
 }
 
-func (a *Activities) Generate(
-	ctx context.Context,
-	req activity.GenerateRequest,
-) (activity.GenerateResponse, error)
+type QueryService interface {
+	Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
+}
 ```
 
-Dependencies are injected into an Activity struct and registered as methods.
-The Activity does not construct clients, read environment variables, or mutate
-global state.
+`QueryService` is an independent query-only seam. When it is supplied, it is
+used for `llm.query.v1`; it cannot dispatch Generate or Compact work. The
+Activity layer validates the closed records, applies payload limits, converts
+errors to bounded Temporal details, and never constructs clients, reads
+environment variables, or mutates global state. `Activities.Register` uses this
+three-name v1 registration whenever a v1 runtime or query service is present.
+Only an Activity assembled without either seam uses the legacy direct
+`llm.generate.v1` engine helper, which is retained for pre-release callers and
+tests and does not register Compact or Query.
 
 The process-level composition lives in `internal/runtime`. It validates and
 publishes one non-secret configuration snapshot, creates the Temporal client
@@ -52,10 +65,11 @@ before a worker starts.
 
 ## Payload contract
 
-`GenerateRequest` wraps the canonical `llm.temporal/v1` request with only
-Temporal-boundary metadata. `GenerateResponse` contains the normalized response
-and safe execution metadata. Both have JSON fixtures and deterministic
-round-trip tests.
+Each v1 Activity has a closed request and response record in the `llm` package:
+`llm.GenerateRequestV1`/`llm.GenerateResponseV1`,
+`llm.CompactRequestV1`/`llm.CompactResponseV1`, and
+`llm.QueryRequestV1`/`llm.QueryResponseV1`. The legacy `GenerateRequest` and
+`GenerateResponse` envelope remains only for the direct engine helper.
 
 Provider SDK types, clients, secrets, raw prompts in errors, and unbounded binary
 content never enter Temporal payloads. Inline payload limits default well below
@@ -122,11 +136,11 @@ exactly-once semantics.
 
 ## Heartbeats
 
-`Generate` invokes `llm.Engine.Generate` once and returns that final normalized
-response. No streaming or token-event API is supported in v1, including for
-reusable library callers. Text/JSON deltas, tool arguments, and opaque
-provider-state events never enter Temporal history. Residual decoder code is
-not a Temporal dispatch path.
+The one-shot v1 Activities invoke their runtime exactly once and return a final
+normalized or control-plane response. No streaming or token-event API is
+supported in v1, including for reusable library callers. Text/JSON deltas,
+tool arguments, and opaque provider-state events never enter Temporal history.
+Residual decoder code is not a Temporal dispatch path.
 
 Heartbeats contain small, redacted progress only:
 
@@ -284,7 +298,7 @@ rather than a heartbeat-timeout retry.
 
 The Temporal Go SDK Activity test environment covers:
 
-- registration under the exact versioned name;
+- registration under all three exact versioned names;
 - payload round trips and oversized BlobRef behavior;
 - heartbeat detail schema and cancellation delivery;
 - completed-operation replay after simulated worker loss;
