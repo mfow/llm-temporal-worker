@@ -66,6 +66,7 @@ type QueryService struct {
 	Handler      Handler
 	TypedHandler TypedHandler
 	Authorize    AuthorizeFunc
+	Audit        AuditFunc
 	// CursorCodec is required when TypedHandler is set. It is optional for the
 	// legacy Handler seam, whose CursorKey path remains source-compatible.
 	CursorCodec *CursorCodec
@@ -99,8 +100,9 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 	// MarshalJSON is the closed-request validator: it rejects unknown query
 	// fields, non-object filters, invalid enums, and page sizes outside the
 	// 1..1000 bound before a handler can touch storage.
-	if _, err := json.Marshal(request); err != nil {
-		return llm.QueryResponseV1{}, fmt.Errorf("query request is invalid: %w", err)
+	requestJSON, marshalErr := json.Marshal(request)
+	if marshalErr != nil {
+		return llm.QueryResponseV1{}, fmt.Errorf("query request is invalid: %w", marshalErr)
 	}
 	if err := validateScope(request.Context); err != nil {
 		return llm.QueryResponseV1{}, err
@@ -203,6 +205,20 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 			}
 		} else if err := service.ValidateCursor(request, *response.NextCursor, service.now()); err != nil {
 			return llm.QueryResponseV1{}, fmt.Errorf("next_cursor: %w", err)
+		}
+	}
+	if service.Audit != nil {
+		audit, err := buildQueryAudit(request, requestJSON, response, now, service.now())
+		if err != nil {
+			return llm.QueryResponseV1{}, fmt.Errorf("query audit: %w", err)
+		}
+		if err := service.Audit(ctx, audit); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return llm.QueryResponseV1{}, ctxErr
+			}
+			mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetrySameOperation, "query audit state is unavailable")
+			mapped.Cause = err
+			return llm.QueryResponseV1{}, mapped
 		}
 	}
 	return response, nil
