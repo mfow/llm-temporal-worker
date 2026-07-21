@@ -84,8 +84,13 @@ operation repositories. A `Submit` result in `provider_pending` is persisted
 before polling, and a retry loads the encrypted identifier and calls `Poll`
 only. Poll limits and cancellation leave the durable operation pending for the
 next Activity attempt. Providers that do not implement the optional port remain
-one-shot adapters. The acceptance-before-persistence gap is still ambiguous;
-automatic resubmission is never inferred.
+one-shot adapters. When `Submit` reports an accepted or ambiguous failure, an
+adapter implementing `IdempotencyRecovery` receives exactly one lookup by the
+deterministic operation key. A recovered pending identifier is validated,
+persisted, and polled; recovered completed or failed outcomes follow the normal
+ledger finalization path. A not-found, invalid, failed lookup, or adapter
+without this extension remains ambiguous; automatic resubmission is never
+inferred.
 
 ## Rejected alternatives
 

@@ -25,6 +25,26 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 	}
 	outcome, err := resumable.Submit(ctx, call, observer)
 	if err != nil {
+		// A Submit failure after the possible-write boundary may still have
+		// created provider-owned work. Providers that document an idempotency
+		// lookup get exactly one recovery attempt; all other adapters remain
+		// fail-closed and the caller records an ambiguous dispatch.
+		mapped := classifyProviderError(err, observer != nil && observer.marked)
+		if mapped.Dispatch == provider.DispatchAccepted || mapped.Dispatch == provider.DispatchAmbiguous {
+			if recovery, recoverable := adapter.(provider.IdempotencyRecovery); recoverable {
+				recovered, recoveryErr := recovery.RecoverByIdempotencyKey(ctx, call, observer)
+				if recoveryErr != nil {
+					mapped.Cause = recoveryErr
+					return provider.Result{}, mapped, false
+				}
+				if validationErr := recovered.Validate(); validationErr != nil {
+					invalid := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider idempotency recovery response is invalid")
+					invalid.Cause = validationErr
+					return provider.Result{}, invalid, false
+				}
+				return engine.handleResumableOutcome(ctx, operation, candidate, call, observer, resumable, recovered)
+			}
+		}
 		return provider.Result{}, err, false
 	}
 	if err := outcome.Validate(); err != nil {
@@ -32,6 +52,10 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 		mapped.Cause = err
 		return provider.Result{}, mapped, false
 	}
+	return engine.handleResumableOutcome(ctx, operation, candidate, call, observer, resumable, outcome)
+}
+
+func (engine *Engine) handleResumableOutcome(ctx context.Context, operation admission.Operation, candidate routing.Candidate, call provider.Call, observer *dispatchObserver, resumable provider.ResumableAdapter, outcome provider.ResumableResult) (provider.Result, error, bool) {
 	switch outcome.State {
 	case provider.ResumableCompleted:
 		return outcome.Result, nil, false

@@ -75,8 +75,11 @@ type ResumableAdapter interface {
 }
 
 // IdempotencyRecovery is an optional extension for providers that document a
-// lookup by the caller's operation key. Without it, an acceptance/persistence
-// gap is ambiguous and must not trigger a second Submit.
+// lookup by the caller's operation key. The engine invokes this lookup at most
+// once after an accepted or ambiguous Submit failure. The returned
+// ResumableResult is validated before a pending ID is persisted or a terminal
+// outcome is finalized. Without this extension, an acceptance/persistence gap
+// is ambiguous and must not trigger a second Submit.
 type IdempotencyRecovery interface {
 	RecoverByIdempotencyKey(context.Context, Call, Observer) (ResumableResult, error)
 }
