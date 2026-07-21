@@ -119,11 +119,28 @@ func (store *Store) Put(ctx context.Context, request blob.PutRequest) (blob.Ref,
 		return blob.Ref{}, fmt.Errorf("put blob: %w", err)
 	}
 	if head, ok := store.client.(HeadAPI); ok {
-		if _, headErr := head.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(key)}); headErr == nil {
+		if existing, headErr := head.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(key)}); headErr == nil && store.existingObjectMatches(existing, ref) {
 			return ref, nil
 		}
 	}
 	return blob.Ref{}, blob.ErrConflict
+}
+
+// existingObjectMatches proves that a conditional-write conflict is the
+// idempotent write of the same immutable object. A successful HEAD alone is
+// not enough: a stale or manually replaced key must not be reported as a
+// successful Put with a reference whose digest and metadata are unverified.
+func (store *Store) existingObjectMatches(head *s3.HeadObjectOutput, ref blob.Ref) bool {
+	if head == nil || head.ContentLength == nil || *head.ContentLength != ref.ByteLength {
+		return false
+	}
+	if head.Metadata == nil || strings.ToLower(head.Metadata["llmtw-digest"]) != strings.ToLower(ref.Digest) {
+		return false
+	}
+	if head.Metadata["llmtw-byte-length"] != strconv.FormatInt(ref.ByteLength, 10) {
+		return false
+	}
+	return head.ContentType != nil && *head.ContentType == ref.MediaType
 }
 
 func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byte, error) {
