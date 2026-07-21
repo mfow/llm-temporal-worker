@@ -150,6 +150,17 @@ let () =
    | Error error -> failf "unexpected mismatch error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched query result was accepted");
 
+  let mismatched_operation_dispatch ?task_queue:_ _activity envelope =
+    Ok { (response_for envelope.query) with
+         operation_key = Operation_key.of_string "other-query" }
+  in
+  (match Query.execute_with ~dispatch:mismatched_operation_dispatch
+      ~operation_key ~context provider with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response operation key mismatch: expected query-test, got other-query" -> ()
+   | Error error -> failf "unexpected query operation key mismatch: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "mismatched query operation key was accepted");
+
   (* A typed response must carry a cursor associated with the same query
      constructor.  Dispatchers injected by deterministic tests bypass the
      JSON codec, so the ergonomic facade validates this boundary as well. *)

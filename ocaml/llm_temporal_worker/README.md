@@ -135,6 +135,12 @@ let branch =
 in
 ```
 
+The synchronous `respond_with`, `compact_with`, and `Query.execute_with`
+helpers also bind an injected response to the request's `operation_key` before
+exposing it to the caller. A dispatcher that returns a response for another
+operation is rejected as a typed codec error; this keeps deterministic test
+dispatchers subject to the same idempotency boundary as the remote Activity.
+
 For a single non-streaming Generate Activity, `Llm_temporal.Generate` provides
 the same v1 request shape without requiring a synthetic conversation branch:
 

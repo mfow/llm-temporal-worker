@@ -75,6 +75,19 @@ let () =
   (match child_request.parent with Some _ -> () | None -> failwith "child omitted checkpoint parent");
   if child_request.cache <> None then failwith "cache leaked between calls";
 
+  let mismatched_dispatch ?task_queue:_ activity (request : generate_request) =
+    if Temporal.Activity.name activity <> "llm.generate.v1" then failwith "wrong Generate descriptor";
+    Ok { (response request ~kind:Generation_checkpoint
+             ~handle:(checkpoint "mismatched-operation")) with
+         operation_key = operation_key "different-operation" }
+  in
+  (match Conversation.respond_with ~dispatch:mismatched_dispatch
+      ~operation_key:(operation_key "expected-operation") ~append:[] parent with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "activity response operation key mismatch: expected expected-operation, got different-operation" -> ()
+   | Error error -> failf "unexpected operation key mismatch: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "mismatched Generate operation key was accepted");
+
   let clear_patch =
     Conversation.Settings.Patch.clear_output
       (Conversation.Settings.Patch.clear_tools Conversation.Settings.Patch.keep)
