@@ -21,6 +21,14 @@ Redis implements operation, budget, and continuation state. A blob-store port
 handles payloads that exceed safe Redis or Temporal inline limits; filesystem is
 development-only and object storage is the production example.
 
+The production S3 store uses a create-if-absent write keyed by tenant and
+SHA-256 digest. When S3 reports that the key already exists, the worker only
+treats the write as idempotent after `HeadObject` proves the stored byte length,
+content type, digest metadata, and digest-length metadata match the requested
+reference. A present but unverified or replaced object is reported as a
+conflict, so a caller cannot persist a BlobRef for content that has not been
+proven to match.
+
 This is the current pre-release layout, not the accepted final division of
 responsibility. In the target design PostgreSQL is the durable system of record,
 while Redis is the required production optimization that materializes the

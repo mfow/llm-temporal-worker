@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ type fakeS3 struct {
 	getNilOutput    bool
 	bucketHeadErr   error
 	headErr         error
+	headOutput      *s3.HeadObjectOutput
 	headCalls       int
 	bucketHeadCalls int
 	data            []byte
@@ -50,7 +52,10 @@ func (fake *fakeS3) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...
 
 func (fake *fakeS3) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	fake.headCalls++
-	return &s3.HeadObjectOutput{}, fake.headErr
+	if fake.headErr != nil {
+		return nil, fake.headErr
+	}
+	return fake.headOutput, nil
 }
 
 func (fake *fakeS3) HeadBucket(_ context.Context, input *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
@@ -60,6 +65,8 @@ func (fake *fakeS3) HeadBucket(_ context.Context, input *s3.HeadBucketInput, _ .
 }
 
 func int64Ptr(value int64) *int64 { return &value }
+
+func stringPtr(value string) *string { return &value }
 
 type apiOnlyS3 struct {
 	fake *fakeS3
@@ -239,6 +246,37 @@ func TestPutClassifiesS3WriteFailures(t *testing.T) {
 			t.Fatalf("HeadObject calls = %d, want 1", fake.headCalls)
 		}
 	})
+
+	t.Run("precondition conflict with unverified head is rejected", func(t *testing.T) {
+		fake := &fakeS3{
+			putErr:     &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
+			headOutput: &s3.HeadObjectOutput{ContentLength: int64Ptr(4), ContentType: stringPtr("text/plain")},
+		}
+		store := testStore(t, fake, now, 100)
+		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
+			t.Fatalf("Put() = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("precondition conflict with matching head is idempotent", func(t *testing.T) {
+		data := []byte("data")
+		digest := blob.Digest(data)
+		fake := &fakeS3{
+			putErr: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
+			headOutput: &s3.HeadObjectOutput{
+				ContentLength: int64Ptr(int64(len(data))),
+				ContentType:   stringPtr("text/plain"),
+				Metadata: map[string]string{
+					"llmtw-digest":      digest,
+					"llmtw-byte-length": strconv.Itoa(len(data)),
+				},
+			},
+		}
+		store := testStore(t, fake, now, 100)
+		if _, err := store.Put(context.Background(), request); err != nil {
+			t.Fatalf("Put() = %v, want idempotent success", err)
+		}
+	})
 }
 
 func TestGetRejectsUntrustedS3Responses(t *testing.T) {
@@ -369,12 +407,23 @@ func TestStoreUsesContentAddressedConditionalS3Object(t *testing.T) {
 
 func TestStoreHandlesExistingAndDigestMismatch(t *testing.T) {
 	now := time.Now().UTC()
-	fake := &fakeS3{putErr: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"}}
+	data := []byte("payload")
+	fake := &fakeS3{
+		putErr: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
+		headOutput: &s3.HeadObjectOutput{
+			ContentLength: int64Ptr(int64(len(data))),
+			ContentType:   stringPtr("text/plain"),
+			Metadata: map[string]string{
+				"llmtw-digest":      blob.Digest(data),
+				"llmtw-byte-length": strconv.Itoa(len(data)),
+			},
+		},
+	}
 	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100, Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("payload"), ExpiresAt: now.Add(time.Hour)})
+	_, err = store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: data, ExpiresAt: now.Add(time.Hour)})
 	if err != nil || fake.headCalls != 1 {
 		t.Fatalf("existing put = %v, head calls %d", err, fake.headCalls)
 	}
