@@ -44,6 +44,40 @@ func TestProbeStateFailsClosedAndDoesNotExposeDetails(t *testing.T) {
 	check(httpserver.MetricsPath, http.StatusOK, "metric-value\n")
 }
 
+func TestProbeEndpointsAllowOnlyGetAndHead(t *testing.T) {
+	state := httpserver.NewHealthState()
+	state.SetReady(true)
+	handler := httpserver.Handler(state, nil)
+
+	for _, path := range []string{httpserver.LivePath, httpserver.ReadyPath} {
+		t.Run(path, func(t *testing.T) {
+			for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+				request := httptest.NewRequest(method, path, nil)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("%s %s status = %d, want %d", method, path, response.Code, http.StatusMethodNotAllowed)
+				}
+				if got := response.Header().Get("Allow"); got != "GET, HEAD" {
+					t.Fatalf("%s %s Allow = %q, want GET, HEAD", method, path, got)
+				}
+				if body := response.Body.String(); body != "method not allowed\n" {
+					t.Fatalf("%s %s body = %q, want bounded method error", method, path, body)
+				}
+			}
+
+			head := httptest.NewRecorder()
+			handler.ServeHTTP(head, httptest.NewRequest(http.MethodHead, path, nil))
+			if head.Code != http.StatusOK {
+				t.Fatalf("HEAD %s status = %d, want %d", path, head.Code, http.StatusOK)
+			}
+			if body := head.Body.String(); body != "" {
+				t.Fatalf("HEAD %s body = %q, want empty", path, body)
+			}
+		})
+	}
+}
+
 func TestHandlerDefaultsAreSafeAndExposeOnlyProbeResponses(t *testing.T) {
 	handler := httpserver.Handler(nil, nil)
 

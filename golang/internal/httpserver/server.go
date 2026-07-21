@@ -24,28 +24,50 @@ func Handler(state *HealthState, metrics http.Handler) http.Handler {
 		metrics = http.NotFoundHandler()
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc(LivePath, func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(LivePath, func(writer http.ResponseWriter, request *http.Request) {
+		if !probeMethodAllowed(writer, request) {
+			return
+		}
 		if !state.Live() {
-			probeResponse(writer, http.StatusServiceUnavailable, "not live\n")
+			probeResponseForRequest(writer, request, http.StatusServiceUnavailable, "not live\n")
 			return
 		}
-		probeResponse(writer, http.StatusOK, "ok\n")
+		probeResponseForRequest(writer, request, http.StatusOK, "ok\n")
 	})
-	mux.HandleFunc(ReadyPath, func(writer http.ResponseWriter, _ *http.Request) {
-		if !state.Ready() {
-			probeResponse(writer, http.StatusServiceUnavailable, "not ready\n")
+	mux.HandleFunc(ReadyPath, func(writer http.ResponseWriter, request *http.Request) {
+		if !probeMethodAllowed(writer, request) {
 			return
 		}
-		probeResponse(writer, http.StatusOK, "ok\n")
+		if !state.Ready() {
+			probeResponseForRequest(writer, request, http.StatusServiceUnavailable, "not ready\n")
+			return
+		}
+		probeResponseForRequest(writer, request, http.StatusOK, "ok\n")
 	})
 	mux.Handle(MetricsPath, metrics)
 	return mux
 }
 
 func probeResponse(writer http.ResponseWriter, status int, body string) {
+	probeResponseForRequest(writer, nil, status, body)
+}
+
+func probeResponseForRequest(writer http.ResponseWriter, request *http.Request, status int, body string) {
 	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	writer.WriteHeader(status)
+	if request != nil && request.Method == http.MethodHead {
+		return
+	}
 	_, _ = writer.Write([]byte(body))
+}
+
+func probeMethodAllowed(writer http.ResponseWriter, request *http.Request) bool {
+	if request != nil && (request.Method == http.MethodGet || request.Method == http.MethodHead) {
+		return true
+	}
+	writer.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+	probeResponse(writer, http.StatusMethodNotAllowed, "method not allowed\n")
+	return false
 }
 
 type Options struct {
