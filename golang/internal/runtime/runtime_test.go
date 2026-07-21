@@ -46,6 +46,25 @@ func (testEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
 
 var _ llm.Engine = testEngine{}
 
+// testV1Runtime represents a composed durable implementation for lifecycle
+// tests. The production runtime deliberately fails closed when this seam is
+// omitted; tests that exercise worker startup must opt into the seam.
+type testV1Runtime struct{}
+
+func (testV1Runtime) GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
+	return llm.GenerateResponseV1{}, nil
+}
+
+func (testV1Runtime) CompactV1(context.Context, llm.CompactRequestV1) (llm.CompactResponseV1, error) {
+	return llm.CompactResponseV1{}, nil
+}
+
+func (testV1Runtime) QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return llm.QueryResponseV1{}, nil
+}
+
+var _ appactivity.V1Runtime = testV1Runtime{}
+
 type testQueryService struct {
 	response llm.QueryResponseV1
 	called   atomic.Int32
@@ -120,9 +139,27 @@ func testRuntimeOptions(t *testing.T, workerController *testWorker, closed *atom
 				return nil
 			}), nil
 		}),
+		V1Runtime: testV1Runtime{},
 		WorkerFactory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
 			return workerController, testRegistry{}, nil
 		},
+	}
+}
+
+func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, controller, &closed)
+	options.V1Runtime = nil
+	runtime, err := New(context.Background(), runtimeConfig(t), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Run(context.Background()); !errors.Is(err, ErrV1RuntimeUnavailable) {
+		t.Fatalf("Run error = %v, want ErrV1RuntimeUnavailable", err)
+	}
+	if controller.started.Load() || !closed.Load() || runtime.Health.Ready() {
+		t.Fatalf("unconfigured runtime lifecycle started=%v closed=%v ready=%v", controller.started.Load(), closed.Load(), runtime.Health.Ready())
 	}
 }
 

@@ -72,10 +72,13 @@ the old snapshot's query clients.
 
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
 control-plane implementation. Production composition currently installs an
-explicit fail-closed runtime until that implementation is wired. A missing or
-unconfigured runtime therefore returns a non-retryable configuration error
-before provider dispatch; it does not silently fall back to the pre-release
-Activity envelope.
+explicit fail-closed runtime until that implementation is wired. Runtime
+startup now also refuses to start listeners or Temporal polling when this seam
+is still unconfigured (`ErrV1RuntimeUnavailable`). This prevents a process from
+reporting readiness while every advertised v1 Activity would return a
+non-retryable configuration error before provider dispatch. The Activity-level
+guard remains in place as a second line of defense and never silently falls
+back to the pre-release Activity envelope.
 
 The boundary is one-shot by design. It does not register or dispatch
 `llm.StreamingEngine`, token events, or provider stream decoders. Provider
