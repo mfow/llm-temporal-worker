@@ -21,10 +21,13 @@ tenant/project/actor scope, accepts only the provider-status, model-inventory,
 and credit-status query kinds in this slice, and verifies HMAC cursors bound to
 the query kind, scope, and filter. Cursors must be issued with the worker's
 query cursor key. Budget-status and spend-summary handlers, query-specific
-persisted reads, and Activity composition remain the follow-up work described
-by Task 14 of the v1 plan. The repository-only query execution audit boundary
-now validates and persists redacted records; it is not wired into an Activity
-in this slice.
+persisted reads, and Activity composition remain follow-up work tracked in
+[Task 14, typed Query service and Temporal Activity, of the forkable
+conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
+The repository-only query execution audit boundary now validates and persists
+redacted records; its current scope is documented in the [query execution
+audit ledger](query-audit-ledger.md), and it is not wired into an Activity in
+this slice.
 
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
 control-plane implementation. Production composition currently installs an

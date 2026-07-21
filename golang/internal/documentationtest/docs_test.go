@@ -77,6 +77,26 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 }
 
+func TestActivityRuntimeReferencesCurrentQueryPlan(t *testing.T) {
+	root := repositoryRoot(t)
+	path := filepath.Join(root, "docs/reference/activity-runtime.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(data)), " ")
+	const taskLink = "[Task 14, typed Query service and Temporal Activity, of the forkable conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity)"
+	if !strings.Contains(text, taskLink) {
+		t.Fatalf("%s must link Task 14 to the current forkable conversation-state plan", path)
+	}
+	if strings.Contains(text, "Task 14 of the v1 plan") {
+		t.Fatalf("%s contains the stale v1-plan Task 14 reference", path)
+	}
+	if !strings.Contains(text, "[query execution audit ledger](query-audit-ledger.md)") {
+		t.Fatalf("%s must link the query execution audit ledger", path)
+	}
+}
+
 func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.T) {
 	root := repositoryRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "docs/testing/strategy.md"))
