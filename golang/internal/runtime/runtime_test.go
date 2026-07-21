@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	appactivity "github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -44,6 +45,47 @@ func (testEngine) Generate(context.Context, llm.Request) (llm.Response, error) {
 }
 
 var _ llm.Engine = testEngine{}
+
+type testQueryService struct {
+	response llm.QueryResponseV1
+	called   atomic.Int32
+}
+
+func (service *testQueryService) Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	service.called.Add(1)
+	return service.response, nil
+}
+
+type testQueryClientSet struct {
+	service appactivity.QueryService
+	closed  atomic.Int32
+}
+
+func (clients *testQueryClientSet) Close(context.Context) error {
+	clients.closed.Add(1)
+	return nil
+}
+
+func (clients *testQueryClientSet) QueryService() appactivity.QueryService {
+	return clients.service
+}
+
+var _ QueryServiceSource = (*testQueryClientSet)(nil)
+
+type testQueryEngineFactory struct {
+	service appactivity.QueryService
+}
+
+func (factory testQueryEngineFactory) Build(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
+	return testEngine{}, app.ClientSetFunc(func(context.Context) error { return nil }), nil
+}
+
+func (factory testQueryEngineFactory) BuildQueryService(context.Context, *config.Snapshot) (appactivity.QueryService, error) {
+	return factory.service, nil
+}
+
+var _ EngineFactory = testQueryEngineFactory{}
+var _ QueryServiceFactory = testQueryEngineFactory{}
 
 type testRegistry struct{}
 
@@ -177,9 +219,94 @@ func TestRuntimeActivitiesUseConfiguredHeartbeatKeepaliveInterval(t *testing.T) 
 		t.Fatal(err)
 	}
 	configuration.Temporal.Worker.HeartbeatKeepaliveInterval = config.Duration(250 * time.Millisecond)
-	activities := newRuntimeActivities(configuration, testEngine{}, nil, nil)
+	activities := newRuntimeActivities(configuration, testEngine{}, nil, nil, nil)
 	if got, want := activities.HeartbeatKeepaliveInterval, 250*time.Millisecond; got != want {
 		t.Fatalf("Activity heartbeat keepalive interval = %s, want %s", got, want)
+	}
+}
+
+func TestQueryServiceFromClientsPreservesSnapshotComposition(t *testing.T) {
+	service := &testQueryService{}
+	clients := &testQueryClientSet{service: service}
+	got := queryServiceFromClients(clients)
+	if got == nil {
+		t.Fatal("query service source returned nil")
+	}
+	if _, err := got.Execute(context.Background(), llm.QueryRequestV1{}); err != nil {
+		t.Fatalf("query service execution error = %v", err)
+	}
+	if service.called.Load() != 1 {
+		t.Fatalf("query service calls = %d, want 1", service.called.Load())
+	}
+}
+
+func TestComposeQueryServicePrefersSnapshotFactory(t *testing.T) {
+	fromClients := &testQueryService{response: llm.QueryResponseV1{Source: "client"}}
+	fromFactory := &testQueryService{response: llm.QueryResponseV1{Source: "factory"}}
+	clients := &testQueryClientSet{service: fromClients}
+	got, err := composeQueryService(context.Background(), nil, testQueryEngineFactory{service: fromFactory}, clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := got.Execute(context.Background(), llm.QueryRequestV1{})
+	if err != nil || response.Source != "factory" {
+		t.Fatalf("composed query response = %#v, error = %v", response, err)
+	}
+	if fromClients.called.Load() != 0 || fromFactory.called.Load() != 1 {
+		t.Fatalf("query calls = client:%d factory:%d, want client:0 factory:1", fromClients.called.Load(), fromFactory.called.Load())
+	}
+}
+
+func TestSnapshotQueryServiceFollowsAppReload(t *testing.T) {
+	first := &testQueryService{response: llm.QueryResponseV1{Source: "first"}}
+	second := &testQueryService{response: llm.QueryResponseV1{Source: "second"}}
+	var builds atomic.Int32
+	appInstance, err := app.New(context.Background(), app.Options{
+		InitialConfig: runtimeConfig(t),
+		Builder:       app.SnapshotBuilder{References: config.ReferenceResolverFunc(func(context.Context, *config.Config) error { return nil })},
+		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
+			if builds.Add(1) == 1 {
+				return &snapshotClients{clients: &testQueryClientSet{service: first}, queryService: first}, nil
+			}
+			return &snapshotClients{clients: &testQueryClientSet{service: second}, queryService: second}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = appInstance.Close(context.Background()) }()
+	service := &snapshotQueryService{application: appInstance}
+	response, err := service.Execute(context.Background(), llm.QueryRequestV1{})
+	if err != nil || response.Source != "first" {
+		t.Fatalf("initial query response = %#v, error = %v", response, err)
+	}
+	if err := appInstance.Reload(context.Background(), runtimeConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	response, err = service.Execute(context.Background(), llm.QueryRequestV1{})
+	if err != nil || response.Source != "second" {
+		t.Fatalf("reloaded query response = %#v, error = %v", response, err)
+	}
+	if first.called.Load() != 1 || second.called.Load() != 1 {
+		t.Fatalf("query calls = first:%d second:%d, want one each", first.called.Load(), second.called.Load())
+	}
+}
+
+func TestSnapshotQueryServiceFailsClosedWithoutComposition(t *testing.T) {
+	appInstance, err := app.New(context.Background(), app.Options{
+		InitialConfig: runtimeConfig(t),
+		Builder:       app.SnapshotBuilder{References: config.ReferenceResolverFunc(func(context.Context, *config.Config) error { return nil })},
+		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
+			return &snapshotClients{clients: app.ClientSetFunc(func(context.Context) error { return nil })}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = appInstance.Close(context.Background()) }()
+	_, err = (&snapshotQueryService{application: appInstance}).Execute(context.Background(), llm.QueryRequestV1{})
+	if err == nil || !strings.Contains(err.Error(), "runtime query service is not configured") {
+		t.Fatalf("unconfigured query error = %v", err)
 	}
 }
 

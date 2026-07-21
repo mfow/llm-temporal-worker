@@ -43,6 +43,22 @@ The production factory still owns construction of the repository, query
 handlers, and authorization policy; this adapter does not select provider
 refreshes or implement query-specific read/index plans.
 
+## Runtime composition
+
+The reloadable runtime keeps the query service on the same immutable snapshot
+as the engine. An `EngineFactory` that owns the durable query repositories may
+implement the optional `runtime.QueryServiceFactory` seam and return a fresh
+`activity.QueryService` from `BuildQueryService` for each snapshot. A custom
+client set may instead expose the service through `runtime.QueryServiceSource`.
+The Activity acquires a snapshot lease before dispatch, so reload closes the
+old query repository only after in-flight query work releases its lease.
+
+If neither seam is supplied, the worker remains fail-closed: `llm.query.v1`
+returns a configuration error and does not perform a provider or storage read.
+This is deliberate until a deployment composes the PostgreSQL query handlers,
+authorization policy, and `RecordAudit` callback together; wiring a query
+service must never silently bypass the dedicated audit ledger.
+
 Focused checks:
 
 ```sh
