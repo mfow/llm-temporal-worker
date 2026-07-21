@@ -75,7 +75,7 @@
     },
     {
       "path": "github.com/prometheus/client_golang",
-      "version": "v1.23.2",
+      "version": "v1.24.0",
       "license": "Apache-2.0",
       "source": "https://github.com/prometheus/client_golang"
     },
