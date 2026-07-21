@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"strings"
 	"testing"
@@ -79,6 +80,32 @@ func TestValidateQueryExecutionRequestRejectsRequestFingerprintMismatch(t *testi
 	request.RequestJSON = []byte(`{"api_version":"llm.temporal/query/v1","kind":"provider_status","query":{"include_healthy":true}}`)
 	if err := validateQueryExecutionRequest(request, now); err == nil || !strings.Contains(err.Error(), "request fingerprint") {
 		t.Fatalf("validateQueryExecutionRequest() error = %v, want request fingerprint mismatch", err)
+	}
+}
+
+func TestValidateStoredQueryExecutionRequestFingerprint(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	request := validQueryExecutionRequest(time.Date(2026, time.July, 20, 8, 0, 0, 0, time.UTC))
+	digest := sha256.Sum256(request.RequestJSON)
+	fingerprint := operationHMAC(key, "query-request-fingerprint", digest[:])
+	if err := validateStoredQueryExecutionRequestFingerprint(key, request.RequestJSON, fingerprint[:]); err != nil {
+		t.Fatalf("valid stored request fingerprint rejected: %v", err)
+	}
+
+	mutated := []byte(`{"api_version":"llm.temporal/query/v1","kind":"provider_status","query":{"include_healthy":true}}`)
+	if err := validateStoredQueryExecutionRequestFingerprint(key, mutated, fingerprint[:]); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mutated stored request error = %v, want mismatch", err)
+	}
+	if err := validateStoredQueryExecutionRequestFingerprint(key, request.RequestJSON, make([]byte, 31)); err == nil || !strings.Contains(err.Error(), "length") {
+		t.Fatalf("short stored fingerprint error = %v, want length", err)
+	}
+	wrongKey := []byte("abcdefghijklmnopqrstuvwxyz123456")
+	wrong := operationHMAC(wrongKey, "query-request-fingerprint", digest[:])
+	if hmac.Equal(wrong[:], fingerprint[:]) {
+		t.Fatal("test keys unexpectedly produced equal HMACs")
+	}
+	if err := validateStoredQueryExecutionRequestFingerprint(key, request.RequestJSON, wrong[:]); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("wrong stored fingerprint error = %v, want mismatch", err)
 	}
 }
 

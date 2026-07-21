@@ -34,7 +34,10 @@ queryService.Audit = repository.RecordAudit
 
 `Record` also verifies that every request fingerprint matches the canonical
 request JSON before it writes the row, so direct repository callers cannot
-persist an audit identity that is detached from its request payload.
+persist an audit identity that is detached from its request payload. On an
+idempotent replay it performs the same binding against the persisted request
+JSON and keyed fingerprint, so a direct database mutation cannot silently
+change the audit payload returned by a retry.
 
 The production factory still owns construction of the repository, query
 handlers, and authorization policy; this adapter does not select provider
