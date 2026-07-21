@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -29,6 +30,7 @@ func TestCheckpointRepositoryIdentifiersRequireUUIDs(t *testing.T) {
 		{"checkpoint", func() error { _, err := parseCheckpointUUID(state.CheckpointID("legacy-id"), "ID"); return err }},
 		{"blob", func() error { _, err := parseBlobUUID(state.BlobID("legacy-blob"), "delta"); return err }},
 		{"scope", func() error { _, err := parseScopeUUID("tenant/default"); return err }},
+		{"origin operation", func() error { _, err := parseOperationUUID(state.OperationID("legacy-operation")); return err }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := test.fn(); err == nil {
@@ -39,6 +41,14 @@ func TestCheckpointRepositoryIdentifiersRequireUUIDs(t *testing.T) {
 	valid := uuid.New()
 	if got, err := parseCheckpointUUID(state.CheckpointID(valid.String()), "ID"); err != nil || got != valid {
 		t.Fatalf("valid checkpoint UUID rejected: %v", err)
+	}
+	if got, err := parseOperationUUID(state.OperationID(valid.String())); err != nil || got != valid {
+		t.Fatalf("valid origin operation UUID rejected: got=%s err=%v", got, err)
+	}
+	for _, nonCanonical := range []string{" " + valid.String(), strings.ToUpper(valid.String())} {
+		if _, err := parseOperationUUID(state.OperationID(nonCanonical)); err == nil {
+			t.Fatalf("non-canonical origin operation ID %q was accepted", nonCanonical)
+		}
 	}
 }
 
