@@ -31,10 +31,13 @@ Query-specific persisted reads, provider refreshes, and Activity
 composition remain follow-up work tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
-The repository-only query execution audit boundary now validates and persists
-redacted records; its current scope is documented in the [query execution
-audit ledger](query-audit-ledger.md), and it is not wired into an Activity in
-this slice.
+`QueryService.Audit` is the storage-neutral seam for the audit requirement: it
+receives canonical redacted request/response envelopes, SHA-256 request and
+response digests, and exact-or-unknown cost metadata after all response and
+cursor checks. A configured sink must persist the record before `Execute`
+returns; a sink error becomes retryable state-unavailable/finalize failure.
+The production Activity factory still has to connect this hook to the
+repository-only [query execution audit ledger](query-audit-ledger.md).
 
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
 control-plane implementation. Production composition currently installs an

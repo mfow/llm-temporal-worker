@@ -144,7 +144,12 @@ model-inventory, and credit-status carry keyset cursors; budget-status and
 spend-summary are complete bounded snapshots without a public cursor. This
 package does not add storage reads, provider refreshes, budget aggregation, or
 Activity registration; those remain composition work behind
-`control.QueryService`.
+`control.QueryService`. For the audit requirement, `QueryService.Audit` offers
+a storage-neutral callback after response and cursor validation. It receives
+canonical redacted envelopes and exact-or-unknown cost metadata and must commit
+the record before returning; failures are surfaced as retryable finalize state
+errors. The production composition still needs to connect that callback to
+`postgres.QueryExecutionRepository`.
 
 `CursorCodec` signs a bounded opaque position with HMAC-SHA256. Its claims bind
 the query kind, full tenant/project/actor scope (including tags), canonical

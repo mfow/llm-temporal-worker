@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -157,6 +158,79 @@ func TestQueryServiceAuthorizesAndValidatesResponse(t *testing.T) {
 	}
 	if response.QueryExecutionID == "" || seen.Tenant != "tenant" || seen.Project != "project" || seen.Actor != "workflow" || seen.Kind != llm.QueryProviderStatus {
 		t.Fatalf("response/authorization = %#v / %#v", response, seen)
+	}
+}
+
+func TestQueryServiceAuditsValidatedResponseBeforeReturning(t *testing.T) {
+	request := queryRequest()
+	var audit QueryAuditRecord
+	service := testQueryService(queryHandlerFunc(func(_ context.Context, got llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return queryResponse(got), nil
+	}), func(context.Context, Authorization) error { return nil })
+	service.Audit = func(_ context.Context, got QueryAuditRecord) error {
+		audit = got
+		return nil
+	}
+
+	response, err := service.Execute(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if audit.Tenant != request.Context.Tenant || audit.Project != request.Context.Project || audit.OperationKey != request.OperationKey || audit.Kind != request.Kind {
+		t.Fatalf("audit identity = %#v", audit)
+	}
+	if audit.CostStatus != "exact" || audit.CostMethod != "control_query_zero" || audit.ActualCostUSD == nil || *audit.ActualCostUSD != "0" {
+		t.Fatalf("audit cost = %#v", audit)
+	}
+	if len(audit.RequestJSON) == 0 || len(audit.ResponseJSON) == 0 || audit.StartedAt.IsZero() || audit.CompletedAt.IsZero() || audit.CompletedAt.Before(audit.StartedAt) {
+		t.Fatalf("audit record is incomplete = %#v", audit)
+	}
+	if audit.RequestFingerprint != sha256.Sum256(audit.RequestJSON) {
+		t.Fatal("audit request fingerprint does not match canonical request")
+	}
+	if audit.ResponseDigest != sha256.Sum256(audit.ResponseJSON) {
+		t.Fatal("audit response digest does not match canonical response")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(audit.ResponseJSON, &decoded); err != nil || decoded["query_execution_id"] != response.QueryExecutionID {
+		t.Fatalf("audit response JSON = %s, err = %v", audit.ResponseJSON, err)
+	}
+	var requestEnvelope map[string]any
+	if err := json.Unmarshal(audit.RequestJSON, &requestEnvelope); err != nil || requestEnvelope["operation_key"] != request.OperationKey {
+		t.Fatalf("audit request JSON = %s, err = %v", audit.RequestJSON, err)
+	}
+}
+
+func TestQueryServiceAuditFailureBlocksResponseAsRetryableStateError(t *testing.T) {
+	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return queryResponse(request), nil
+	}), func(context.Context, Authorization) error { return nil })
+	service.Audit = func(context.Context, QueryAuditRecord) error { return errors.New("postgres unavailable") }
+
+	_, err := service.Execute(context.Background(), queryRequest())
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseFinalize || providerErr.Retry != provider.RetrySameOperation {
+		t.Fatalf("audit failure = %v, want retryable finalize state error", err)
+	}
+}
+
+func TestQueryServiceDoesNotAuditInvalidResponse(t *testing.T) {
+	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		response := queryResponse(request)
+		response.OperationKey = "different-operation"
+		return response, nil
+	}), func(context.Context, Authorization) error { return nil })
+	called := false
+	service.Audit = func(context.Context, QueryAuditRecord) error {
+		called = true
+		return nil
+	}
+
+	if _, err := service.Execute(context.Background(), queryRequest()); err == nil {
+		t.Fatal("Execute() unexpectedly accepted an invalid response")
+	}
+	if called {
+		t.Fatal("audit callback ran for an invalid response")
 	}
 }
 
