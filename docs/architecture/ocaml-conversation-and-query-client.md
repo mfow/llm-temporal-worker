@@ -701,6 +701,14 @@ result constructor. An impossible mismatch is returned as a protocol
 **Temporal.Error.t** with safe details. It never uses **Obj.magic**, polymorphic
 variants with catch-all values, or an unchecked JSON cast.
 
+The facade also enforces the pagination association after an injected
+dispatcher returns. A `next_cursor` from a paginated response must carry the
+same query kind as the GADT constructor; budget and spend responses must not
+carry one. This check is deliberately duplicated at the ergonomic boundary so
+tests and custom dispatchers cannot bypass the wire codec's cursor invariant.
+`Query.start` performs the corresponding input check before scheduling an
+Activity and returns the validation error in its typed result value.
+
 Pagination remains typed: the cursor can be supplied only to the same query
 constructor/filter digest. The server is authoritative for cursor binding; the
 OCaml client also retains query kind in the cursor wrapper to reject obvious
