@@ -31,6 +31,7 @@ targets=(
   "./llm/provider/openairesponses FuzzDecodeStream"
   "./llm/schema FuzzSchemaCanonicalAndBounded"
   "./pricing FuzzParseDecimalAndCeil"
+  "./pricing FuzzNanoUSDMaterialization"
   "./pricing FuzzUSDParseRoundTrip"
   "./routing FuzzPlannerCanonicalizesServiceClassFallbacks"
   "./routing FuzzProviderCacheKeyForkIdentity"

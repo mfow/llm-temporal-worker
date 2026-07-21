@@ -43,18 +43,23 @@ with checked exact arithmetic. Values smaller than one microUSD remain
 representable. A nil USD pointer means unknown; a non-nil zero value means
 known free.
 
-Redis Lua numbers are exact only within their integer-safe range. Configuration
-compilation rejects any single limit, bucket total, reservation, or possible
-sum at or above `2^53` microUSD. Go code also checks `int64` overflow.
+Redis Lua numbers are exact only within their integer-safe range. The current
+combined AdmissionStore retains a legacy microUSD compatibility path, whose
+safe bound is checked independently. The Phase B Redis budget materialization
+uses the versioned nanoUSD contract below; it rejects any source USD value
+above the `2^53 - 1` nanoUSD limit and checks every sum before a Redis write.
 
 The exact Go pricing and budget contracts now use the same **NUMERIC(38,18)**
 shape as the durable ledger, providing 18 fractional digits and 20 whole-dollar
 digits. Redis compatibility materialization remains an explicit boundary and
 does not define the public money representation.
 When an exact provider-reported amount crosses that boundary, positive
-fractional microUSD is rounded up (ceiling) so integer admission accounting
-cannot undercharge; exact zero remains zero. Provider JSON number exponents are
-normalized into the same exact USD representation before this materialization.
+fractional nanoUSD is rounded up (ceiling) so integer admission accounting
+cannot undercharge; configured limits are rounded down. Exact zero remains
+zero. Provider JSON number exponents are normalized into the same exact USD
+representation before this materialization. The reusable conversion contract
+and its safe-integer bound are documented in
+[Conservative nano-USD materialization](../reference/nano-usd-materialization.md).
 
 ## Price catalog
 

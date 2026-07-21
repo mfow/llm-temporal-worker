@@ -31,6 +31,14 @@ func TestFuzzGateCoversEveryRepositoryFuzzTarget(t *testing.T) {
 	}
 }
 
+func TestFuzzGateCoversNanoUSDMaterialization(t *testing.T) {
+	root := moduleRoot(t)
+	script := readFile(t, filepath.Join(root, "scripts", "run-fuzz.sh"))
+	if !strings.Contains(script, "./pricing FuzzNanoUSDMaterialization") {
+		t.Fatal("fuzz gate does not include the conservative nanoUSD rounding target")
+	}
+}
+
 func TestRepositoryFuzzTargetsIncludesOrdinaryTestFiles(t *testing.T) {
 	root := moduleRoot(t)
 	for _, target := range repositoryFuzzTargets(t, root) {
