@@ -23,6 +23,7 @@ is the single status/authority index:
 - [PostgreSQL repository foundation](reference/postgresql-repository-foundation.md)
 - [OCaml conversation and typed query client](architecture/ocaml-conversation-and-query-client.md)
 - [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+- [Maintenance retention and outbox contract](reference/maintenance.md)
 
 ## Non-negotiable v1 decisions
 

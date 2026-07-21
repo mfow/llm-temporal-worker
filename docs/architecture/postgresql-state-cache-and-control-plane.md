@@ -2030,6 +2030,14 @@ Workers claim outbox rows in short transactions with **FOR UPDATE SKIP LOCKED**.
 The payload contains encrypted locators or safe identifiers only. Completion is
 idempotent; a missing external object is a successful delete.
 
+The reusable Go contract and dispatcher live in
+[`golang/maintenance`](../../golang/maintenance); the PostgreSQL adapter is
+kept in `storage/postgres/maintenance.go` and runs only with the dedicated
+`llmtw_maintenance` role. Cache candidates are rechecked while locked before
+they are tombstoned and before a blob-delete event is inserted. Other durable
+tables retain their independent horizons until their foreign-key and audit
+dependencies have a bounded, transaction-safe delete path.
+
 ### Update-heavy table storage
 
 ~~~sql
