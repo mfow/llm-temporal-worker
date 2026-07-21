@@ -123,3 +123,29 @@ a digest. The authorization, signed public cursor, and an explicit capability
 encoding/mapping decision remain follow-up work in the control/query layer;
 storage does not fabricate capability names or make discovered models
 routable.
+
+## Typed query boundary
+
+`control.QueryRequest` and `control.QueryResponse` provide a typed view of the
+closed `llm.QueryRequestV1`/`llm.QueryResponseV1` envelopes. Provider, endpoint,
+operation, model, policy, and monetary values use named types rather than
+unbounded `string` fields. Each query kind has its own filter and result rows;
+the only untyped data is inside the `llm` package's JSON boundary. Use
+`EncodeQueryRequest`/`DecodeQueryRequest` and
+`EncodeQueryResponse`/`DecodeQueryResponse` at that boundary. Encoding and
+decoding re-run the wire validator, so unknown fields, malformed timestamps,
+invalid enums, and unsafe decimal values cannot enter the typed model.
+
+`QueryBillingState` intentionally uses the wire value `blocked`; it is not an
+alias for the domain `BillingState`, whose incident value is `issue`. Adapters
+must make that mapping explicit. This package does not add storage reads,
+provider refreshes, budget aggregation, or Activity registration; those remain
+composition work behind `control.QueryService`.
+
+`CursorCodec` signs a bounded opaque position with HMAC-SHA256. Its claims bind
+the query kind, full tenant/project/actor scope (including tags), canonical
+filter digest, and an explicit snapshot horizon. Tokens are base64url encoded,
+expire by default after 15 minutes, reject future-issued or oversized values,
+and are never accepted for a different scope, filter, or key. The signed
+horizon is returned in `BoundCursorClaims` for the storage adapter to enforce
+against its repeatable-read snapshot before using the opaque position.
