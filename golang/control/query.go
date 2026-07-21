@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 var (
@@ -100,7 +101,17 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 	}
 	response, err := service.Handler.ExecuteQuery(ctx, request)
 	if err != nil {
-		return llm.QueryResponseV1{}, err
+		var providerErr *provider.Error
+		if errors.As(err, &providerErr) {
+			return llm.QueryResponseV1{}, err
+		}
+		// Query handlers are the storage/control-plane boundary. Untyped
+		// handler failures must not cross the Activity seam as caller input:
+		// classify them as unavailable durable state so Temporal can retry the
+		// read, while retaining the original cause for local diagnostics.
+		mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetrySameOperation, "query state is unavailable")
+		mapped.Cause = err
+		return llm.QueryResponseV1{}, mapped
 	}
 	if err := validateResponse(request, response); err != nil {
 		return llm.QueryResponseV1{}, err
