@@ -118,6 +118,28 @@ let () =
    | Ok _ -> failwith "decoded response cursor lost its query kind"
    | Error error -> failf "response cursor failed to round-trip: %s" (Temporal.Error.message error));
 
+  let reject_non_paginated_cursor kind result =
+    let candidate =
+      { (response result) with
+        next_cursor = Some (tagged_cursor kind "snapshot-page-2") }
+    in
+    match V1_codec.encode_query_response candidate with
+    | Error _ -> ()
+    | Ok _ -> failwith "non-paginated query response encoded a cursor"
+  in
+  reject_non_paginated_cursor Query_cursor.Budget_status
+    (Budget_status_result {
+       active_at = time "2026-01-01T00:00:00Z";
+       generation_id = Budget_generation_id.of_string "generation-1";
+       manifest_digest = digest (String.make 64 'a');
+       stream_high_water_mark = stream_id "1-0";
+       windows = [] });
+  reject_non_paginated_cursor Query_cursor.Spend_summary
+    (Spend_summary_result {
+       start_time = time "2026-01-01T00:00:00Z";
+       end_time = time "2026-01-02T00:00:00Z";
+       buckets = [] });
+
   let mismatched =
     { (response (Provider_status_result { routes = [] })) with
       operation_key = Operation_key.of_string "mismatch" }

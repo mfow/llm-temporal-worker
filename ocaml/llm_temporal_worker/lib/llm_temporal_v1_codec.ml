@@ -667,6 +667,11 @@ let query_result_to_json = function
 
 let query_response_to_json (value : query_response) =
   let kind, result = query_result_to_json value.result in
+  let* () = match kind, value.next_cursor with
+    | ("budget_status" | "spend_summary"), Some _ ->
+        Error (errorf "query response.%s must not include next_cursor" kind)
+    | _ -> Ok ()
+  in
   let cost_fields = match value.cost with
     | Exact_cost { actual_cost_usd; method_; catalog_version = _ } -> ["cost_status", `String "exact"; "actual_cost_usd", usd_json actual_cost_usd; "cost_method", `String (match method_ with Provider_reported -> "provider_reported" | Catalog_usage -> "catalog_usage" | Control_query_zero -> "control_query_zero")]
     | Unknown_cost { reason } -> ["cost_status", `String "unknown"; "actual_cost_usd", `Null; "cost_unknown_reason_code", `String (match reason with Provider_did_not_report_cost -> "provider_did_not_report_cost" | Catalog_incomplete -> "catalog_incomplete" | State_unavailable -> "state_unavailable" | Ambiguous_dispatch -> "ambiguous_dispatch")]
@@ -685,7 +690,12 @@ let query_response_of_json value =
   let* freshness = required "query response" "freshness" fields >>= string "query response.freshness" >>= freshness_of_string "query response.freshness" in
   let* complete = required "query response" "complete" fields >>= bool "query response.complete" in
   let* cursor_kind = validated "query response.kind" Query_cursor.kind_of_string kind in
-  let* next_cursor = match optional "next_cursor" fields with None | Some `Null -> Ok None | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" (Query_cursor.of_string_for_kind cursor_kind) value >>= fun value -> Ok (Some value) in
+  let* next_cursor = match optional "next_cursor" fields with
+    | None | Some `Null -> Ok None
+    | Some _ when kind = "budget_status" || kind = "spend_summary" ->
+        Error (errorf "query response.%s must not include next_cursor" kind)
+    | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" (Query_cursor.of_string_for_kind cursor_kind) value >>= fun value -> Ok (Some value)
+  in
   let* result_value = required "query response" "result" fields in
   let* result = match kind with
     | "provider_status" -> provider_page_of_json "query response.provider_status" result_value >>= fun value -> Ok (Provider_status_result value)
