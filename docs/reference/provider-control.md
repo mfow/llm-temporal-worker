@@ -15,6 +15,18 @@ described below are the separate durable boundary; keeping that boundary
 explicit prevents an in-memory `RouteStatus` or `InventorySnapshot` from being
 mistaken for persisted production state.
 
+## Runtime composition
+
+Production snapshots bind provider outcomes to a snapshot-scoped recorder. The
+recorder receives the immutable configuration digest/epoch and route/endpoint
+identity, constructs a bounded `control.StatusEvent`, and persists it through
+the `ProviderStatusRepository` from the same PostgreSQL client set. It never
+stores prompts, outputs, credentials, raw provider bodies, or unbounded
+provider text. Recorder failures are reported as control-plane telemetry and
+do not alter the provider result; provider-control persistence is not a
+process-readiness gate. Memory-mode snapshots do not construct a PostgreSQL
+recorder.
+
 ## Status and credit
 
 Adapters convert inference, startup, management, and operator observations to
@@ -76,8 +88,11 @@ digest; plaintext cursors are never stored. `GetSnapshot` revalidates the
 loaded rows and `OpenCursor` authenticates the cursor before returning it.
 
 The repositories do not register provider management adapters or a query
-Activity. Those runtime/query integrations remain explicit follow-up work,
-and discovered models remain informational rather than routable.
+Activity. Runtime composition supplies the inference/status recorder
+separately; query integration and provider management/list adapters remain
+explicit follow-up work. Discovered models remain informational rather than
+routable, and configured-only/unsupported inventory is valid until a provider
+management adapter exists.
 
 ### Persisted status pages
 

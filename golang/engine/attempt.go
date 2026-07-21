@@ -120,6 +120,11 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
 		attemptStarted := time.Now()
 		result, invokeErr, providerPending := engine.invokeAttempt(attemptCtx, operation, candidate.candidate, adapter, call, observer)
+		var mapped *provider.Error
+		if invokeErr != nil {
+			mapped = classifyProviderError(invokeErr, observer.marked)
+		}
+		engine.recordProviderStatus(ctx, snapshot, operation, candidate.candidate, result, mapped)
 		if metrics := observability.MetricsFromContext(ctx); metrics != nil {
 			outcome := "success"
 			if invokeErr != nil {
@@ -142,7 +147,9 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 			}
 			return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
 		}
-		mapped := classifyProviderError(invokeErr, observer.marked)
+		if mapped == nil {
+			mapped = classifyProviderError(invokeErr, observer.marked)
+		}
 		if !observer.marked && (mapped.Dispatch == provider.DispatchNotDispatched || mapped.Dispatch == provider.DispatchRejected) {
 			continue
 		}
