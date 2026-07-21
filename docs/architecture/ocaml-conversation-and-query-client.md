@@ -8,13 +8,13 @@ or a parallel client. The implementation extends the same **Llm_temporal**
 facade, nominal identifiers, codecs, Activity descriptors, retry policy, and
 test conventions.
 
-The package currently models one **llm.generate.v1** invocation. Because this
-service has never been released or deployed, implementation replaces that
-pre-release contract in place: **llm.generate.v1** gains checkpoint/delta/cache
-semantics, removes generic currency, and adopts decimal USD types. Do not add
-**llm.generate.v2**, parallel v1/v2 codecs, a legacy adapter, or a compatibility
-period solely to preserve unreleased behavior. The one-shot convenience API is
-rebuilt as a root **llm.generate.v1** call in the same coordinated release.
+The package currently models one **llm.generate.v1** invocation. The v1
+checkpoint/delta/cache contract removes generic currency and adopts decimal
+USD types. The additive `Llm_temporal.Generate` facade now constructs and
+invokes that exact v1 request directly; it avoids a synthetic conversation
+branch for one-shot callers. The older `Request`, `execute`, and `workflow`
+names remain available as a compatibility surface until a separately approved
+breaking release, but they do not add a second wire protocol or Activity.
 
 Implementation starts from the landed OCaml validation baseline, including PR
 109. Preserve those validation improvements and regenerate fixtures from the
@@ -614,11 +614,13 @@ sampling contract permits only variant zero. Automatic compaction receives the
 outer Generate cache age and variant zero; a final-answer variant of one or two
 is not propagated into the summary cache key.
 
-The one-shot convenience **Request.make/execute/workflow** remains recognizable
-to current callers but constructs a Conversation root and schedules one v1
-Generate. It does not maintain a loop or hide a checkpoint. The result includes
-the child conversation so callers can migrate to multi-turn use without a
-second package.
+The one-shot convenience **`Generate.make`/`Generate.invoke`/`Generate.start`**
+constructs and schedules one v1 Generate directly. It does not maintain a loop,
+stream tokens, or hide a checkpoint. `Generate.invoke_with` accepts the same
+typed dispatcher used by deterministic tests. The older
+**`Request.make`/`execute`/`workflow`** names remain recognizable for existing
+callers; new code should prefer `Generate` or `Conversation` so it cannot
+accidentally construct the pre-checkpoint wire shape.
 
 ## GADT-typed Query API
 
@@ -1044,7 +1046,8 @@ fingerprint, or database value.
 6. Implement immutable Conversation and settings/cache builders.
 7. Implement every closed query filter/result record and codec.
 8. Implement the Query GADT and safe internal tag matcher.
-9. Rebuild the existing one-shot facade on a v1 root without a second package.
+9. Add the typed one-shot `Generate` facade on the v1 Activity without a second
+   package; preserve legacy names until a breaking-release decision.
 10. Update Dune module lists/interfaces, opam metadata if a decimal dependency is
     selected, examples, and downstream compile fixtures.
 
@@ -1066,7 +1069,8 @@ fingerprint, or database value.
   unknown tags fail safely.
 - Query pagination preserves its static result type.
 - Activity names and payload codecs match the Go worker constants exactly.
-- Existing one-shot sample code has a documented pre-release source update and
-  no second OCaml package/import path is introduced.
+- The one-shot `Generate` sample uses exact v1 types and no second OCaml
+  package/import path is introduced; legacy names remain covered by a
+  compatibility smoke assertion.
 - Dune builds libraries, interfaces, examples, unit tests, and an external
   downstream package under the pinned Temporal SDK version.

@@ -197,6 +197,17 @@ let () =
   in
   assert (Conversation.checkpoint final.conversation <> None);
 
+  let one_shot = Generate.make
+      ~operation_key:(operation "one-shot")
+      ~context
+      ~model
+      ~settings:(Generate.Settings.make ~service_class:Priority ())
+      ~input:[ message "one-shot" ]
+      ()
+  in
+  let one_shot_response = expect_ok (Generate.invoke_with ~dispatch:generate_dispatch one_shot) in
+  assert (one_shot_response.operation_key = operation "one-shot");
+
   run_query (Query.Provider_status {
     provider = None; endpoint = None; availability = None;
     include_healthy = false; refresh_if_older_than_seconds = None;

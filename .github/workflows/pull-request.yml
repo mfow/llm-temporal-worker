@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           opam pin add --yes --kind=git temporal-sdk \
-            'git+https://github.com/mfow/ocaml-temporal.git#1a09074a5cc3e4d44a9e6b4e035780a7dfcf9b3c'
+            'git+https://github.com/mfow/ocaml-temporal.git#e42f185347c36a511c4a338692d5c1efceaee902'
           opam install --yes . --deps-only
 
       - name: Build and test nested package

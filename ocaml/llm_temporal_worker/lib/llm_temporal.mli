@@ -9,6 +9,7 @@ include module type of Llm_temporal_invocation
 
 module Conversation : module type of Llm_temporal_conversation
 module Query : module type of Llm_temporal_query
+module Generate : module type of Llm_temporal_generate
 module V1_codec : module type of Llm_temporal_v1_codec
 
 (** The ergonomic settings and cache modules are also available at the

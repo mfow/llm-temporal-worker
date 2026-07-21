@@ -25,7 +25,7 @@ opam install --yes llm-temporal-ocaml
 ```
 
 Its metadata pins `temporal-sdk` to immutable commit
-`1a09074a5cc3e4d44a9e6b4e035780a7dfcf9b3c`. Commit an application lock file
+`e42f185347c36a511c4a338692d5c1efceaee902`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
@@ -133,6 +133,33 @@ let branch =
     ~append:[ Message { actor = Human; content = [ Text "Continue." ] } ] branch
 in
 ```
+
+For a single non-streaming Generate Activity, `Llm_temporal.Generate` provides
+the same v1 request shape without requiring a synthetic conversation branch:
+
+```ocaml
+let request =
+  Llm_temporal.Generate.make
+    ~operation_key:(Llm_temporal.Operation_key.of_string "invoice-42")
+    ~context
+    ~model:(Llm_temporal.Model_selector.of_string "gpt-5")
+    ~settings:(Llm_temporal.Generate.Settings.make
+                 ~service_class:Llm_temporal.Priority ())
+    ~input:[ Message { actor = Human; content = [ Text prompt ] } ]
+    ()
+in
+match Llm_temporal.Generate.invoke request with
+| Ok response -> handle_response response
+| Error error -> handle_temporal_error error
+```
+
+`Generate.make` returns the exact `generate_request` record used by the
+`llm.generate.v1` Activity. `Generate.invoke_with` accepts the same typed
+dispatcher used by deterministic tests, and `Generate.start` returns a
+workflow-owned Temporal future. The legacy `Request`, `execute`, and
+`workflow` names remain available unchanged for compatibility; new code should
+prefer `Generate` or `Conversation` so it cannot accidentally construct the
+pre-checkpoint wire shape.
 
 `Conversation.compact` creates an explicit compaction child from a checkpoint;
 the following Generate restores the branch's application tools and output
