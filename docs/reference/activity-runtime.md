@@ -17,15 +17,17 @@ outputs, provider bodies, or identifiers from a runtime error message.
 `Activities.QueryService` is an independent seam for `llm.query.v1`. It may be
 provided before the Generate/Compact runtime is composed; the Activity still
 fails closed when neither seam is configured. The boundary authorizes the
-tenant/project/actor scope, accepts only the provider-status, model-inventory,
-and credit-status query kinds in this slice, and verifies HMAC cursors bound to
-the query kind, scope/tags, canonical filter, and snapshot horizon. Typed
-handlers receive the authenticated cursor claims, including the opaque storage
-position and horizon, so a repeatable-read adapter can enforce the same
-snapshot before reading its next page. Cursors must be issued with the
-worker's typed `CursorCodec` key; the raw `Handler` seam remains available for
-adapters migrating from the legacy cursor envelope. Budget-status and
-spend-summary handlers, query-specific persisted reads, and Activity
+tenant/project/actor scope and admits all five closed query kinds: provider
+status, model inventory, credit status, budget status, and spend summary. It
+verifies HMAC cursors for the three keyset-paginated kinds, binding each token
+to the query kind, scope/tags, canonical filter, and snapshot horizon. Budget
+status and spend summary intentionally have no public cursor because each is a
+single bounded snapshot. Typed handlers receive authenticated cursor claims,
+including the opaque storage position and horizon, so a repeatable-read
+adapter can enforce the same snapshot before reading its next page. Cursors
+must be issued with the worker's typed `CursorCodec` key; the raw `Handler`
+seam remains available for adapters migrating from the legacy cursor envelope.
+Query-specific persisted reads, provider refreshes, and Activity
 composition remain follow-up work tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).

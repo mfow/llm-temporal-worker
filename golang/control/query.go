@@ -2,10 +2,10 @@ package control
 
 // QueryService is the deliberately small control-plane boundary used by the
 // llm.query.v1 Activity. It validates the closed wire request, authorizes the
-// tenant scope, verifies pagination cursors, and validates the handler result.
-// Persisted provider/model/credit reads, budget reads, and spend aggregation
-// are supplied by a later composition layer; this package does not perform
-// storage or provider calls.
+// tenant scope, verifies pagination cursors, and validates the handler result
+// for all five query kinds. Persisted provider/model/credit reads, budget
+// reads, and spend aggregation are supplied by a later composition layer; this
+// package does not perform storage or provider calls.
 
 import (
 	"context"
@@ -208,9 +208,11 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 	return response, nil
 }
 
-// typedQueryCursor extracts the cursor from the three paginated query
-// filters. Budget and spend queries are not admitted by this Activity slice,
-// but handling them here keeps the typed seam closed if that allow-list grows.
+// typedQueryCursor extracts the cursor from the three paginated query filters.
+// Budget and spend filters intentionally have no cursor field: their complete
+// result is one bounded snapshot rather than a keyset page. Keep those query
+// kinds explicit in the switch so adding a future paginated filter cannot
+// accidentally inherit an unsigned continuation.
 func typedQueryCursor(filter QueryFilter) *QueryCursor {
 	switch value := filter.(type) {
 	case ProviderStatusQuery:
@@ -231,12 +233,14 @@ func typedQueryCursor(filter QueryFilter) *QueryCursor {
 		if value != nil {
 			return value.Page.Cursor
 		}
+	case BudgetStatusQuery, *BudgetStatusQuery, SpendSummaryQuery, *SpendSummaryQuery:
+		return nil
 	}
 	return nil
 }
 
 func supportedQueryKind(kind llm.QueryKind) bool {
-	return kind == llm.QueryProviderStatus || kind == llm.QueryModelInventory || kind == llm.QueryCreditStatus
+	return kind == llm.QueryProviderStatus || kind == llm.QueryModelInventory || kind == llm.QueryCreditStatus || kind == llm.QueryBudgetStatus || kind == llm.QuerySpendSummary
 }
 
 func validateScope(scope llm.RequestContext) error {

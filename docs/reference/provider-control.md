@@ -138,9 +138,13 @@ invalid enums, and unsafe decimal values cannot enter the typed model.
 
 `QueryBillingState` intentionally uses the wire value `blocked`; it is not an
 alias for the domain `BillingState`, whose incident value is `issue`. Adapters
-must make that mapping explicit. This package does not add storage reads,
-provider refreshes, budget aggregation, or Activity registration; those remain
-composition work behind `control.QueryService`.
+must make that mapping explicit. `control.QueryService` admits all five closed
+query kinds after authorization and wire validation. Only provider-status,
+model-inventory, and credit-status carry keyset cursors; budget-status and
+spend-summary are complete bounded snapshots without a public cursor. This
+package does not add storage reads, provider refreshes, budget aggregation, or
+Activity registration; those remain composition work behind
+`control.QueryService`.
 
 `CursorCodec` signs a bounded opaque position with HMAC-SHA256. Its claims bind
 the query kind, full tenant/project/actor scope (including tags), canonical
