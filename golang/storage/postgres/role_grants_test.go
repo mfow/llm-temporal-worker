@@ -26,6 +26,7 @@ func TestRenderRoleGrantsUsesLeastPrivilegeRuntimeCatalog(t *testing.T) {
 		`GRANT SELECT, INSERT ON TABLE "private"."tenant_checkpoint_provider_affinities" TO llmtw_runtime;`,
 		`GRANT UPDATE (expires_at) ON TABLE "private"."tenant_blobs" TO llmtw_runtime;`,
 		`GRANT SELECT, INSERT, UPDATE ON TABLE "private"."tenant_operations" TO llmtw_runtime;`,
+		`GRANT UPDATE (response_digest) ON TABLE "private"."tenant_query_executions" TO llmtw_runtime;`,
 		`GRANT SELECT ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
 		`GRANT INSERT, UPDATE, DELETE ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
 		`GRANT USAGE ON ALL SEQUENCES IN SCHEMA "private" TO llmtw_runtime;`,

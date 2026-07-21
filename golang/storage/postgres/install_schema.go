@@ -284,6 +284,9 @@ func RenderRoleGrants(namespace Namespace) (string, error) {
 		{table: "provider_inventory_models", privileges: "SELECT, INSERT"},
 		{table: "maintenance_outbox", privileges: "SELECT, INSERT, UPDATE"},
 		{table: "query_executions", privileges: "SELECT, INSERT"},
+		// The response digest is finalized after the bounded response JSON has
+		// been canonicalized; no other query-execution column is mutable.
+		{table: "query_executions", privileges: "UPDATE (response_digest)"},
 	}
 
 	var b strings.Builder

@@ -995,7 +995,9 @@ inventory snapshots/models. Blob rows are immutable apart from a runtime
 `UPDATE (expires_at)` used to extend retention. Operations, cache fills/uses,
 and the mutable provider-route and budget projections receive only the writes
 their state machines require. The runtime role never receives `DELETE` on any
-worker table. Retention and other destructive work uses the separate
+worker table. Query-execution rows are immutable after publication except for
+the one-column `response_digest` finalization performed in the same
+transaction. Retention and other destructive work uses the separate
 `llmtw_maintenance` role, while the schema-owner role remains responsible for
 DDL. This database permission makes immutability stronger than a repository
 convention and prevents a broad `GRANT ... ON ALL TABLES` regression.
