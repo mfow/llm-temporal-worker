@@ -30,8 +30,13 @@ seam remains available for adapters migrating from the legacy cursor envelope.
 The production client set forwards a query service only when it is supplied by
 the same snapshot-scoped PostgreSQL closer as its repositories; the default
 composition does not invent authorization, cursor keys, or handlers. Query
-families without a configured service therefore fail closed. Query-specific
-refreshes and complete Activity composition remain follow-up work tracked in
+families without a configured service therefore fail closed. The reusable
+PostgreSQL composition for provider status, model inventory, and credit status
+is documented in [persisted-query-service.md](persisted-query-service.md) and
+is installed only through an explicit `ProductionFactoryOptions.QueryServiceBuilder`.
+Refresh requests, budget status, and spend summary remain fail-closed until
+their dedicated repositories and management adapters are supplied. Remaining
+complete Activity composition work is tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
 `QueryService.Audit` is the storage-neutral seam for the audit requirement: it

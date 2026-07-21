@@ -29,8 +29,12 @@ type ProviderStatusListOptions struct {
 	EndpointID     string
 	Availability   control.Availability
 	IncludeHealthy bool
-	AfterRouteID   string
-	Limit          int
+	// SnapshotHorizon pins a paginated read to the observation horizon chosen
+	// by the control/query layer. A zero value preserves the historical
+	// current-projection read for internal callers that do not paginate.
+	SnapshotHorizon time.Time
+	AfterRouteID    string
+	Limit           int
 }
 
 // ProviderStatusPage is a bounded projection page.  NextRouteID is empty
@@ -62,6 +66,9 @@ func (options *ProviderStatusListOptions) normalize() error {
 	}
 	if options.Availability != "" && !validProviderStatusAvailability(options.Availability) {
 		return fmt.Errorf("provider status availability %q is invalid", options.Availability)
+	}
+	if !options.SnapshotHorizon.IsZero() {
+		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
 	}
 	if options.Limit == 0 {
 		options.Limit = DefaultProviderStatusPageSize
@@ -131,8 +138,12 @@ func (repository ProviderStatusRepository) ListRouteStatuses(ctx context.Context
 	if err != nil {
 		return page, err
 	}
-	query := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + relation + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok' OR circuit_state <> 'closed') AND ($6 = '' OR route_id > $6) ORDER BY route_id LIMIT $7"
-	rows, err := repository.Pool.Query(ctx, query, options.ConfigDigest[:], options.Provider, options.EndpointID, options.Availability, options.IncludeHealthy, options.AfterRouteID, options.Limit+1)
+	query := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + relation + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok' OR circuit_state <> 'closed') AND ($6::timestamptz IS NULL OR observed_at <= $6) AND ($7 = '' OR route_id > $7) ORDER BY route_id LIMIT $8"
+	var horizon any
+	if !options.SnapshotHorizon.IsZero() {
+		horizon = options.SnapshotHorizon
+	}
+	rows, err := repository.Pool.Query(ctx, query, options.ConfigDigest[:], options.Provider, options.EndpointID, options.Availability, options.IncludeHealthy, horizon, options.AfterRouteID, options.Limit+1)
 	if err != nil {
 		return page, redactPostgresError(fmt.Errorf("list provider route statuses: %w", err))
 	}
