@@ -100,6 +100,24 @@ func TestBuildPostgresSkipsRedisOnlyComposition(t *testing.T) {
 	}
 }
 
+func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
+	namespace, err := postgresstore.NewNamespace("worker", "state", "tenant_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closer := postgresPoolCloser{namespace: namespace}
+	repository := closer.ProviderStatusRepository()
+	if repository.Pool != closer.pool {
+		t.Fatalf("status repository pool = %p, want %p", repository.Pool, closer.pool)
+	}
+	if repository.Namespace != namespace {
+		t.Fatalf("status repository namespace = %v, want %v", repository.Namespace, namespace)
+	}
+	if recorder := newPostgresProviderStatusRecorder(closer); recorder == nil {
+		t.Fatal("same-pool status recorder was not composed")
+	}
+}
+
 func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	called := false
@@ -142,6 +160,9 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	}
 	if probes := clients.(*productionClientSet).DependencyProbes(); len(probes) != 0 {
 		t.Fatalf("memory composition exposed external dependency probes: %d", len(probes))
+	}
+	if recorder := clients.(*productionClientSet).ProviderStatusRecorder(); recorder != nil {
+		t.Fatal("memory composition exposed a durable provider status recorder")
 	}
 	if err := clients.Close(context.Background()); err != nil {
 		t.Fatalf("memory client close = %v", err)

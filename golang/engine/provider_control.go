@@ -91,20 +91,35 @@ func providerStatusCodes(failure *provider.Error) (providerCode, safeCode string
 }
 
 func boundedStatusCode(value string) string {
+	if strings.TrimSpace(value) != value {
+		return ""
+	}
 	if len(value) > 128 {
-		return value[:128]
+		value = value[:128]
+	}
+	for _, r := range value {
+		if r < '!' || r > '~' {
+			return ""
+		}
 	}
 	return value
 }
 
 func providerEvidenceDigest(operationID string, candidate routing.Candidate, result provider.Result, failure *provider.Error) [32]byte {
-	parts := []string{operationID, candidate.RouteID, candidate.EndpointID, candidate.Provider, candidate.Family, candidate.Model}
+	parts := []string{boundedEvidencePart(operationID), boundedEvidencePart(candidate.RouteID), boundedEvidencePart(candidate.EndpointID), boundedEvidencePart(candidate.Provider), boundedEvidencePart(candidate.Family), boundedEvidencePart(candidate.Model)}
 	if failure != nil {
-		parts = append(parts, string(failure.Code), string(failure.Phase), string(failure.Dispatch), failure.Provider.RequestID)
+		parts = append(parts, string(failure.Code), string(failure.Phase), string(failure.Dispatch), boundedEvidencePart(failure.Provider.RequestID))
 	} else {
-		parts = append(parts, result.Response.Provider.ResponseID, result.Response.Provider.RequestID, result.Response.Provider.GenerationID)
+		parts = append(parts, boundedEvidencePart(result.Response.Provider.ResponseID), boundedEvidencePart(result.Response.Provider.RequestID), boundedEvidencePart(result.Response.Provider.GenerationID))
 	}
 	data := strings.Join(parts, "\x00")
 	digest := sha256.Sum256([]byte(data))
 	return digest
+}
+
+func boundedEvidencePart(value string) string {
+	if len(value) > 256 {
+		return value[:256]
+	}
+	return value
 }
