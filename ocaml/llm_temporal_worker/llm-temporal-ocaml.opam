@@ -15,7 +15,7 @@ depends: [
   "yojson" {>= "3.0"}
 ]
 pin-depends: [
-  [ "temporal-sdk.dev" "git+https://github.com/mfow/ocaml-temporal.git#2dd775523934968c38a08c88538955f953f8f478" ]
+  [ "temporal-sdk.dev" "git+https://github.com/mfow/ocaml-temporal.git#2ba6723598db2fc4368618b832db9617a5271349" ]
 ]
 build: [
   ["dune" "subst"] {dev}
