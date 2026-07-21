@@ -811,6 +811,8 @@ directory unless a command explicitly says otherwise.
 - [ ] Implement the five-constructor GADT and safe tag/result matcher without
   **Obj.magic** or unchecked JSON.
 - [ ] Keep cursor/result type associated across pagination.
+- [x] Add the additive typed `Llm_temporal.Generate` facade for direct,
+  non-streaming one-shot v1 calls while preserving legacy `Request` names.
 - [ ] Rebuild existing one-shot helpers on a Generate v1 root in the same
   package/facade, replacing the current unreleased wire shape in place.
 - [ ] Test three siblings from one parent, no inherited fields on wire, decimal

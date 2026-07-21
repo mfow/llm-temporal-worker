@@ -14,3 +14,7 @@
 (test
  (name test_query)
  (libraries llm_temporal temporal-sdk yojson ptime))
+
+(test
+ (name test_generate)
+ (libraries llm_temporal temporal-sdk yojson))
