@@ -186,6 +186,20 @@ let () =
   ignore (expect_ok (Temporal.Codec.encode request_codec valid_expiry_request));
   let request_payload = expect_ok (Temporal.Codec.encode request_codec request_value) in
   assert_equal "json/plain" (List.assoc "encoding" request_payload.metadata);
+  (* The pre-checkpoint compatibility codec has an outer [request] object.
+     The production v1 Activity accepts the flat Generate envelope instead;
+     keep this boundary explicit so a legacy helper cannot silently send an
+     incompatible payload to the same Activity name. *)
+  let flat_v1_payload = {
+    request_payload with
+    data = Bytes.of_string
+      {|{"api_version":"llm.temporal/v1","operation_key":"v1-boundary","context":{"tenant":"tenant","project":"project","actor":"actor"},"append":[]}|};
+  } in
+  expect_error (Temporal.Codec.decode request_codec flat_v1_payload);
+  (match Temporal.Codec.decode generate_v1_request_codec flat_v1_payload with
+   | Ok request when Operation_key.to_string request.operation_key = "v1-boundary" -> ()
+   | Ok _ -> failwith "v1 boundary decoded the wrong operation key"
+   | Error error -> failwith ("v1 boundary rejected its canonical payload: " ^ Temporal.Error.message error));
   let request_envelope = Yojson.Safe.from_string (Bytes.to_string request_payload.data) in
   let request_fields = match request_envelope with `Assoc fields -> fields | _ -> failwith "request envelope is not an object" in
   assert_equal api_version (match List.assoc "api_version" request_fields with `String value -> value | _ -> failwith "request api_version");
