@@ -39,6 +39,21 @@ returns; a sink error becomes retryable state-unavailable/finalize failure.
 The production Activity factory still has to connect this hook to the
 repository-only [query execution audit ledger](query-audit-ledger.md).
 
+### Query failure classification
+
+The query service treats its handler as a durable state boundary. A raw
+handler failure, including a child storage deadline while the Activity context
+is still live, is wrapped as `state_unavailable` at `state_load` with
+`not_dispatched` and `same_operation`; the original cause remains available to
+local diagnostics but is not exposed through the Temporal error envelope.
+Provider-classified errors are preserved so their authorization, provider, or
+other retry semantics remain intact. If the caller's Activity context is
+canceled or reaches its deadline, that terminal context result is preserved
+instead of being retried as a state outage. Response/encoding and cursor
+contract violations remain validation failures. An audit sink failure is the
+separate retryable `state_unavailable`/`finalize` case described above, and the
+response is not returned until the audit callback succeeds.
+
 ## Query service snapshot composition
 
 During each immutable snapshot build, runtime first checks whether the client
