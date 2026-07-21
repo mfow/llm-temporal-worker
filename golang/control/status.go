@@ -104,34 +104,50 @@ type StatusEvent struct {
 }
 
 func NewStatusEvent(observation StatusObservation) (StatusEvent, error) {
+	if err := validateStatusObservation(observation); err != nil {
+		return StatusEvent{}, err
+	}
+	return StatusEvent{StatusObservation: observation, EventDigest: digestStatusObservation(observation)}, nil
+}
+
+// validateStatusObservation checks the structural/safety invariants shared by
+// event construction and persisted-event replay. It intentionally does not
+// inspect EventDigest; storage timestamps may be normalized to microseconds
+// after an event is constructed, so replay cannot recompute a pre-storage
+// digest from the rounded representation.
+func validateStatusObservation(observation StatusObservation) error {
 	if observation.ConfigDigest == ([32]byte{}) || observation.EndpointAccountHMAC == ([32]byte{}) || observation.EvidenceDigest == ([32]byte{}) {
-		return StatusEvent{}, errors.New("status observation requires config, account, and evidence digests")
+		return errors.New("status observation requires config, account, and evidence digests")
 	}
 	for name, value := range map[string]string{"route_id": observation.RouteID, "endpoint_id": observation.EndpointID, "provider": observation.Provider, "endpoint_family": observation.EndpointFamily, "config_epoch": observation.ConfigEpoch} {
 		if err := validateIdentifier(name, value); err != nil {
-			return StatusEvent{}, err
+			return err
 		}
 	}
 	if !observation.Source.valid() || !observation.Availability.valid() || !observation.Credit.valid() || !observation.Billing.valid() {
-		return StatusEvent{}, errors.New("status observation contains an unknown enum")
+		return errors.New("status observation contains an unknown enum")
 	}
 	if (observation.Credit == CreditExhausted || observation.Billing == BillingIssue) && observation.ProviderCode == "" && observation.Source != SourceOperator {
-		return StatusEvent{}, errors.New("exhausted credit or billing issue requires provider evidence or an operator event")
+		return errors.New("exhausted credit or billing issue requires provider evidence or an operator event")
 	}
 	if observation.Source == SourceOperator && (observation.Credit == CreditExhausted || observation.Billing == BillingIssue) && observation.SafeErrorCode == "" && observation.ProviderCode == "" {
-		return StatusEvent{}, errors.New("operator credit or billing incident requires a safe evidence code")
+		return errors.New("operator credit or billing incident requires a safe evidence code")
 	}
 	if observation.ObservedAt.IsZero() || observation.ExpiresAt.IsZero() || !observation.ExpiresAt.After(observation.ObservedAt) {
-		return StatusEvent{}, errors.New("status observation has an invalid observation interval")
+		return errors.New("status observation has an invalid observation interval")
 	}
 	for name, value := range map[string]string{"safe_error_code": observation.SafeErrorCode, "provider_code": observation.ProviderCode} {
 		if value == "" {
 			continue
 		}
 		if err := validateSafeCode(name, value); err != nil {
-			return StatusEvent{}, err
+			return err
 		}
 	}
+	return nil
+}
+
+func digestStatusObservation(observation StatusObservation) [32]byte {
 	data := []byte(strings.Join([]string{
 		hex.EncodeToString(observation.ConfigDigest[:]), observation.RouteID, observation.EndpointID,
 		hex.EncodeToString(observation.EndpointAccountHMAC[:]), observation.Provider, observation.EndpointFamily,
@@ -139,7 +155,7 @@ func NewStatusEvent(observation StatusObservation) (StatusEvent, error) {
 		string(observation.Credit), string(observation.Billing), observation.SafeErrorCode, observation.ProviderCode,
 		hex.EncodeToString(observation.EvidenceDigest[:]), observation.ConfigEpoch, observation.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}, "\x00"))
-	return StatusEvent{StatusObservation: observation, EventDigest: sha256.Sum256(data)}, nil
+	return sha256.Sum256(data)
 }
 
 func validateIdentifier(name, value string) error {

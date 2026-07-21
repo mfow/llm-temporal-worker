@@ -33,6 +33,12 @@ configuration epoch, or operator event may explicitly clear it. Changing the
 configuration epoch starts a fresh projection; it does not inherit the old
 incident.
 
+For bounded reads that need to rebuild this domain projection, see the
+[status replay reference](status-replay.md). Replay follows persisted
+`EventID` order, applies an inclusive observation horizon, and reports whether
+the storage read was complete; it is not a public cursor or a replacement for
+the PostgreSQL projection.
+
 ## Model inventory
 
 `InventorySnapshot` validates bounded, sorted model rows, explicit lifecycle

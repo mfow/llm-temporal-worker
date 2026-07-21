@@ -1,0 +1,164 @@
+package control
+
+import (
+	"errors"
+	"testing"
+	"time"
+)
+
+func persistedEvent(t *testing.T, id int64, value StatusObservation) PersistedStatusEvent {
+	t.Helper()
+	event, err := NewStatusEvent(value)
+	if err != nil {
+		t.Fatalf("NewStatusEvent: %v", err)
+	}
+	return PersistedStatusEvent{EventID: id, Event: event}
+}
+
+func TestReplayRouteStatusUsesLedgerOrderAndHorizonCoverage(t *testing.T) {
+	base := time.Unix(100, 0).UTC()
+	incident := observation(base.Add(20 * time.Second))
+	incident.Source, incident.Credit, incident.Billing, incident.ProviderCode = SourceManagementAPI, CreditExhausted, BillingIssue, "insufficient_quota"
+	stale := observation(base.Add(10 * time.Second))
+	later := observation(base.Add(40 * time.Second))
+
+	result, err := ReplayRouteStatus(StatusReplayInput{
+		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(30 * time.Second), Complete: false,
+		Events: []PersistedStatusEvent{
+			persistedEvent(t, 10, incident),
+			persistedEvent(t, 11, stale),
+			persistedEvent(t, 12, later),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplayRouteStatus: %v", err)
+	}
+	if !result.Present || result.Status.ObservedAt != incident.ObservedAt || result.Status.Credit != CreditExhausted {
+		t.Fatalf("replay result = %#v, want ledger-first incident projection", result)
+	}
+	coverage := result.Coverage
+	if coverage.EventsSeen != 3 || coverage.EventsApplied != 1 || coverage.EventsIgnored != 1 || coverage.EventsSkippedHorizon != 1 {
+		t.Fatalf("coverage counts = %#v", coverage)
+	}
+	if !coverage.EarliestObservedAt.Equal(stale.ObservedAt) || !coverage.LatestObservedAt.Equal(incident.ObservedAt) {
+		t.Fatalf("coverage interval = %v..%v", coverage.EarliestObservedAt, coverage.LatestObservedAt)
+	}
+	if coverage.Complete {
+		t.Fatal("incomplete storage read was reported as complete")
+	}
+}
+
+func TestReplayRouteStatusAllowsEpochTransition(t *testing.T) {
+	base := time.Unix(200, 0).UTC()
+	incident := observation(base)
+	incident.Source, incident.Credit, incident.Billing, incident.ProviderCode = SourceManagementAPI, CreditExhausted, BillingIssue, "insufficient_quota"
+	nextEpoch := observation(base.Add(time.Second))
+	nextEpoch.ConfigEpoch = "epoch-2"
+
+	result, err := ReplayRouteStatus(StatusReplayInput{
+		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Complete: true,
+		Events: []PersistedStatusEvent{persistedEvent(t, 1, incident), persistedEvent(t, 2, nextEpoch)},
+	})
+	if err != nil {
+		t.Fatalf("ReplayRouteStatus: %v", err)
+	}
+	if result.Status.ConfigEpoch != "epoch-2" || result.Status.Credit != CreditOK || result.Status.Billing != BillingOK {
+		t.Fatalf("epoch transition retained old incident: %#v", result.Status)
+	}
+	if result.Coverage.EventsApplied != 2 || !result.Coverage.Complete {
+		t.Fatalf("epoch transition coverage = %#v", result.Coverage)
+	}
+}
+
+func TestReplayRouteStatusIncludesEventAtHorizon(t *testing.T) {
+	horizon := time.Unix(250, 0).UTC()
+	value := observation(horizon)
+	result, err := ReplayRouteStatus(StatusReplayInput{
+		ConfigDigest: digest(1), RouteID: "route", Horizon: horizon, Complete: true,
+		Events: []PersistedStatusEvent{persistedEvent(t, 1, value)},
+	})
+	if err != nil {
+		t.Fatalf("ReplayRouteStatus: %v", err)
+	}
+	if result.Coverage.EventsApplied != 1 || result.Coverage.EventsSkippedHorizon != 0 || !result.Status.ObservedAt.Equal(horizon) {
+		t.Fatalf("event at horizon was not included: %#v", result)
+	}
+}
+
+func TestReplayRouteStatusRejectsMixedKeysWithoutApplying(t *testing.T) {
+	base := time.Unix(300, 0).UTC()
+	tests := []struct {
+		name  string
+		value StatusObservation
+	}{
+		{name: "route", value: func() StatusObservation {
+			value := observation(base)
+			value.RouteID = "other-route"
+			return value
+		}()},
+		{name: "config", value: func() StatusObservation {
+			value := observation(base)
+			value.ConfigDigest = digest(9)
+			return value
+		}()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := persistedEvent(t, 1, test.value)
+			result, err := ReplayRouteStatus(StatusReplayInput{
+				ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Complete: true,
+				Events: []PersistedStatusEvent{event},
+			})
+			if !errors.Is(err, ErrStatusReplayKey) {
+				t.Fatalf("error = %v, want ErrStatusReplayKey", err)
+			}
+			if result.Present || !result.Status.ObservedAt.IsZero() || result.Coverage.EventsApplied != 0 {
+				t.Fatalf("mixed key mutated replay result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestReplayRouteStatusRejectsNonascendingEventIDs(t *testing.T) {
+	base := time.Unix(400, 0).UTC()
+	events := []PersistedStatusEvent{
+		persistedEvent(t, 2, observation(base)),
+		persistedEvent(t, 1, observation(base.Add(time.Second))),
+	}
+	_, err := ReplayRouteStatus(StatusReplayInput{
+		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Events: events,
+	})
+	if !errors.Is(err, ErrStatusReplayOrder) {
+		t.Fatalf("error = %v, want ErrStatusReplayOrder", err)
+	}
+}
+
+func TestReplayRouteStatusRejectsMissingDigest(t *testing.T) {
+	base := time.Unix(500, 0).UTC()
+	event := persistedEvent(t, 1, observation(base))
+	event.Event.EventDigest = [32]byte{}
+	_, err := ReplayRouteStatus(StatusReplayInput{
+		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Events: []PersistedStatusEvent{event},
+	})
+	if !errors.Is(err, ErrStatusReplayEvent) {
+		t.Fatalf("error = %v, want ErrStatusReplayEvent for missing digest", err)
+	}
+}
+
+func TestReplayRouteStatusAcceptsMicrosecondRoundedTimestamps(t *testing.T) {
+	base := time.Unix(600, 123456789).UTC()
+	original := observation(base)
+	event := persistedEvent(t, 1, original)
+	event.Event.ObservedAt = event.Event.ObservedAt.Round(time.Microsecond)
+	event.Event.ExpiresAt = event.Event.ExpiresAt.Round(time.Microsecond)
+	result, err := ReplayRouteStatus(StatusReplayInput{
+		ConfigDigest: digest(1), RouteID: "route", Horizon: event.Event.ObservedAt, Complete: true,
+		Events: []PersistedStatusEvent{event},
+	})
+	if err != nil {
+		t.Fatalf("rounded persisted event rejected: %v", err)
+	}
+	if !result.Present || !result.Status.ObservedAt.Equal(event.Event.ObservedAt) {
+		t.Fatalf("rounded replay result = %#v", result)
+	}
+}
