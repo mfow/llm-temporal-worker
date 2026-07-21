@@ -99,8 +99,15 @@ func (store *BlobStore) Put(ctx context.Context, request blob.PutRequest) (blob.
 	defer store.mu.Unlock()
 	store.sweepLocked(now)
 	if existing, ok := store.records[key]; ok {
-		if existing.ref.ByteLength != ref.ByteLength || existing.ref.MediaType != ref.MediaType || existing.ref.ExpiresAt != ref.ExpiresAt || blob.Digest(existing.data) != digest {
+		if existing.ref.ByteLength != ref.ByteLength || existing.ref.MediaType != ref.MediaType || blob.Digest(existing.data) != digest {
 			return blob.Ref{}, blob.ErrConflict
+		}
+		// The same content may be referenced by operations with different
+		// retention windows. Keep the record until the longest requested
+		// expiry while returning the caller's operation-specific reference.
+		if ref.ExpiresAt.After(existing.ref.ExpiresAt) {
+			existing.ref.ExpiresAt = ref.ExpiresAt
+			store.records[key] = existing
 		}
 		return ref, nil
 	}
@@ -136,7 +143,7 @@ func (store *BlobStore) Get(ctx context.Context, tenant string, ref blob.Ref) ([
 	if !ok {
 		return nil, blob.ErrNotFound
 	}
-	if record.ref != ref || blob.Digest(record.data) != ref.Digest {
+	if record.ref.Store != ref.Store || record.ref.Locator != ref.Locator || record.ref.ByteLength != ref.ByteLength || record.ref.MediaType != ref.MediaType || blob.Digest(record.data) != ref.Digest {
 		return nil, blob.ErrDigestMismatch
 	}
 	return append([]byte(nil), record.data...), nil

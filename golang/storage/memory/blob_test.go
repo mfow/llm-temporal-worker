@@ -65,6 +65,36 @@ func TestBlobStoreIsIdempotentAndRejectsConflictingMetadata(t *testing.T) {
 	}
 }
 
+func TestBlobStoreAllowsDifferentExpiryForSameContent(t *testing.T) {
+	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	clock := now
+	store, err := NewBlobStore(BlobOptions{MaxBytes: 32, Clock: func() time.Time { return clock }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("hello"), ExpiresAt: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("hello"), ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("same content with a different expiry was rejected: %v", err)
+	}
+	if first == second {
+		t.Fatal("operation-specific expiry was not preserved in the returned reference")
+	}
+	if _, err := store.Get(context.Background(), "tenant", second); err != nil {
+		t.Fatalf("long-lived reference Get() error = %v", err)
+	}
+	clock = now.Add(2 * time.Minute)
+	if _, err := store.Get(context.Background(), "tenant", first); !errors.Is(err, blob.ErrExpired) {
+		t.Fatalf("short-lived reference error = %v, want expired", err)
+	}
+	if _, err := store.Get(context.Background(), "tenant", second); err != nil {
+		t.Fatalf("long-lived reference expired with short-lived reference: %v", err)
+	}
+}
+
 func TestBlobStoreSweepsExpiredEntries(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	clock := now
