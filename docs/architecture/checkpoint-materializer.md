@@ -18,6 +18,14 @@ ancestor still has unmatched tool calls. Optional self-contained snapshots
 carry the same digest as a full replay; their use does not change handles or
 the logical graph.
 
+The tool-call frontier is a set belonging to one model turn, not a stack. A
+turn may append multiple `ToolCall` items before any result. Once the first
+`ToolResult` arrives, only results matching the remaining outstanding call IDs
+are valid; those results may arrive in any order. A new message or `ToolCall`
+cannot begin until the frontier is empty, after which the next item starts a
+new turn. Call IDs remain unique across the complete lineage, including calls
+that have already been resolved.
+
 This is the durable-state-independent slice of the design. PostgreSQL
 publication, blob ordering, Activity payload wiring, and retention remain
 separate concerns and must use this contract rather than reimplementing
