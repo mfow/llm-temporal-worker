@@ -8,7 +8,9 @@ architecture's one-shot, non-streaming workflow shape:
 - a cached immutable root and three sibling `Conversation.start_respond`
   futures composed with `Temporal.Future.all`;
 - explicit `Conversation.compact`; and
-- a post-compaction `Conversation.respond` that restores application settings.
+- a post-compaction `Conversation.respond` that restores application settings;
+- the documented low-level `generate_v1_activity`, `compact_v1_activity`, and
+  `query_v1_activity` execute calls with the package retry policy.
 
 The executable is compile-only and does not contact Temporal or an LLM
 provider. Run it with:
