@@ -105,11 +105,12 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 		if errors.As(err, &providerErr) {
 			return llm.QueryResponseV1{}, err
 		}
-		// A handler may observe caller cancellation or its deadline while it is
-		// reading storage. Preserve those control-flow errors so the Activity
-		// boundary does not turn caller intent into a retryable state outage.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return llm.QueryResponseV1{}, err
+		// Preserve caller cancellation or deadline only when the query context
+		// itself has reached that terminal state. A child storage timeout may
+		// also return context.DeadlineExceeded while the Activity context is
+		// still live; that remains a retryable durable-state outage.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return llm.QueryResponseV1{}, ctxErr
 		}
 		// Query handlers are the storage/control-plane boundary. Untyped
 		// handler failures must not cross the Activity seam as caller input:
