@@ -31,6 +31,7 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	checkpointBlob := put("checkpoint")
 	providerBlob := put("provider")
 	cacheBlob := put("cache")
+	cacheStateBlob := put("cache-state")
 
 	// An active operation request keeps its blob retained.
 	operation, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
@@ -108,6 +109,30 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	} else if tag.RowsAffected() != 1 {
 		t.Fatalf("cache blob reference update affected %d rows", tag.RowsAffected())
 	}
+	// A tombstoned entry may still carry a response blob. Once that blob is
+	// claimed, changing the entry back to ready must be fenced by the database.
+	stateKey := testCacheKey()
+	stateKey.ScopeID = fixture.scope.ID
+	stateFill := CacheFillRequest{Key: stateKey, OperationID: fixture.originID, Lease: time.Minute}
+	if acquired, err := cache.BeginFill(fixture.ctx, stateFill); err != nil || acquired.Status != CacheFillAcquired {
+		t.Fatalf("begin cache state fill=%#v err=%v", acquired, err)
+	}
+	stateEntry, err := cache.Publish(fixture.ctx, CachePublishRequest{Fill: stateFill, CanonicalRequestJSON: []byte(`{"model":"fixture-state"}`), SemanticProfileVersion: "blob-gc", CacheEpoch: "blob-gc", OriginOperationID: fixture.originID, OriginCheckpointID: fixture.checkpointID, OriginProvider: "fixture", OriginEndpointID: "endpoint", OriginResolvedModel: "model", Response: []byte(`{"response":"blob-gc-state"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET response_inline_ciphertext=NULL, response_key_id=NULL, response_blob_id=$1, state='tombstoned' WHERE cache_entry_id=$2", cacheStateBlob.BlobID, stateEntry.ID); err != nil {
+		t.Fatal(err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("tombstoned cache blob update affected %d rows", tag.RowsAffected())
+	}
+	uses, err := fixture.operations.Namespace.Render("response_cache_uses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "DELETE FROM "+uses+" WHERE cache_entry_id=$1", stateEntry.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := maintenance.MarkExpiredBlobsEligible(fixture.ctx, now, 100)
 	if err != nil {
@@ -128,6 +153,13 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	claims, err := maintenance.ClaimBlobDeletion(fixture.ctx, now, []uuid.UUID{free.BlobID}, 1)
 	if err != nil || len(claims) != 1 || claims[0].DeletionState != "deleting" {
 		t.Fatalf("claim free=%#v err=%v", claims, err)
+	}
+	stateClaims, err := maintenance.ClaimBlobDeletion(fixture.ctx, now, []uuid.UUID{cacheStateBlob.BlobID}, 1)
+	if err != nil || len(stateClaims) != 1 || stateClaims[0].DeletionState != "deleting" {
+		t.Fatalf("claim tombstoned cache blob=%#v err=%v", stateClaims, err)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET state='ready' WHERE cache_entry_id=$1", stateEntry.ID); err == nil {
+		t.Fatal("tombstoned cache entry was revived after response blob deletion claim")
 	}
 	// The claim is committed before the object-store call. Database guards must
 	// reject every new direct blob reference during that external-delete window.
@@ -156,6 +188,9 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	}
 	if err := maintenance.FinalizeBlobDeletion(fixture.ctx, free.BlobID); err != nil {
 		t.Fatal(err)
+	}
+	if err := maintenance.FinalizeBlobDeletion(fixture.ctx, cacheStateBlob.BlobID); err != nil {
+		t.Fatalf("finalize tombstoned cache blob: %v", err)
 	}
 	if err := maintenance.FinalizeBlobDeletion(fixture.ctx, free.BlobID); err != nil {
 		t.Fatalf("repeat finalize was not idempotent: %v", err)

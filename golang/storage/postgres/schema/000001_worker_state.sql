@@ -1514,7 +1514,7 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    IF TG_ARGV[1] IN ('cache_entry', 'cache_entry_state') THEN
+    IF TG_ARGV[1] = 'cache_entry' THEN
         SELECT b.deletion_state INTO referenced_state
         FROM __SCHEMA__.__PREFIX__response_cache_entries c
         JOIN __SCHEMA__.__PREFIX__blobs b ON b.blob_id = c.response_blob_id
