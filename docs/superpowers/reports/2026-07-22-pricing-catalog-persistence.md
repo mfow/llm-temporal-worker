@@ -20,6 +20,10 @@ the in-memory catalog loader.
 - Canonicalizes decimal formatting before persistence because PostgreSQL
   `NUMERIC` does not preserve source lexical formatting, then verifies the
   canonical digest on load.
+- Canonicalizes entry interval timestamps to UTC before compiling the
+  persisted projection, rejects unsupported persisted price statuses, and
+  verifies every entry's source digest against the catalog source digest on
+  load.
 
 ## Validation
 
@@ -32,7 +36,8 @@ the in-memory catalog loader.
 - `make postgres-integration` (live pinned PostgreSQL service)
 
 All passed in this worktree, including the live future-dated replacement
-assertion (the predecessor remains active until the replacement takes effect).
+assertion (the predecessor remains active until the replacement takes effect)
+and tampered entry source-digest rejection.
 
 ## Self-review and concerns
 

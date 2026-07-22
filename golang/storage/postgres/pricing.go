@@ -121,7 +121,7 @@ func (r PricingCatalogRepository) Store(ctx context.Context, catalog pricing.Cat
 			}
 			result.ID, result.Status = existingID, status
 			result.Catalog.Entries = nil
-			return loadEntries(ctx, tx, entryRelation, existingID, &result.Catalog)
+			return loadEntries(ctx, tx, entryRelation, existingID, sourceDigest, &result.Catalog)
 		} else if !errors.Is(scanErr, pgx.ErrNoRows) {
 			return redactPostgresError(fmt.Errorf("find pricing catalog %q: %w", catalog.Version, scanErr))
 		}
@@ -221,7 +221,7 @@ func (r PricingCatalogRepository) Load(ctx context.Context, version string) (Pri
 	var digest [32]byte
 	copy(digest[:], compiledDigest)
 	result.Catalog.Version = version
-	if err := loadEntries(ctx, r.Pool, entryRelation, result.ID, &result.Catalog); err != nil {
+	if err := loadEntries(ctx, r.Pool, entryRelation, result.ID, result.SourceDigest, &result.Catalog); err != nil {
 		return PriceCatalogSnapshot{}, err
 	}
 	compiled, err := pricing.CompileUSD(result.Catalog.Version, result.Catalog.Entries)
@@ -253,6 +253,10 @@ func validatePersistableCatalog(catalog pricing.Catalog) (pricing.Catalog, error
 		}
 		if entry.Version != catalog.Version {
 			return pricing.Catalog{}, fmt.Errorf("pricing entry %d version %q must equal catalog version %q for PostgreSQL digest round-trip", index, entry.Version, catalog.Version)
+		}
+		entries[index].EffectiveFrom = entry.EffectiveFrom.UTC()
+		if !entry.EffectiveUntil.IsZero() {
+			entries[index].EffectiveUntil = entry.EffectiveUntil.UTC()
 		}
 		prices := &entries[index].Prices
 		var normalizeErr error
@@ -366,8 +370,8 @@ func insertEntries(ctx context.Context, tx pgx.Tx, relation string, catalogID uu
 
 func loadEntries(ctx context.Context, querier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
-}, relation string, catalogID uuid.UUID, catalog *pricing.Catalog) error {
-	rows, err := querier.Query(ctx, "SELECT provider, endpoint_family, endpoint_id, region, resolved_model, provider_tier, usage_formula_version, price_status, input_per_million_usd::text, output_per_million_usd::text, cache_read_per_million_usd::text, cache_write_per_million_usd::text, reasoning_per_million_usd::text, per_request_usd::text, unknown_component_codes, effective_from, effective_until FROM "+relation+" WHERE price_catalog_id=$1 ORDER BY price_entry_id", catalogID)
+}, relation string, catalogID uuid.UUID, sourceDigest [32]byte, catalog *pricing.Catalog) error {
+	rows, err := querier.Query(ctx, "SELECT provider, endpoint_family, endpoint_id, region, resolved_model, provider_tier, usage_formula_version, price_status, input_per_million_usd::text, output_per_million_usd::text, cache_read_per_million_usd::text, cache_write_per_million_usd::text, reasoning_per_million_usd::text, per_request_usd::text, unknown_component_codes, source_price_digest, effective_from, effective_until FROM "+relation+" WHERE price_catalog_id=$1 ORDER BY price_entry_id", catalogID)
 	if err != nil {
 		return redactPostgresError(fmt.Errorf("load pricing entries: %w", err))
 	}
@@ -377,9 +381,13 @@ func loadEntries(ctx context.Context, querier interface {
 		var status, formula string
 		var values [6]*string
 		var unknownCodes []string
+		var entrySourceDigest []byte
 		var effectiveUntil *time.Time
-		if err := rows.Scan(&entry.Provider, &entry.Family, &entry.EndpointID, &entry.Region, &entry.Model, &entry.ProviderTier, &formula, &status, &values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &unknownCodes, &entry.EffectiveFrom, &effectiveUntil); err != nil {
+		if err := rows.Scan(&entry.Provider, &entry.Family, &entry.EndpointID, &entry.Region, &entry.Model, &entry.ProviderTier, &formula, &status, &values[0], &values[1], &values[2], &values[3], &values[4], &values[5], &unknownCodes, &entrySourceDigest, &entry.EffectiveFrom, &effectiveUntil); err != nil {
 			return redactPostgresError(fmt.Errorf("scan pricing entry: %w", err))
+		}
+		if !sameDigest(entrySourceDigest, sourceDigest[:]) {
+			return fmt.Errorf("pricing entry source digest does not match catalog source digest")
 		}
 		if effectiveUntil != nil {
 			entry.EffectiveUntil = effectiveUntil.UTC()
@@ -440,6 +448,9 @@ func loadEntries(ctx context.Context, querier interface {
 			return fmt.Errorf("pricing entry NULL and unknown component sets disagree")
 		}
 		sort.Slice(entry.UnknownComponents, func(i, j int) bool { return entry.UnknownComponents[i] < entry.UnknownComponents[j] })
+		if err := validatePriceStatus(status); err != nil {
+			return err
+		}
 		if status == "exact" && len(entry.UnknownComponents) != 0 || status == "unknown" && len(entry.UnknownComponents) != 6 || status == "partial" && (len(entry.UnknownComponents) == 0 || len(entry.UnknownComponents) == 6) {
 			return fmt.Errorf("pricing entry has inconsistent status %q", status)
 		}
@@ -450,6 +461,13 @@ func loadEntries(ctx context.Context, querier interface {
 	}
 	if len(catalog.Entries) == 0 {
 		return errors.New("pricing catalog has no entries")
+	}
+	return nil
+}
+
+func validatePriceStatus(status string) error {
+	if status != "exact" && status != "partial" && status != "unknown" {
+		return fmt.Errorf("pricing entry has unsupported status %q", status)
 	}
 	return nil
 }

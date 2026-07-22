@@ -125,4 +125,14 @@ func TestPricingCatalogRepositoryIntegration(t *testing.T) {
 	if afterFuture.Catalog.Version != futureCatalog.Version {
 		t.Fatalf("post-effective active catalog = %q, want %q", afterFuture.Catalog.Version, futureCatalog.Version)
 	}
+	entriesRelation, err := ns.Render("price_entries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE "+entriesRelation+" SET source_price_digest=$1 WHERE price_catalog_id=$2", make([]byte, 32), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Load(ctx, catalog.Version); err == nil {
+		t.Fatal("mismatched persisted entry source digest unexpectedly loaded")
+	}
 }

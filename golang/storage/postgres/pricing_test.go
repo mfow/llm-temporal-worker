@@ -101,6 +101,17 @@ func TestComponentCodeMappingIsClosed(t *testing.T) {
 	}
 }
 
+func TestValidatePriceStatusIsClosed(t *testing.T) {
+	for _, status := range []string{"exact", "partial", "unknown"} {
+		if err := validatePriceStatus(status); err != nil {
+			t.Fatalf("validatePriceStatus(%q) = %v", status, err)
+		}
+	}
+	if err := validatePriceStatus("tampered"); err == nil {
+		t.Fatal("unsupported persisted price status unexpectedly accepted")
+	}
+}
+
 func TestValidatePersistableCatalogRejectsDigestLoss(t *testing.T) {
 	base := pricing.Entry{Provider: "openai", Family: "openai_responses", EndpointID: "prod", Region: "global", Model: "gpt", ProviderTier: "standard", Version: "catalog-v1", EffectiveFrom: time.Unix(10, 0).UTC(), Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1")}}
 	catalog, err := pricing.CompileUSD("catalog-v1", []pricing.Entry{base})
@@ -126,5 +137,28 @@ func TestValidatePersistableCatalogRejectsDigestLoss(t *testing.T) {
 	}
 	if _, err := validatePersistableCatalog(withProvenance); err == nil {
 		t.Fatal("unrepresentable provenance unexpectedly accepted")
+	}
+}
+
+func TestValidatePersistableCatalogCanonicalizesUTCIntervals(t *testing.T) {
+	location := time.FixedZone("offset", 5*60*60)
+	entry := pricing.Entry{
+		Provider: "openai", Family: "openai_responses", EndpointID: "prod", Region: "global", Model: "gpt", ProviderTier: "standard",
+		Version: "catalog-v1", EffectiveFrom: time.Date(2026, 7, 22, 12, 0, 0, 0, location), EffectiveUntil: time.Date(2026, 7, 23, 12, 0, 0, 0, location),
+		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1")},
+	}
+	catalog, err := pricing.CompileUSD("catalog-v1", []pricing.Entry{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := validatePersistableCatalog(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canonical.Entries[0].EffectiveFrom.Equal(entry.EffectiveFrom) || canonical.Entries[0].EffectiveFrom.Location() != time.UTC {
+		t.Fatalf("effective_from = %v, want UTC equivalent", canonical.Entries[0].EffectiveFrom)
+	}
+	if !canonical.Entries[0].EffectiveUntil.Equal(entry.EffectiveUntil) || canonical.Entries[0].EffectiveUntil.Location() != time.UTC {
+		t.Fatalf("effective_until = %v, want UTC equivalent", canonical.Entries[0].EffectiveUntil)
 	}
 }
