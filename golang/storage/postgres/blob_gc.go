@@ -111,6 +111,7 @@ func (repository MaintenanceRepository) MarkExpiredBlobsEligible(ctx context.Con
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("mark expired blobs eligible: %w", err))
 		}
+		defer rows.Close()
 		var candidates []uuid.UUID
 		for rows.Next() {
 			var id uuid.UUID
@@ -183,6 +184,7 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("claim blob deletion: %w", err))
 		}
+		defer rows.Close()
 		var candidates []uuid.UUID
 		for rows.Next() {
 			var id uuid.UUID
