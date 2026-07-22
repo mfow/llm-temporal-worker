@@ -33,13 +33,14 @@ fail-closed until its Redis budget-generation repository is composed. The
 PostgreSQL `SpendSummaryRepository` now provides the storage read seam for
 spend: it unions completed `operations` with completed `query_executions`,
 joins each operation to its highest-numbered durable attempt for provider and
-model grouping, uses the covering scope/time indexes, and aggregates exact
-NUMERIC(38,18) amounts without treating unknown costs as zero. Its interval is
-half-open (`start_time <= completed_at < end_time`) and groups are ordered by
-their typed dimensions with NULLs first. The runtime still requires an
-explicit builder to inject that repository, so an unconfigured deployment
-continues to fail closed rather than returning an incomplete answer. No
-provider call or streaming path is used by these Temporal query Activities.
+model grouping, uses the operation scope/time index plus a bounded lateral
+attempt lookup, and aggregates exact NUMERIC(38,18) amounts without treating
+unknown costs as zero. Its interval is half-open (`start_time <= completed_at
+< end_time`) and groups are ordered by their typed dimensions with NULLs first.
+The runtime still requires an explicit builder to inject that repository, so
+an unconfigured deployment continues to fail closed rather than returning an
+incomplete answer. No provider call or streaming path is used by these
+Temporal query Activities.
 
 Example deployment wiring:
 
