@@ -109,6 +109,28 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	if err != nil || len(claims) != 1 || claims[0].DeletionState != "deleting" {
 		t.Fatalf("claim free=%#v err=%v", claims, err)
 	}
+	// The claim is committed before the object-store call. Database guards must
+	// reject every new direct blob reference during that external-delete window.
+	lateOperation, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
+		ID: "blob-gc-late-operation-" + uuid.NewString(), ScopeKey: "cache-integration-tenant/cache-integration-project",
+		RequestDigest: admission.Digest([]byte("blob-gc-late-operation")), ReservationUSD: pricing.MustUSD("0"),
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET request_inline_ciphertext=NULL, request_key_id=NULL, request_blob_id=$1 WHERE operation_id=$2", free.BlobID, operationUUID(lateOperation.Operation.ID)); err == nil {
+		t.Fatal("late operation blob reference was accepted after deletion claim")
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+checkpoints+" SET delta_blob_id=$1 WHERE checkpoint_id=$2", free.BlobID, fixture.checkpointID); err == nil {
+		t.Fatal("late checkpoint blob reference was accepted after deletion claim")
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+providerState+" SET state_blob_id=$1 WHERE checkpoint_id=$2 AND ordinal=0", free.BlobID, fixture.checkpointID); err == nil {
+		t.Fatal("late provider-state blob reference was accepted after deletion claim")
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET response_inline_ciphertext=NULL, response_key_id=NULL, response_blob_id=$1 WHERE cache_entry_id=$2", free.BlobID, entry.ID); err == nil {
+		t.Fatal("late cache blob reference was accepted after deletion claim")
+	}
 	if err := maintenance.FinalizeBlobDeletion(fixture.ctx, free.BlobID); err != nil {
 		t.Fatal(err)
 	}

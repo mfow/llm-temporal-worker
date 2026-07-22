@@ -12,6 +12,13 @@ machine rather than a direct `DELETE`:
 3. The deleter performs the object-store operation outside the SQL
    transaction, then calls finalize to change `deleting` to `deleted`.
 
+The schema also installs writer-side guards on every direct blob reference
+and every cache-mediated reference. A writer that races a committed
+`deleting` claim blocks on the blob row fence and then fails closed; it cannot
+add a new foreign-key reference during the external-delete window. The
+`eligible` state remains referenceable until the deleting claim repeats its
+locked recheck.
+
 The reference recheck protects request and result blobs held by non-terminal
 operations, terminal operations inside their retention window, unexpired
 conversation checkpoints, unexpired or non-expiring provider state, ready
@@ -33,4 +40,5 @@ be finalized without first acquiring the `deleting` fence.
 The implementation lives in `golang/storage/postgres/blob_gc.go`; the
 integration test is skipped unless `LLMTW_POSTGRES_ADDR` is configured and
 covers active operation, checkpoint, provider-state, and ready-cache fences,
-the lifecycle transition, idempotent completion, and missing-object success.
+late writer rejection after a committed claim, the lifecycle transition,
+idempotent completion, and missing-object success.

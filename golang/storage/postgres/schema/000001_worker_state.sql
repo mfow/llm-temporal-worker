@@ -1488,3 +1488,79 @@ CREATE INDEX __PREFIX__query_executions_unknown_cost_idx
         (scope_id, completed_at DESC, query_execution_id)
     INCLUDE (query_kind, cost_unknown_reason_code)
     WHERE cost_status = 'unknown';
+
+-- Blob deletion claims are short-lived SQL fences, but physical object-store
+-- deletion occurs after the claim transaction commits. These triggers reject
+-- new direct or cache-mediated references once a blob is deleting/deleted.
+-- The deleter therefore cannot observe an unreferenced object and then race a
+-- writer that adds a reference before the external delete completes.
+CREATE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    referenced_id uuid;
+    referenced_state text;
+BEGIN
+    referenced_id := NULLIF(to_jsonb(NEW)->>TG_ARGV[0], '')::uuid;
+    IF referenced_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF TG_ARGV[1] = 'cache_entry' THEN
+        SELECT b.deletion_state INTO referenced_state
+        FROM __SCHEMA__.__PREFIX__response_cache_entries c
+        JOIN __SCHEMA__.__PREFIX__blobs b ON b.blob_id = c.response_blob_id
+        WHERE c.cache_entry_id = referenced_id
+        FOR KEY SHARE OF b;
+    ELSE
+        SELECT b.deletion_state INTO referenced_state
+        FROM __SCHEMA__.__PREFIX__blobs b
+        WHERE b.blob_id = referenced_id
+        FOR KEY SHARE OF b;
+    END IF;
+
+    IF referenced_state IN ('deleting', 'deleted') THEN
+        RAISE EXCEPTION 'blob % is not accepting new references while %', referenced_id, referenced_state
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER __PREFIX__op_req_blob_guard
+    BEFORE INSERT OR UPDATE OF request_blob_id ON __SCHEMA__.__PREFIX__operations
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('request_blob_id');
+CREATE TRIGGER __PREFIX__op_res_blob_guard
+    BEFORE INSERT OR UPDATE OF result_blob_id ON __SCHEMA__.__PREFIX__operations
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('result_blob_id');
+CREATE TRIGGER __PREFIX__op_cache_guard
+    BEFORE INSERT OR UPDATE OF cache_entry_id ON __SCHEMA__.__PREFIX__operations
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('cache_entry_id', 'cache_entry');
+CREATE TRIGGER __PREFIX__cp_delta_blob_guard
+    BEFORE INSERT OR UPDATE OF delta_blob_id ON __SCHEMA__.__PREFIX__conversation_checkpoints
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('delta_blob_id');
+CREATE TRIGGER __PREFIX__cp_response_blob_guard
+    BEFORE INSERT OR UPDATE OF response_blob_id ON __SCHEMA__.__PREFIX__conversation_checkpoints
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('response_blob_id');
+CREATE TRIGGER __PREFIX__cp_settings_blob_guard
+    BEFORE INSERT OR UPDATE OF settings_patch_blob_id ON __SCHEMA__.__PREFIX__conversation_checkpoints
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('settings_patch_blob_id');
+CREATE TRIGGER __PREFIX__cp_snapshot_blob_guard
+    BEFORE INSERT OR UPDATE OF materialized_snapshot_blob_id ON __SCHEMA__.__PREFIX__conversation_checkpoints
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('materialized_snapshot_blob_id');
+CREATE TRIGGER __PREFIX__cp_origin_cache_guard
+    BEFORE INSERT OR UPDATE OF origin_cache_entry_id ON __SCHEMA__.__PREFIX__conversation_checkpoints
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('origin_cache_entry_id', 'cache_entry');
+CREATE TRIGGER __PREFIX__provider_state_blob_guard
+    BEFORE INSERT OR UPDATE OF state_blob_id ON __SCHEMA__.__PREFIX__checkpoint_provider_state
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('state_blob_id');
+CREATE TRIGGER __PREFIX__cache_response_blob_guard
+    BEFORE INSERT OR UPDATE OF response_blob_id ON __SCHEMA__.__PREFIX__response_cache_entries
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('response_blob_id');
+CREATE TRIGGER __PREFIX__cache_use_guard
+    BEFORE INSERT OR UPDATE OF cache_entry_id ON __SCHEMA__.__PREFIX__response_cache_uses
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('cache_entry_id', 'cache_entry');
+CREATE TRIGGER __PREFIX__cache_fill_guard
+    BEFORE INSERT OR UPDATE OF cache_entry_id ON __SCHEMA__.__PREFIX__response_cache_fills
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('cache_entry_id', 'cache_entry');
