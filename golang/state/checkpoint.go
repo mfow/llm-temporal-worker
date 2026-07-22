@@ -85,6 +85,10 @@ type CheckpointGraph struct {
 	checkpoints map[Handle]Checkpoint
 	operations  map[string]Handle
 	limits      MaterializeLimits
+	// Now supplies the clock used for expiry checks. Keeping the clock on the
+	// graph makes durable materialization deterministic and lets callers share
+	// the same time boundary across repository validation and graph replay.
+	Now func() time.Time
 }
 
 func NewCheckpointGraph(limits MaterializeLimits) *CheckpointGraph {
@@ -92,7 +96,15 @@ func NewCheckpointGraph(limits MaterializeLimits) *CheckpointGraph {
 		checkpoints: make(map[Handle]Checkpoint),
 		operations:  make(map[string]Handle),
 		limits:      limits.withDefaults(),
+		Now:         time.Now,
 	}
+}
+
+func (graph *CheckpointGraph) clock() time.Time {
+	if graph != nil && graph.Now != nil {
+		return graph.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (graph *CheckpointGraph) PutRoot(checkpoint Checkpoint) error {
@@ -156,7 +168,7 @@ func (graph *CheckpointGraph) put(checkpoint Checkpoint) error {
 	}
 	if previous, exists := graph.operations[value.OperationKey]; exists {
 		existing := graph.checkpoints[previous]
-		if !existing.ExpiresAt.IsZero() && !time.Now().Before(existing.ExpiresAt) {
+		if !existing.ExpiresAt.IsZero() && !graph.clock().Before(existing.ExpiresAt) {
 			return ErrExpired
 		}
 		if previous == value.Handle && existing.RequestDigest == value.RequestDigest {
@@ -222,7 +234,7 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		if checkpoint.Tenant != tenant {
 			return MaterializedState{}, ErrTenantMismatch
 		}
-		if !checkpoint.ExpiresAt.IsZero() && !time.Now().Before(checkpoint.ExpiresAt) {
+		if !checkpoint.ExpiresAt.IsZero() && !graph.clock().Before(checkpoint.ExpiresAt) {
 			return MaterializedState{}, ErrExpired
 		}
 		path = append(path, checkpoint)
