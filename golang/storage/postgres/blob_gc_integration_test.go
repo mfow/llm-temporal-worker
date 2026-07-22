@@ -111,13 +111,21 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	}
 	// A tombstoned entry may still carry a response blob. Once that blob is
 	// claimed, changing the entry back to ready must be fenced by the database.
+	stateOrigin, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
+		ID: "blob-gc-state-origin-" + uuid.NewString(), ScopeKey: "cache-integration-tenant/cache-integration-project",
+		RequestDigest: admission.Digest([]byte("blob-gc-state-origin")), ReservationUSD: pricing.MustUSD("0"),
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture-state"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	stateKey := testCacheKey()
 	stateKey.ScopeID = fixture.scope.ID
-	stateFill := CacheFillRequest{Key: stateKey, OperationID: fixture.originID, Lease: time.Minute}
+	stateFill := CacheFillRequest{Key: stateKey, OperationID: stateOrigin.Operation.ID, Lease: time.Minute}
 	if acquired, err := cache.BeginFill(fixture.ctx, stateFill); err != nil || acquired.Status != CacheFillAcquired {
 		t.Fatalf("begin cache state fill=%#v err=%v", acquired, err)
 	}
-	stateEntry, err := cache.Publish(fixture.ctx, CachePublishRequest{Fill: stateFill, CanonicalRequestJSON: []byte(`{"model":"fixture-state"}`), SemanticProfileVersion: "blob-gc", CacheEpoch: "blob-gc", OriginOperationID: fixture.originID, OriginCheckpointID: fixture.checkpointID, OriginProvider: "fixture", OriginEndpointID: "endpoint", OriginResolvedModel: "model", Response: []byte(`{"response":"blob-gc-state"}`)})
+	stateEntry, err := cache.Publish(fixture.ctx, CachePublishRequest{Fill: stateFill, CanonicalRequestJSON: []byte(`{"model":"fixture-state"}`), SemanticProfileVersion: "blob-gc", CacheEpoch: "blob-gc", OriginOperationID: stateOrigin.Operation.ID, OriginCheckpointID: fixture.checkpointID, OriginProvider: "fixture", OriginEndpointID: "endpoint", OriginResolvedModel: "model", Response: []byte(`{"response":"blob-gc-state"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
