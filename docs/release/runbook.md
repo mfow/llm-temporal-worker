@@ -153,10 +153,10 @@ context.
 ## Current offline traceability record
 
 The latest protected master run with a retained `release-evidence` artifact is
-[workflow run `29930640574`](https://github.com/mfow/llm-temporal-worker/actions/runs/29930640574) at revision
-`aa9c67f9eb744e8fb74f3f419d88775af3e7b098`. The artifact is named
-`release-evidence` (artifact `8534526845`) and has SHA-256 digest
-`0c68eb8fc93b6f391131c5b6e612c7815826e80e5534efba8924c6801862f9ad`.
+[workflow run `29953059759`](https://github.com/mfow/llm-temporal-worker/actions/runs/29953059759) at revision
+`6db3055dbd1b37a0ce7f7fa8fd7831672fc56344`. The artifact is named
+`release-evidence` (artifact `8543414094`) and has SHA-256 digest
+`6c86c70262f938a384cdd54bfbedaa1bd78a105e5df13fd07f02f5fbe25a9880`.
 The v1 catalog binds offline implementation and conformance records to this
 run and digest. This is not production SLO evidence: the admission/compilation
 p99 and worker-error-rate requirements remain explicitly unrecorded, protected
