@@ -207,6 +207,18 @@ mismatches stay on the error channel without raising in a workflow callback),
 while `Query.execute_with` is available for deterministic dispatch injection
 in tests.
 
+For paginated responses, `Query.next query response` constructs the next page
+with the same GADT result type. It returns `Ok None` for the final page and
+rejects a cursor attached to the wrong query kind (or to a snapshot query)
+before another Activity is dispatched:
+
+```ocaml
+match Query.next query response with
+| Ok (Some next_query) -> Query.execute ~operation_key ~context next_query
+| Ok None -> Ok_finished
+| Error error -> handle_temporal_error error
+```
+
 Response cursors retain the query kind that produced them. Reusing a cursor
 returned by one paginated query with a different query kind is rejected by the
 OCaml facade before an Activity is dispatched. `Query_cursor.of_string` remains
