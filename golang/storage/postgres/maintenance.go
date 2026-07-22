@@ -24,6 +24,7 @@ const maxMaintenanceBatch = 10_000
 
 var (
 	ErrMaintenanceOutboxNotClaimed = maintenance.ErrOutboxNotClaimed
+	ErrMaintenanceOutboxConflict   = maintenance.ErrOutboxConflict
 	ErrMaintenanceInvalidPayload   = errors.New("maintenance outbox payload is invalid")
 )
 
@@ -180,12 +181,21 @@ func (repository MaintenanceRepository) PublishOutbox(ctx context.Context, event
 	if createdAt.IsZero() {
 		createdAt = event.AvailableAt
 	}
-	_, err = repository.Pool.Exec(ctx, "INSERT INTO "+outboxTable+
+	tag, err := repository.Pool.Exec(ctx, "INSERT INTO "+outboxTable+
 		" (outbox_id, event_kind, aggregate_type, aggregate_id, dedupe_key, safe_payload, state, attempt_count, available_at, created_at)"+
 		" VALUES ($1, $2, $3, $4, $5, $6, 'pending', 0, $7, $8)"+
 		" ON CONFLICT (event_kind, dedupe_key) DO NOTHING", eventID, string(event.Kind), event.AggregateType, aggregateID, event.DedupeKey[:], event.SafePayload, event.AvailableAt, createdAt)
 	if err != nil {
 		return redactPostgresError(fmt.Errorf("publish maintenance outbox: %w", err))
+	}
+	if tag.RowsAffected() == 0 {
+		var same bool
+		if err := repository.Pool.QueryRow(ctx, "SELECT aggregate_id = $2 AND safe_payload = $3::jsonb FROM "+outboxTable+" WHERE event_kind = $1 AND dedupe_key = $4", string(event.Kind), aggregateID, event.SafePayload, event.DedupeKey[:]).Scan(&same); err != nil {
+			return redactPostgresError(fmt.Errorf("inspect maintenance outbox dedupe: %w", err))
+		}
+		if !same {
+			return ErrMaintenanceOutboxConflict
+		}
 	}
 	return nil
 }

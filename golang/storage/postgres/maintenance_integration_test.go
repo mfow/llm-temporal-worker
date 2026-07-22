@@ -47,6 +47,12 @@ func TestMaintenanceOutboxFencesReclaimedLeaseAndDeduplicatesCompletion(t *testi
 	if err := repository.PublishOutbox(ctx, event); err != nil {
 		t.Fatalf("duplicate enqueue was not idempotent: %v", err)
 	}
+	conflict := event
+	conflict.ID = uuid.New().String()
+	conflict.AggregateID = uuid.New().String()
+	if err := repository.PublishOutbox(ctx, conflict); !errors.Is(err, ErrMaintenanceOutboxConflict) {
+		t.Fatalf("conflicting dedupe enqueue was accepted: %v", err)
+	}
 	first, err := repository.ClaimOutbox(ctx, maintenance.ClaimOptions{Now: now, Limit: 1, Lease: 10 * time.Minute})
 	if err != nil || len(first) != 1 {
 		t.Fatalf("first claim=%+v err=%v", first, err)
