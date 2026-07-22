@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -215,6 +216,67 @@ func TestResponseCacheConcurrentFillAcquisition(t *testing.T) {
 		if acquired != 1 || busy != 1 {
 			t.Fatalf("concurrent fill outcomes acquired=%d busy=%d, want one each", acquired, busy)
 		}
+	}
+}
+
+func TestResponseCacheHundredWayConcurrentFillAcquisition(t *testing.T) {
+	fixture := newResponseCacheFixture(t)
+	key := testCacheKey()
+	key.ScopeID = fixture.scope.ID
+	key.SemanticFingerprintHMAC = sha256.Sum256([]byte("cache-hundred-way-fill"))
+
+	const workers = 100
+	operationIDs := make([]string, workers)
+	for i := range operationIDs {
+		operationIDs[i] = fmt.Sprintf("cache-hundred-way-fill-%03d-%s", i, uuid.NewString())
+		if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
+			ID:              operationIDs[i],
+			ScopeKey:        "cache-integration-tenant/cache-integration-project",
+			RequestDigest:   admission.Digest([]byte(operationIDs[i])),
+			ReservationUSD:  pricing.MustUSD("0"),
+			ExpiresAt:       time.Now().UTC().Add(time.Hour),
+			RequestManifest: []byte(`{"model":"fixture"}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type fillOutcome struct {
+		result CacheFillResult
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan fillOutcome, workers)
+	var group sync.WaitGroup
+	group.Add(workers)
+	for _, operationID := range operationIDs {
+		go func(operationID string) {
+			defer group.Done()
+			<-start
+			result, err := fixture.repository.BeginFill(fixture.ctx, CacheFillRequest{Key: key, OperationID: operationID, Lease: time.Minute})
+			results <- fillOutcome{result: result, err: err}
+		}(operationID)
+	}
+	close(start)
+	group.Wait()
+	close(results)
+
+	acquired, busy := 0, 0
+	for outcome := range results {
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		switch outcome.result.Status {
+		case CacheFillAcquired:
+			acquired++
+		case CacheFillBusy:
+			busy++
+		default:
+			t.Fatalf("unexpected hundred-way fill result=%#v", outcome.result)
+		}
+	}
+	if acquired != 1 || busy != workers-1 {
+		t.Fatalf("hundred-way fill outcomes acquired=%d busy=%d, want one acquired and %d busy", acquired, busy, workers-1)
 	}
 }
 
