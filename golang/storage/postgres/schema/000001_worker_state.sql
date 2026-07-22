@@ -1402,6 +1402,10 @@ CREATE TABLE __SCHEMA__.__PREFIX__maintenance_outbox (
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     available_at timestamptz NOT NULL,
     lease_expires_at timestamptz,
+    -- A fresh opaque fence is written for every claim. It remains after a
+    -- terminal transition so duplicate completion/failure calls with the
+    -- same token are idempotent, while a reclaim always replaces it.
+    lease_token uuid,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at timestamptz,
     UNIQUE (event_kind, dedupe_key)

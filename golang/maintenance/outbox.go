@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,24 @@ var (
 	ErrOutboxConflict   = errors.New("maintenance outbox dedupe conflict")
 	ErrOutboxNotClaimed = errors.New("maintenance outbox item is not owned by this worker")
 )
+
+// LeaseToken is an opaque fencing token assigned for one outbox claim.  A
+// reclaimed row receives a new token, so a worker that outlives its lease can
+// never complete or retry the work claimed by its successor.
+type LeaseToken [16]byte
+
+// NewLeaseToken returns a cryptographically random fencing token. Tokens are
+// not identifiers for workers and must never be logged or included in a
+// payload sent to an external object store.
+func NewLeaseToken() (LeaseToken, error) {
+	var token LeaseToken
+	if _, err := rand.Read(token[:]); err != nil {
+		return LeaseToken{}, fmt.Errorf("generate maintenance lease token: %w", err)
+	}
+	return token, nil
+}
+
+func (token LeaseToken) IsZero() bool { return token == (LeaseToken{}) }
 
 type EventKind string
 
@@ -49,6 +68,7 @@ type Event struct {
 	AttemptCount   int
 	AvailableAt    time.Time
 	LeaseExpiresAt time.Time
+	LeaseToken     LeaseToken
 	CreatedAt      time.Time
 	CompletedAt    time.Time
 }
@@ -79,6 +99,14 @@ func (event Event) Validate() error {
 	}
 	if event.AttemptCount < 0 {
 		return errors.New("maintenance outbox attempt count must not be negative")
+	}
+	if event.State == EventProcessing {
+		if event.LeaseToken.IsZero() {
+			return errors.New("processing maintenance outbox item has no lease token")
+		}
+		if event.LeaseExpiresAt.IsZero() || !event.LeaseExpiresAt.After(event.AvailableAt) {
+			return errors.New("processing maintenance outbox item has no active lease")
+		}
 	}
 	if event.AvailableAt.IsZero() {
 		return errors.New("maintenance outbox available time is required")
@@ -132,8 +160,8 @@ func (options ClaimOptions) Validate() error {
 type OutboxStore interface {
 	Publish(context.Context, Event) error
 	Claim(context.Context, ClaimOptions) ([]Event, error)
-	Complete(context.Context, string, time.Time) error
-	Retry(context.Context, string, time.Time) error
+	Complete(context.Context, string, LeaseToken, time.Time) error
+	Retry(context.Context, string, LeaseToken, time.Time, time.Time) error
 }
 
 type InMemoryOutbox struct {
@@ -227,38 +255,42 @@ func (store *InMemoryOutbox) Claim(ctx context.Context, options ClaimOptions) ([
 		current.State = EventProcessing
 		current.AttemptCount++
 		current.LeaseExpiresAt = options.Now.Add(options.Lease)
+		token, err := NewLeaseToken()
+		if err != nil {
+			return nil, err
+		}
+		current.LeaseToken = token
 		store.events[current.ID] = current
 		claimed = append(claimed, cloneEvent(current))
 	}
 	return claimed, nil
 }
 
-func (store *InMemoryOutbox) Complete(ctx context.Context, id string, completedAt time.Time) error {
-	return store.finish(ctx, id, completedAt, EventCompleted)
+func (store *InMemoryOutbox) Complete(ctx context.Context, id string, token LeaseToken, completedAt time.Time) error {
+	return store.finish(ctx, id, token, completedAt, completedAt, EventCompleted)
 }
 
-func (store *InMemoryOutbox) Retry(ctx context.Context, id string, availableAt time.Time) error {
+func (store *InMemoryOutbox) Retry(ctx context.Context, id string, token LeaseToken, retriedAt, availableAt time.Time) error {
+	if retriedAt.IsZero() {
+		return errors.New("maintenance outbox retry time is required")
+	}
 	if availableAt.IsZero() {
 		return errors.New("maintenance outbox retry time is required")
 	}
-	if err := store.finish(ctx, id, availableAt, EventFailed); err != nil {
+	if !availableAt.After(retriedAt) {
+		return errors.New("maintenance outbox retry must be scheduled after retry time")
+	}
+	if err := store.finish(ctx, id, token, retriedAt, availableAt, EventFailed); err != nil {
 		return err
 	}
-	store.mu.Lock()
-	if event, ok := store.events[id]; ok {
-		event.AvailableAt = availableAt
-		event.CompletedAt = time.Time{}
-		store.events[id] = event
-	}
-	store.mu.Unlock()
 	return nil
 }
 
-func (store *InMemoryOutbox) finish(ctx context.Context, id string, at time.Time, state EventState) error {
+func (store *InMemoryOutbox) finish(ctx context.Context, id string, token LeaseToken, at, availableAt time.Time, state EventState) error {
 	if store == nil {
 		return errors.New("maintenance outbox store is nil")
 	}
-	if id == "" || at.IsZero() {
+	if id == "" || token.IsZero() || at.IsZero() {
 		return errors.New("maintenance outbox completion identity and time are required")
 	}
 	if ctx == nil {
@@ -270,13 +302,28 @@ func (store *InMemoryOutbox) finish(ctx context.Context, id string, at time.Time
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	event, ok := store.events[id]
-	if !ok || event.State != EventProcessing {
+	if !ok {
+		return ErrOutboxNotClaimed
+	}
+	// Repeated completion/failure with the same token is an idempotent
+	// success. A subsequent claim always replaces the token first, fencing
+	// the old worker.
+	if event.LeaseToken != token {
+		return ErrOutboxNotClaimed
+	}
+	if event.State == state {
+		return nil
+	}
+	if event.State != EventProcessing || !event.LeaseExpiresAt.After(at) {
 		return ErrOutboxNotClaimed
 	}
 	event.State = state
 	event.LeaseExpiresAt = time.Time{}
 	if state == EventCompleted {
 		event.CompletedAt = at
+	} else {
+		event.AvailableAt = availableAt
+		event.CompletedAt = time.Time{}
 	}
 	store.events[id] = event
 	return nil
@@ -358,7 +405,7 @@ func (dispatcher Dispatcher) RunOnce(ctx context.Context, options DispatchOption
 	for _, event := range events {
 		err := dispatcher.Delete(ctx, event)
 		if err == nil || errors.Is(err, ErrObjectNotFound) {
-			if err := dispatcher.Store.Complete(ctx, event.ID, options.Now); err != nil {
+			if err := dispatcher.Store.Complete(ctx, event.ID, event.LeaseToken, options.Now); err != nil {
 				return result, err
 			}
 			result.Completed++
@@ -367,7 +414,7 @@ func (dispatcher Dispatcher) RunOnce(ctx context.Context, options DispatchOption
 			}
 			continue
 		}
-		if err := dispatcher.Store.Retry(ctx, event.ID, options.Now.Add(options.RetryDelay)); err != nil {
+		if err := dispatcher.Store.Retry(ctx, event.ID, event.LeaseToken, options.Now, options.Now.Add(options.RetryDelay)); err != nil {
 			return result, err
 		}
 		result.Retried++

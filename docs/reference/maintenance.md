@@ -38,9 +38,13 @@ accepted by the contract. `(event_kind, dedupe_key)` is idempotent.
 
 Workers claim at most the requested batch with `FOR UPDATE SKIP LOCKED` in a
 short transaction. Pending/failed rows whose `available_at` has arrived and
-processing rows whose lease expired are claimable. A live lease is not claimed
-twice. Completion and retry update only rows in `processing`; a lost lease or
-already-completed row returns an ownership error.
+processing rows whose lease expired are claimable. Every claim receives a new
+opaque `lease_token`, and a live lease is not claimed twice. Completion and
+retry must present that token while the lease is still live; a reclaimed row
+therefore fences the old worker. The token is retained after the terminal
+transition so a duplicate completion/failure request with the same token is an
+idempotent success, while a different or expired token returns an ownership
+error.
 
 External deletion happens after the transaction commits. A missing object is
 success, so retries cannot turn an already-cleaned object into a permanent

@@ -30,9 +30,10 @@ var (
 // MaintenanceRepository owns only maintenance-role operations. It is not
 // used by the worker runtime, which must not receive DELETE privileges.
 type MaintenanceRepository struct {
-	Pool      *pgxpool.Pool
-	Namespace Namespace
-	NewID     func() (uuid.UUID, error)
+	Pool          *pgxpool.Pool
+	Namespace     Namespace
+	NewID         func() (uuid.UUID, error)
+	NewLeaseToken func() (maintenance.LeaseToken, error)
 }
 
 func (repository MaintenanceRepository) validate() error {
@@ -202,41 +203,69 @@ func (repository MaintenanceRepository) ClaimOutbox(ctx context.Context, options
 	if err != nil {
 		return nil, err
 	}
+	newLeaseToken := repository.NewLeaseToken
+	if newLeaseToken == nil {
+		newLeaseToken = maintenance.NewLeaseToken
+	}
 	var events []maintenance.Event
 	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
-		query := "WITH candidates AS (" +
-			" SELECT outbox_id FROM " + outboxTable +
-			" WHERE ((state IN ('pending', 'failed') AND available_at <= $1)" +
-			" OR (state = 'processing' AND lease_expires_at <= $1))" +
-			" ORDER BY available_at, outbox_id LIMIT $2 FOR UPDATE SKIP LOCKED" +
-			"), claimed AS (" +
-			" UPDATE " + outboxTable + " o SET state = 'processing', attempt_count = o.attempt_count + 1, lease_expires_at = $3" +
-			" FROM candidates WHERE o.outbox_id = candidates.outbox_id" +
-			" RETURNING o.outbox_id, o.event_kind, o.aggregate_type, o.aggregate_id, o.dedupe_key," +
-			" o.safe_payload, o.state, o.attempt_count, o.available_at, o.lease_expires_at, o.created_at, o.completed_at" +
-			") SELECT outbox_id, event_kind, aggregate_type, aggregate_id, dedupe_key, safe_payload, state," +
-			" attempt_count, available_at, lease_expires_at, created_at, completed_at FROM claimed"
-		rows, err := tx.Query(ctx, query, options.Now, options.Limit, options.Now.Add(options.Lease))
+		// Lock only a bounded candidate set. Tokens are generated and written one
+		// row at a time so every claim gets a distinct fence; a stale claimant's
+		// token can never authorize a successor's completion.
+		rows, err := tx.Query(ctx, "SELECT outbox_id FROM "+outboxTable+
+			" WHERE ((state IN ('pending', 'failed') AND available_at <= $1)"+
+			" OR (state = 'processing' AND lease_expires_at <= $1))"+
+			" ORDER BY available_at, outbox_id LIMIT $2 FOR UPDATE SKIP LOCKED", options.Now, options.Limit)
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("claim maintenance outbox: %w", err))
 		}
-		defer rows.Close()
+		var candidateIDs []uuid.UUID
 		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan maintenance outbox candidate: %w", err)
+			}
+			candidateIDs = append(candidateIDs, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return redactPostgresError(fmt.Errorf("iterate maintenance outbox candidates: %w", err))
+		}
+		rows.Close()
+		for _, candidateID := range candidateIDs {
+			token, err := newLeaseToken()
+			if err != nil {
+				return err
+			}
+			leaseUntil := options.Now.Add(options.Lease)
+			row := tx.QueryRow(ctx, "UPDATE "+outboxTable+
+				" SET state = 'processing', attempt_count = attempt_count + 1, lease_expires_at = $2, lease_token = $3"+
+				" WHERE outbox_id = $1 AND ((state IN ('pending', 'failed') AND available_at <= $4)"+
+				" OR (state = 'processing' AND lease_expires_at <= $4))"+
+				" RETURNING outbox_id, event_kind, aggregate_type, aggregate_id, dedupe_key, safe_payload, state,"+
+				" attempt_count, available_at, lease_expires_at, created_at, completed_at, lease_token", candidateID, leaseUntil, uuid.UUID(token), options.Now)
 			var id, aggregateID uuid.UUID
 			var kind, aggregateType, state string
 			var dedupe, payload []byte
 			var attempt int
 			var available, created time.Time
 			var lease, completed *time.Time
-			if err := rows.Scan(&id, &kind, &aggregateType, &aggregateID, &dedupe, &payload, &state, &attempt, &available, &lease, &created, &completed); err != nil {
-				return fmt.Errorf("scan claimed maintenance outbox: %w", err)
+			var storedToken uuid.UUID
+			if err := row.Scan(&id, &kind, &aggregateType, &aggregateID, &dedupe, &payload, &state, &attempt, &available, &lease, &created, &completed, &storedToken); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return redactPostgresError(fmt.Errorf("update claimed maintenance outbox: %w", err))
 			}
 			if len(dedupe) != 32 {
 				return ErrMaintenanceInvalidPayload
 			}
 			var key [32]byte
 			copy(key[:], dedupe)
-			event := maintenance.Event{ID: id.String(), Kind: maintenance.EventKind(kind), AggregateType: aggregateType, AggregateID: aggregateID.String(), DedupeKey: key, SafePayload: append([]byte(nil), payload...), State: maintenance.EventState(state), AttemptCount: attempt, AvailableAt: available, CreatedAt: created}
+			var leaseKey maintenance.LeaseToken
+			copy(leaseKey[:], storedToken[:])
+			event := maintenance.Event{ID: id.String(), Kind: maintenance.EventKind(kind), AggregateType: aggregateType, AggregateID: aggregateID.String(), DedupeKey: key, SafePayload: append([]byte(nil), payload...), State: maintenance.EventState(state), AttemptCount: attempt, AvailableAt: available, CreatedAt: created, LeaseToken: leaseKey}
 			if lease != nil {
 				event.LeaseExpiresAt = *lease
 			}
@@ -248,7 +277,7 @@ func (repository MaintenanceRepository) ClaimOutbox(ctx context.Context, options
 			}
 			events = append(events, event)
 		}
-		return rows.Err()
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -256,20 +285,23 @@ func (repository MaintenanceRepository) ClaimOutbox(ctx context.Context, options
 	return events, nil
 }
 
-func (repository MaintenanceRepository) CompleteOutbox(ctx context.Context, id string, completedAt time.Time) error {
-	return repository.updateOutboxState(ctx, id, completedAt, "completed", true)
+func (repository MaintenanceRepository) CompleteOutbox(ctx context.Context, id string, token maintenance.LeaseToken, completedAt time.Time) error {
+	return repository.updateOutboxState(ctx, id, token, completedAt, completedAt, "completed", true)
 }
 
-func (repository MaintenanceRepository) RetryOutbox(ctx context.Context, id string, availableAt time.Time) error {
-	return repository.updateOutboxState(ctx, id, availableAt, "failed", false)
+func (repository MaintenanceRepository) RetryOutbox(ctx context.Context, id string, token maintenance.LeaseToken, retriedAt, availableAt time.Time) error {
+	return repository.updateOutboxState(ctx, id, token, retriedAt, availableAt, "failed", false)
 }
 
-func (repository MaintenanceRepository) updateOutboxState(ctx context.Context, id string, at time.Time, state string, completed bool) error {
+func (repository MaintenanceRepository) updateOutboxState(ctx context.Context, id string, token maintenance.LeaseToken, at, availableAt time.Time, state string, completed bool) error {
 	if err := repository.validate(); err != nil {
 		return err
 	}
-	if id == "" || at.IsZero() {
+	if id == "" || token.IsZero() || at.IsZero() {
 		return errors.New("maintenance outbox state identity and time are required")
+	}
+	if !completed && (availableAt.IsZero() || !availableAt.After(at)) {
+		return errors.New("maintenance outbox retry must be scheduled after retry time")
 	}
 	outboxID, err := uuid.Parse(id)
 	if err != nil {
@@ -279,12 +311,24 @@ func (repository MaintenanceRepository) updateOutboxState(ctx context.Context, i
 	if err != nil {
 		return err
 	}
-	query := "UPDATE " + outboxTable + " SET state = $2, lease_expires_at = NULL, available_at = CASE WHEN $3 THEN available_at ELSE $4 END, completed_at = CASE WHEN $3 THEN $4 ELSE NULL END WHERE outbox_id = $1 AND state = 'processing'"
-	tag, err := repository.Pool.Exec(ctx, query, outboxID, state, completed, at)
+	query := "UPDATE " + outboxTable + " SET state = $3, lease_expires_at = NULL, available_at = CASE WHEN $4 THEN available_at ELSE $5 END, completed_at = CASE WHEN $4 THEN $6 ELSE NULL END WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > clock_timestamp()"
+	tag, err := repository.Pool.Exec(ctx, query, outboxID, uuid.UUID(token), state, completed, availableAt, at)
 	if err != nil {
 		return redactPostgresError(fmt.Errorf("update maintenance outbox: %w", err))
 	}
 	if tag.RowsAffected() != 1 {
+		// Retrying a request after its own transaction response was lost is a
+		// successful no-op when the same fence already reached the requested
+		// terminal state. Any other state/token is a lost-lease error.
+		var currentState string
+		var currentToken *uuid.UUID
+		if err := repository.Pool.QueryRow(ctx, "SELECT state, lease_token FROM "+outboxTable+" WHERE outbox_id = $1", outboxID).Scan(&currentState, &currentToken); err == nil && currentToken != nil {
+			var current maintenance.LeaseToken
+			copy(current[:], currentToken[:])
+			if current == token && ((completed && currentState == "completed") || (!completed && currentState == "failed")) {
+				return nil
+			}
+		}
 		return ErrMaintenanceOutboxNotClaimed
 	}
 	return nil
