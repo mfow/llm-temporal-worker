@@ -129,7 +129,10 @@ func insertBudgetJournalFixtures(ctx context.Context, repository OperationReposi
 		return err
 	}
 	manifestDigest := sha256.Sum256([]byte(generationID.String()))
-	if _, err := repository.Pool.Exec(ctx, "INSERT INTO "+generation+" (generation_id, reason, state, source_journal_id, coverage_start, coverage_end, manifest_digest, completed_at) VALUES ($1,'initial_cold_start','active',0,$2,$3,$4,$3)", generationID, now.Add(-time.Hour), now.Add(time.Hour), manifestDigest[:]); err != nil {
+	// The generation is only a foreign-key fixture; keep it superseded so
+	// repeated or parallel integration runs never contend on the single active
+	// generation slot.
+	if _, err := repository.Pool.Exec(ctx, "INSERT INTO "+generation+" (generation_id, reason, state, source_journal_id, coverage_start, coverage_end, manifest_digest, completed_at) VALUES ($1,'initial_cold_start','superseded',0,$2,$3,$4,$3)", generationID, now.Add(-time.Hour), now.Add(time.Hour), manifestDigest[:]); err != nil {
 		return err
 	}
 	if _, err := repository.Pool.Exec(ctx, "INSERT INTO "+policy+" (policy_id, scope_id, policy_key, config_digest, selector_digest, sanitized_selector, priority, enabled, effective_from) VALUES ($1,$2,$3,$4,$5,'{}'::jsonb,1,true,$6)", policyID, scopeID, generationID.String(), configDigest[:], selectorDigest[:], now.Add(-time.Hour)); err != nil {
