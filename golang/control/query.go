@@ -261,7 +261,7 @@ func supportedQueryKind(kind llm.QueryKind) bool {
 
 func validateScope(scope llm.RequestContext) error {
 	for name, value := range map[string]string{"tenant": scope.Tenant, "project": scope.Project, "actor": scope.Actor} {
-		if value == "" || len(value) > 256 || strings.TrimSpace(value) != value || strings.IndexByte(value, 0) >= 0 {
+		if value == "" || len(value) > 256 || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
 			return fmt.Errorf("query %s scope is empty or unsafe", name)
 		}
 	}
@@ -269,7 +269,7 @@ func validateScope(scope llm.RequestContext) error {
 		return fmt.Errorf("query scope has too many tags")
 	}
 	for key, value := range scope.Tags {
-		if value == "" || len(key) > 128 || len(value) > 256 || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value || strings.IndexByte(key, 0) >= 0 || strings.IndexByte(value, 0) >= 0 {
+		if value == "" || len(key) > 128 || len(value) > 256 || strings.TrimSpace(key) != key || strings.TrimSpace(value) != value || strings.ContainsAny(key, "\x00\r\n") || strings.ContainsAny(value, "\x00\r\n") {
 			return fmt.Errorf("query scope tag is unsafe")
 		}
 	}

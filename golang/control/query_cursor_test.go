@@ -128,3 +128,39 @@ func TestCursorCodecRejectsTypedNilFilter(t *testing.T) {
 		t.Fatal("typed nil filter was decoded")
 	}
 }
+
+func TestCursorCodecRejectsMalformedTypedRequest(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
+	codec := CursorCodec{Key: []byte("request-validation")}
+	tests := []struct {
+		name  string
+		query QueryRequest
+	}{
+		{
+			name:  "empty tenant",
+			query: QueryRequest{OperationKey: "op", Scope: QueryScope{Project: "project", Actor: "actor"}, Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{}},
+		},
+		{
+			name:  "unsafe actor",
+			query: QueryRequest{OperationKey: "op", Scope: QueryScope{Tenant: "tenant", Project: "project", Actor: "actor\nforged"}, Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{}},
+		},
+		{
+			name:  "invalid page size",
+			query: QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{Page: QueryPage{Size: 1001}}},
+		},
+		{
+			name:  "filter kind mismatch",
+			query: QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryModelInventory, Filter: ProviderStatusQuery{}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := codec.Sign(test.query, "position", now, now); err == nil {
+				t.Fatal("malformed request was signed")
+			}
+			if _, err := codec.Decode(test.query, "invalid", now); err == nil {
+				t.Fatal("malformed request was accepted by Decode")
+			}
+		})
+	}
+}
