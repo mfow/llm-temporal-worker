@@ -1,8 +1,11 @@
 package compaction
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -50,6 +53,88 @@ func TestPrepareRequestIsolatesApplicationSettings(t *testing.T) {
 	}
 	if len(original.Tools) != 1 || original.ToolPolicy.Mode != llm.ToolChoiceRequired || original.Output.Format.Kind != llm.OutputKindJSON {
 		t.Fatalf("source request mutated: %#v", original)
+	}
+}
+
+func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.T) {
+	maxTokens := 4096
+	temperature := 0.2
+	topP := 0.9
+	topK := 20
+	seed := int64(42)
+	stop := []string{"<stop>"}
+	reasoningBudget := 512
+	expiresAt := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	source := llm.Request{
+		APIVersion:   "llm.temporal/v1",
+		OperationKey: "generate-settings",
+		Context: llm.RequestContext{
+			Tenant: "tenant-a", Project: "project-a", Actor: "workflow:settings",
+			Tags: map[string]string{"environment": "test"},
+		},
+		Model:                 "model-1",
+		ServiceClass:          llm.ServiceClassPriority,
+		ServiceClassFallbacks: []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassEconomy},
+		Portability:           llm.PortabilityBestEffort,
+		Instructions: []llm.Instruction{
+			{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "preserve this"},
+			{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "policy"},
+		},
+		Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "prefix"}}}},
+		Tools:      []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
+		Output: &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{
+			Kind: llm.OutputKindJSONSchema, Name: "answer", Description: "typed answer", Strict: true,
+			Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`),
+		}},
+		Sampling: &llm.SamplingSpec{
+			Temperature: &temperature, TopP: &topP, TopK: &topK, Seed: &seed,
+			StopSequences: stop,
+		},
+		Reasoning:    &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &reasoningBudget},
+		Continuation: &llm.Continuation{Handle: "checkpoint-parent", EndpointID: "endpoint-1", Model: "model-1", ExpiresAt: &expiresAt},
+		Extensions:   map[string]json.RawMessage{"client": json.RawMessage(`{"version":1}`)},
+	}
+	originalJSON, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := PrepareRequest(source, "generate-settings/compact", source.Input, DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchangedJSON, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(originalJSON, unchangedJSON) {
+		t.Fatal("PrepareRequest mutated the source Generate settings")
+	}
+	if compact.Model != source.Model || compact.ServiceClass != source.ServiceClass ||
+		!reflect.DeepEqual(compact.ServiceClassFallbacks, source.ServiceClassFallbacks) ||
+		compact.Portability != source.Portability || !reflect.DeepEqual(compact.Context, source.Context) ||
+		!reflect.DeepEqual(compact.Instructions[2:], source.Instructions) ||
+		!reflect.DeepEqual(compact.Sampling, source.Sampling) || !reflect.DeepEqual(compact.Extensions, source.Extensions) {
+		t.Fatal("compaction request did not preserve Generate routing and sampling settings")
+	}
+
+	// The compaction child stores no application settings of its own. A later
+	// Generate starts from the materialized parent settings, so every setting
+	// below must remain available after replacing only the operation and input.
+	following := source
+	following.OperationKey = "generate-settings/after-compact"
+	following.Input = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "summary"}}}}
+	if following.Model != source.Model || following.ServiceClass != source.ServiceClass ||
+		!reflect.DeepEqual(following.ServiceClassFallbacks, source.ServiceClassFallbacks) ||
+		following.Portability != source.Portability || !reflect.DeepEqual(following.Instructions, source.Instructions) ||
+		!reflect.DeepEqual(following.Tools, source.Tools) || !reflect.DeepEqual(following.ToolPolicy, source.ToolPolicy) ||
+		!reflect.DeepEqual(following.Output, source.Output) || !reflect.DeepEqual(following.Sampling, source.Sampling) ||
+		!reflect.DeepEqual(following.Reasoning, source.Reasoning) || !reflect.DeepEqual(following.Continuation, source.Continuation) ||
+		!reflect.DeepEqual(following.Extensions, source.Extensions) {
+		t.Fatal("following Generate did not preserve parent settings")
+	}
+	if compact.ToolPolicy.Mode != llm.ToolChoiceNone || compact.Output == nil || compact.Output.Format.Kind != llm.OutputKindText || compact.Continuation != nil || compact.Reasoning != nil {
+		t.Fatalf("compaction isolation changed the parent settings contract: %#v", compact)
 	}
 }
 
