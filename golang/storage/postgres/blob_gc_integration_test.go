@@ -45,8 +45,21 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET request_inline_ciphertext=NULL, request_key_id=NULL, request_blob_id=$1 WHERE operation_id=$2", operationBlob.BlobID, operationUUID(operation.Operation.ID)); err != nil {
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET request_inline_ciphertext=NULL, request_key_id=NULL, request_blob_id=$1 WHERE operation_id=$2", operationBlob.BlobID, operationUUID(operation.Operation.ID)); err != nil {
 		t.Fatal(err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("operation blob reference update affected %d rows", tag.RowsAffected())
+	}
+	var storedRequestBlob uuid.UUID
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT request_blob_id FROM "+operations+" WHERE operation_id=$1", operationUUID(operation.Operation.ID)).Scan(&storedRequestBlob); err != nil {
+		t.Fatal(err)
+	}
+	if storedRequestBlob != operationBlob.BlobID {
+		t.Fatalf("stored operation blob=%s, want %s", storedRequestBlob, operationBlob.BlobID)
+	}
+	var retainedOperationRef int
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT 1 FROM "+operations+" WHERE request_blob_id=$1 AND (state NOT IN ('completed','definite_failed','canceled') OR retention_expires_at IS NULL OR retention_expires_at > $2)", operationBlob.BlobID, now).Scan(&retainedOperationRef); err != nil {
+		t.Fatalf("operation reference predicate did not match: %v", err)
 	}
 
 	// The fixture checkpoint keeps a blob through its future expiry. Replacing
@@ -56,8 +69,10 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+checkpoints+" SET delta_blob_id=$1, response_blob_id=$1, settings_patch_blob_id=$1 WHERE checkpoint_id=$2", checkpointBlob.BlobID, fixture.checkpointID); err != nil {
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+checkpoints+" SET delta_blob_id=$1, response_blob_id=$1, settings_patch_blob_id=$1 WHERE checkpoint_id=$2", checkpointBlob.BlobID, fixture.checkpointID); err != nil {
 		t.Fatal(err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("checkpoint blob reference update affected %d rows", tag.RowsAffected())
 	}
 
 	providerState, err := fixture.operations.Namespace.Render("checkpoint_provider_state")
@@ -65,8 +80,10 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 		t.Fatal(err)
 	}
 	accountDigest := sha256.Sum256([]byte("account"))
-	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "INSERT INTO "+providerState+" (checkpoint_id, ordinal, provider, endpoint_id, endpoint_account_hmac, region, endpoint_family, model_lineage, state_kind, state_blob_id, state_digest, required, immutable_fork_safe, expires_at) VALUES ($1,0,'fixture','endpoint', $2,'region','family','lineage','opaque',$3,$4,true,true,$5)", fixture.checkpointID, accountDigest[:], providerBlob.BlobID, providerBlob.Digest[:], now.Add(time.Hour)); err != nil {
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "INSERT INTO "+providerState+" (checkpoint_id, ordinal, provider, endpoint_id, endpoint_account_hmac, region, endpoint_family, model_lineage, state_kind, state_blob_id, state_digest, required, immutable_fork_safe, expires_at) VALUES ($1,0,'fixture','endpoint', $2,'region','family','lineage','opaque',$3,$4,true,true,$5)", fixture.checkpointID, accountDigest[:], providerBlob.BlobID, providerBlob.Digest[:], now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("provider-state blob reference insert affected %d rows", tag.RowsAffected())
 	}
 
 	// Publish a normal cache entry, then move its response to a blob. This uses
@@ -86,8 +103,10 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET response_inline_ciphertext=NULL, response_key_id=NULL, response_blob_id=$1, state='ready' WHERE cache_entry_id=$2", cacheBlob.BlobID, entry.ID); err != nil {
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET response_inline_ciphertext=NULL, response_key_id=NULL, response_blob_id=$1, state='ready' WHERE cache_entry_id=$2", cacheBlob.BlobID, entry.ID); err != nil {
 		t.Fatal(err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("cache blob reference update affected %d rows", tag.RowsAffected())
 	}
 
 	result, err := maintenance.MarkExpiredBlobsEligible(fixture.ctx, now, 100)
