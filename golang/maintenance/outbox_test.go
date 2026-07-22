@@ -2,7 +2,9 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,21 @@ func testBlobEvent(t *testing.T, id string, at time.Time) Event {
 	return event
 }
 
+func TestNormalizeSafePayloadBoundsAndCanonicalizes(t *testing.T) {
+	canonical, err := NormalizeSafePayload(json.RawMessage(`{"z":2,"a":{"b":1,"a":0}}`))
+	if err != nil || string(canonical) != `{"a":{"a":0,"b":1},"z":2}` {
+		t.Fatalf("canonical payload=%s err=%v", canonical, err)
+	}
+	for _, raw := range []string{`{"duplicate":1,"duplicate":2}`, `[1]`, `null`, `{"a":`, `{"a":1} trailing`} {
+		if _, err := NormalizeSafePayload(json.RawMessage(raw)); err == nil {
+			t.Fatalf("payload %q unexpectedly accepted", raw)
+		}
+	}
+	if _, err := NormalizeSafePayload(json.RawMessage(`{"payload":"` + strings.Repeat("x", MaxSafePayloadBytes) + `"}`)); err == nil {
+		t.Fatal("oversized payload unexpectedly accepted")
+	}
+}
+
 func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	event := testBlobEvent(t, "event-1", at)
@@ -26,6 +43,14 @@ func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	}
 	if err := store.Publish(context.Background(), event); err != nil {
 		t.Fatalf("idempotent publish failed: %v", err)
+	}
+	// JSON object ordering is not part of the dedupe identity. The store keeps
+	// one canonical representation so retries from independently encoded
+	// callers remain idempotent.
+	reordered := event
+	reordered.SafePayload = json.RawMessage(`{ "blob_id": "blob-event-1" }`)
+	if err := store.Publish(context.Background(), reordered); err != nil {
+		t.Fatalf("equivalent payload replay was not idempotent: %v", err)
 	}
 	conflict := event
 	conflict.ID = "event-2"

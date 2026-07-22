@@ -32,9 +32,13 @@ handled in their own transaction before a physical delete is enabled.
 ## Outbox lifecycle
 
 Cleanup publishes a safe event in the same PostgreSQL transaction that marks a
-cache entry tombstoned. `Event` payloads are valid JSON containing identifiers
-or encrypted locators only; prompt/response bytes and credentials are never
-accepted by the contract. `(event_kind, dedupe_key)` is idempotent.
+cache entry tombstoned. `Event` payloads are canonical JSON objects containing
+identifiers or encrypted locators only; duplicate keys and payloads larger than
+64 KiB are rejected. Prompt/response bytes and credentials are never accepted
+by the contract. `(event_kind, dedupe_key)` is idempotent, including retries
+whose JSON object key order or whitespace differs. Aggregate type, aggregate
+ID, and canonical payload must agree with the original event; a conflicting
+dedupe key fails closed.
 
 Workers claim at most the requested batch with `FOR UPDATE SKIP LOCKED` in a
 short transaction. Pending/failed rows whose `available_at` has arrived and

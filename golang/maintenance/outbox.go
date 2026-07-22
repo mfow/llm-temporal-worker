@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,16 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/mfow/llm-temporal-worker/golang/llm"
+)
+
+const (
+	// MaxSafePayloadBytes bounds the JSON that can be persisted in an outbox
+	// row. Maintenance payloads carry identifiers or encrypted locators, never
+	// prompts, responses, or provider credentials.
+	MaxSafePayloadBytes = 64 << 10
+	maxSafePayloadDepth = 32
 )
 
 var (
@@ -73,6 +84,21 @@ type Event struct {
 	CompletedAt    time.Time
 }
 
+// NormalizeSafePayload validates and canonicalizes one outbox payload. JSONB
+// would otherwise silently discard duplicate keys and make equivalent retry
+// payloads compare differently in storage-neutral adapters.
+func NormalizeSafePayload(raw json.RawMessage) (json.RawMessage, error) {
+	canonical, err := llm.CanonicalJSONWithLimits(raw, MaxSafePayloadBytes, maxSafePayloadDepth)
+	if err != nil {
+		return nil, fmt.Errorf("maintenance outbox payload: %w", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(canonical, &object); err != nil || object == nil {
+		return nil, errors.New("maintenance outbox payload must be a JSON object")
+	}
+	return canonical, nil
+}
+
 func (event Event) Validate() error {
 	if event.ID == "" || event.AggregateType == "" || event.AggregateID == "" {
 		return errors.New("maintenance outbox ID and aggregate identity are required")
@@ -90,12 +116,8 @@ func (event Event) Validate() error {
 	if event.DedupeKey == [32]byte{} {
 		return errors.New("maintenance outbox dedupe key is required")
 	}
-	if len(event.SafePayload) == 0 || !json.Valid(event.SafePayload) {
-		return errors.New("maintenance outbox payload must be valid JSON")
-	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(event.SafePayload, &object); err != nil || object == nil {
-		return errors.New("maintenance outbox payload must be a JSON object")
+	if _, err := NormalizeSafePayload(event.SafePayload); err != nil {
+		return err
 	}
 	if event.AttemptCount < 0 {
 		return errors.New("maintenance outbox attempt count must not be negative")
@@ -172,6 +194,11 @@ type InMemoryOutbox struct {
 func NewInMemoryOutbox(events []Event) (*InMemoryOutbox, error) {
 	store := &InMemoryOutbox{events: make(map[string]Event, len(events))}
 	for _, event := range events {
+		canonical, err := NormalizeSafePayload(event.SafePayload)
+		if err != nil {
+			return nil, err
+		}
+		event.SafePayload = canonical
 		if err := event.Validate(); err != nil {
 			return nil, err
 		}
@@ -187,6 +214,11 @@ func (store *InMemoryOutbox) Publish(ctx context.Context, event Event) error {
 	if store == nil {
 		return errors.New("maintenance outbox store is nil")
 	}
+	canonical, err := NormalizeSafePayload(event.SafePayload)
+	if err != nil {
+		return err
+	}
+	event.SafePayload = canonical
 	if err := event.Validate(); err != nil {
 		return err
 	}
@@ -205,7 +237,7 @@ func (store *InMemoryOutbox) Publish(ctx context.Context, event Event) error {
 		if existing.Kind != event.Kind || existing.DedupeKey != event.DedupeKey {
 			continue
 		}
-		if existing.AggregateID != event.AggregateID || string(existing.SafePayload) != string(event.SafePayload) {
+		if existing.AggregateType != event.AggregateType || existing.AggregateID != event.AggregateID || !bytes.Equal(existing.SafePayload, event.SafePayload) {
 			return ErrOutboxConflict
 		}
 		return nil
