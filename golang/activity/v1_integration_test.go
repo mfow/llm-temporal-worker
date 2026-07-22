@@ -62,6 +62,24 @@ func (*deadlineMaterializerProbe) MaterializeHandle(ctx context.Context, _ strin
 	return state.MaterializedState{}, fmt.Errorf("load checkpoint: %w", ctx.Err())
 }
 
+type canceledV1RuntimeProbe struct {
+	entered chan struct{}
+}
+
+func (probe *canceledV1RuntimeProbe) GenerateV1(ctx context.Context, _ llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
+	close(probe.entered)
+	<-ctx.Done()
+	return llm.GenerateResponseV1{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetrySameOperation, "provider canceled")
+}
+
+func (*canceledV1RuntimeProbe) CompactV1(context.Context, llm.CompactRequestV1) (llm.CompactResponseV1, error) {
+	return llm.CompactResponseV1{}, nil
+}
+
+func (*canceledV1RuntimeProbe) QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return llm.QueryResponseV1{}, nil
+}
+
 func (probe *materializingMaterializerProbe) MaterializeHandle(_ context.Context, scopeID, handle string, _ state.MaterializeLimits) (state.MaterializedState, error) {
 	probe.gotScope = scopeID
 	probe.gotHandle = handle
@@ -275,6 +293,23 @@ func TestMaterializingV1RuntimeDeadlineUsesRetryableTemporalError(t *testing.T) 
 	}
 	if details.Code != string(provider.CodeDeadlineExceeded) || details.Phase != string(provider.PhaseStateLoad) {
 		t.Fatalf("safe details = %#v, want state-load deadline", details)
+	}
+}
+
+func TestV1RuntimeCancellationTakesPrecedenceOverProviderError(t *testing.T) {
+	runtime := &canceledV1RuntimeProbe{entered: make(chan struct{})}
+	activities := &Activities{V1Runtime: runtime}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := activities.GenerateV1(ctx, validGenerateV1Request())
+		result <- err
+	}()
+	<-runtime.entered
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("GenerateV1 error = %v, want context.Canceled precedence", err)
 	}
 }
 
