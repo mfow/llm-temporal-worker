@@ -3,10 +3,13 @@ package activity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
@@ -206,5 +209,80 @@ func TestMaterializingV1RuntimeMapsScopeResolverFailure(t *testing.T) {
 	}
 	if _, err := wrapped.GenerateV1(context.Background(), request); err == nil {
 		t.Fatal("GenerateV1 unexpectedly accepted scope resolver failure")
+	}
+}
+
+func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
+	parent := llm.CheckpointHandle("parent")
+	request := validGenerateV1Request()
+	request.Parent = &parent
+	wrapper := &MaterializingV1Runtime{
+		Runtime:      &materializingRuntimeProbe{events: new([]string)},
+		Materializer: &materializingMaterializerProbe{events: new([]string), err: fmt.Errorf("load checkpoint: %w", context.Canceled)},
+		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+	}
+	if _, err := (&Activities{V1Runtime: wrapper}).GenerateV1(context.Background(), request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GenerateV1 error = %v, want context.Canceled", err)
+	}
+}
+
+func TestMapMaterializationDeadlineRetainsRetryableStateLoad(t *testing.T) {
+	err := mapMaterializationError(fmt.Errorf("read checkpoint: %w", context.DeadlineExceeded))
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("mapped error = %T %v, want provider.Error", err, err)
+	}
+	if providerErr.Code != provider.CodeDeadlineExceeded || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetrySameOperation {
+		t.Fatalf("mapped error = %#v, want retryable state-load deadline", providerErr)
+	}
+}
+
+func TestV1ActivityPayloadDoesNotScaleWithAncestorLineage(t *testing.T) {
+	limits := PayloadLimits{MaxInlineBytes: 1 << 20}
+	var requestBytes, responseBytes []int
+	for _, turns := range []int{1, 100, 10_000} {
+		events := []string{}
+		runtime := &materializingRuntimeProbe{events: &events}
+		materializer := &materializingMaterializerProbe{events: &events, result: validMaterializedState("parent")}
+		materializer.result.Items = make([]llm.Item, turns)
+		for index := range materializer.result.Items {
+			materializer.result.Items[index] = llm.Message{
+				Actor:   llm.ActorHuman,
+				Content: []llm.Part{llm.TextPart{Text: fmt.Sprintf("ancestor-%05d", index)}},
+			}
+		}
+		wrapped := &MaterializingV1Runtime{
+			Runtime: runtime, Materializer: materializer,
+			Scope: func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		}
+		parent := llm.CheckpointHandle("parent")
+		request := validGenerateV1Request()
+		request.Parent = &parent
+		encodedRequest, err := MarshalGenerateV1(request, limits)
+		if err != nil {
+			t.Fatalf("turns=%d marshal request: %v", turns, err)
+		}
+		response, err := (&Activities{V1Runtime: wrapped, PayloadLimits: limits}).GenerateV1(context.Background(), request)
+		if err != nil {
+			t.Fatalf("turns=%d GenerateV1: %v", turns, err)
+		}
+		encodedResponse, err := MarshalGenerateResponseV1(*response, limits)
+		if err != nil {
+			t.Fatalf("turns=%d marshal response: %v", turns, err)
+		}
+		if strings.Contains(string(encodedRequest), "ancestor-") || strings.Contains(string(encodedResponse), "ancestor-") {
+			t.Fatalf("turns=%d leaked ancestor transcript into Activity payload", turns)
+		}
+		if got := len(runtime.generateSeen.Items); got != turns {
+			t.Fatalf("turns=%d materialized item count=%d, want %d", turns, got, turns)
+		}
+		requestBytes = append(requestBytes, len(encodedRequest))
+		responseBytes = append(responseBytes, len(encodedResponse))
+	}
+	if !reflect.DeepEqual(requestBytes, []int{requestBytes[0], requestBytes[0], requestBytes[0]}) {
+		t.Fatalf("request payload sizes scaled with ancestor lineage: %v", requestBytes)
+	}
+	if !reflect.DeepEqual(responseBytes, []int{responseBytes[0], responseBytes[0], responseBytes[0]}) {
+		t.Fatalf("response payload sizes scaled with ancestor lineage: %v", responseBytes)
 	}
 }

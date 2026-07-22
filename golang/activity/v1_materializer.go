@@ -128,6 +128,16 @@ func mapMaterializationError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// Storage adapters frequently wrap context errors with the checkpoint
+	// operation they were performing. Preserve cancellation at this boundary so
+	// Temporal observes an Activity cancellation rather than retrying a request
+	// whose caller has already stopped waiting.
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetrySameOperation, "checkpoint materialization deadline exceeded")
+	}
 	if errors.Is(err, state.ErrNotFound) || errors.Is(err, state.ErrTenantMismatch) || errors.Is(err, state.ErrExpired) {
 		return provider.NewError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "checkpoint could not be materialized")
 	}

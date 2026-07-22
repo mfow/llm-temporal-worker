@@ -88,6 +88,15 @@ Temporal's service limits. Larger inputs and completed responses use immutable
 `BlobRef` values containing store, locator, digest, byte length, media type, and
 expiry. The worker verifies the digest after reading.
 
+Checkpoint-aware Generate and Compact requests carry only an opaque parent
+handle. The Activity adapter materializes ancestor deltas inside the worker,
+then passes the replayed state to the runtime; ancestor items are never copied
+into the Temporal request or response. This keeps Activity I/O bounded and
+independent of whether a lineage contains one turn or thousands. Cancellation
+and deadline errors from state loading retain their Temporal cancellation or
+retry semantics instead of being reported as an unrelated generic state
+failure.
+
 Installations that require history confidentiality configure a Temporal Payload
 Codec outside the worker. The worker's contract remains codec-agnostic and does
 not claim that a Data Converter alone encrypts data.
