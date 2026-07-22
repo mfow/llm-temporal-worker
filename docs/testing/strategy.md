@@ -162,6 +162,17 @@ pinning, and legal ledger transitions.
 Clocks, ID generators, and endpoint health are injected. Tests never depend on
 wall time, map iteration, random route order, or external pricing.
 
+The storage-neutral durable checkpoint seam also has an offline recovery proof:
+`state.TestDurableCheckpointMaterializerReplaysThreeWayForkAfterRestart` loads
+one persisted parent and three immutable children, materializes one branch,
+reconstructs a replacement materializer, and replays the other branches. It
+asserts each branch retains its own delta/response and parent lineage. This
+proves restart-safe replay and fork isolation without PostgreSQL, Redis,
+Temporal, provider credentials, or blob-network access. It is deliberately
+separate from the live backup/restore and concurrent database proofs in the
+forkable conversation-state plan; passing this test does not claim those
+production recovery gates are complete.
+
 ### Adapter contract tests
 
 Every adapter package runs the same suite:
