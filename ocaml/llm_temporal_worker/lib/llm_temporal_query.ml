@@ -93,10 +93,10 @@ let result_kind = function
   | Budget_status_result _ -> "budget_status"
   | Spend_summary_result _ -> "spend_summary"
 
-let validate_response_cursor : type a. a t -> query_response -> (unit, Temporal.Error.t) result =
-  fun query response ->
+let validate_next_cursor : type a. a t -> Query_cursor.t option -> (unit, Temporal.Error.t) result =
+  fun query next_cursor ->
     let expected = expected_cursor_kind query in
-    match query, response.next_cursor with
+    match query, next_cursor with
     | (Budget_status _ | Spend_summary _), Some _ -> Error (cursor_forbidden expected)
     | (_, None) -> Ok ()
     | (_, Some cursor) ->
@@ -104,6 +104,9 @@ let validate_response_cursor : type a. a t -> query_response -> (unit, Temporal.
          | Some actual when actual = expected -> Ok ()
          | Some actual -> Error (cursor_mismatch expected actual)
          | None -> Error (cursor_missing_kind expected))
+
+let validate_response_cursor : type a. a t -> query_response -> (unit, Temporal.Error.t) result =
+  fun query response -> validate_next_cursor query response.next_cursor
 
 let response_metadata (response : query_response) value =
   { value;
@@ -114,6 +117,25 @@ let response_metadata (response : query_response) value =
     complete = response.complete;
     next_cursor = response.next_cursor;
     cost = response.cost }
+
+let complete_with_cursor () =
+  Temporal.Error.codec
+    ~message:"query response cannot be complete while next_cursor is present"
+
+let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
+  fun query response ->
+    match validate_next_cursor query response.next_cursor with
+    | Error error -> Error error
+    | Ok () ->
+        match response.next_cursor with
+        | None -> Ok None
+        | Some _cursor when response.complete -> Error (complete_with_cursor ())
+        | Some cursor ->
+            match query with
+            | Provider_status filter -> Ok (Some (Provider_status { filter with cursor = Some cursor }))
+            | Model_inventory filter -> Ok (Some (Model_inventory { filter with cursor = Some cursor }))
+            | Credit_status filter -> Ok (Some (Credit_status { filter with cursor = Some cursor }))
+            | Budget_status _ | Spend_summary _ -> Ok None
 
 let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t) result =
   fun query response ->

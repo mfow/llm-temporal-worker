@@ -91,6 +91,22 @@ let () =
    | _ -> failwith "query cursor was not retained");
 
   let provider_cursor = tagged_cursor Query_cursor.Provider_status "provider:page-3" in
+  let first_page = { (run provider) with complete = false; next_cursor = Some provider_cursor } in
+  (match Query.next provider first_page with
+   | Ok (Some (Query.Provider_status { cursor = Some next; _ })) when next = provider_cursor -> ()
+   | Ok _ -> failwith "typed pagination dropped the provider cursor"
+   | Error error -> failf "unexpected pagination error: %s" (Temporal.Error.message error));
+  (match Query.next provider { first_page with complete = true } with
+   | Error error when String.equal (Temporal.Error.message error)
+                         "query response cannot be complete while next_cursor is present" -> ()
+   | Error error -> failf "unexpected complete-page error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "complete query unexpectedly exposed a next page");
+  (match Query.next budget { (run budget) with complete = false; next_cursor = Some provider_cursor } with
+   | Error error when String.equal (Temporal.Error.message error)
+                         "query response.budget_status must not include next_cursor" -> ()
+   | Error error -> failf "unexpected snapshot pagination error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "snapshot query unexpectedly exposed a next page");
+
   let wrong_kind =
     Query.Model_inventory
       { (model_filter ()) with cursor = Some provider_cursor }

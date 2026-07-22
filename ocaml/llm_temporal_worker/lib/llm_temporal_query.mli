@@ -34,6 +34,13 @@ val to_envelope :
 val of_response :
   'a t -> query_response -> ('a response, Temporal.Error.t) result
 
+(** Build the next page from a successful response without losing the GADT's
+    result type.  Snapshot queries return [Ok None]; paginated queries return
+    [Ok (Some query)] when the worker supplies a cursor.  Cursor kind and
+    snapshot invariants are checked again so callers using a custom
+    dispatcher cannot bypass the protocol boundary. *)
+val next : 'a t -> 'a response -> ('a t option, Temporal.Error.t) result
+
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
   (query_envelope, query_response) Temporal.Activity.t ->
