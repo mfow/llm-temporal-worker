@@ -156,6 +156,125 @@ func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, n
 	return result, nil
 }
 
+// PruneExpiredProviderStatus removes bounded, expired status-history rows
+// while preserving the row referenced by every current route projection. The
+// candidate rows are locked with SKIP LOCKED before deletion; the foreign-key
+// reference therefore cannot be deleted underneath a concurrent projection
+// update. Current projections remain available for status queries.
+func (repository MaintenanceRepository) PruneExpiredProviderStatus(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
+	var result maintenance.RetentionResult
+	if err := repository.validate(); err != nil {
+		return result, err
+	}
+	if err := validateBatch(now, limit); err != nil {
+		return result, err
+	}
+	if expiresBefore.IsZero() || expiresBefore.After(now) {
+		return result, errors.New("provider status expiry cutoff must not be after maintenance time")
+	}
+	eventsTable, err := repository.Namespace.Render("provider_status_events")
+	if err != nil {
+		return result, err
+	}
+	routesTable, err := repository.Namespace.Render("provider_route_status")
+	if err != nil {
+		return result, err
+	}
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "SELECT e.event_id FROM "+eventsTable+" e WHERE e.expires_at < $1 AND NOT EXISTS (SELECT 1 FROM "+routesTable+" r WHERE r.last_event_id = e.event_id) ORDER BY e.expires_at, e.event_id LIMIT $2 FOR UPDATE OF e SKIP LOCKED", expiresBefore, limit)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("claim expired provider status events: %w", err))
+		}
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan expired provider status event: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return redactPostgresError(fmt.Errorf("iterate expired provider status events: %w", err))
+		}
+		rows.Close()
+		result.Examined = len(ids)
+		if len(ids) == 0 {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+eventsTable+" WHERE event_id = ANY($1::bigint[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired provider status events: %w", err))
+		}
+		result.Deleted = len(ids)
+		return nil
+	})
+	if err != nil {
+		return maintenance.RetentionResult{}, err
+	}
+	return result, nil
+}
+
+// PruneExpiredInventory removes bounded, expired inventory history and their
+// model rows, but never removes the latest snapshot for an endpoint account
+// epoch (even if that snapshot is itself expired). Parent rows are locked
+// before children are deleted so a concurrent model insert cannot race the
+// foreign-key cleanup.
+func (repository MaintenanceRepository) PruneExpiredInventory(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
+	var result maintenance.RetentionResult
+	if err := repository.validate(); err != nil {
+		return result, err
+	}
+	if err := validateBatch(now, limit); err != nil {
+		return result, err
+	}
+	if expiresBefore.IsZero() || expiresBefore.After(now) {
+		return result, errors.New("provider inventory expiry cutoff must not be after maintenance time")
+	}
+	snapshotsTable, err := repository.Namespace.Render("provider_inventory_snapshots")
+	if err != nil {
+		return result, err
+	}
+	modelsTable, err := repository.Namespace.Render("provider_inventory_models")
+	if err != nil {
+		return result, err
+	}
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "SELECT s.inventory_snapshot_id FROM "+snapshotsTable+" s WHERE s.expires_at < $1 AND EXISTS (SELECT 1 FROM "+snapshotsTable+" newer WHERE newer.config_digest = s.config_digest AND newer.provider = s.provider AND newer.endpoint_id = s.endpoint_id AND newer.endpoint_account_hmac = s.endpoint_account_hmac AND (newer.observed_at > s.observed_at OR (newer.observed_at = s.observed_at AND newer.inventory_snapshot_id > s.inventory_snapshot_id))) ORDER BY s.expires_at, s.inventory_snapshot_id LIMIT $2 FOR UPDATE OF s SKIP LOCKED", expiresBefore, limit)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("claim expired provider inventory snapshots: %w", err))
+		}
+		defer rows.Close()
+		var ids []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan expired provider inventory snapshot: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return redactPostgresError(fmt.Errorf("iterate expired provider inventory snapshots: %w", err))
+		}
+		rows.Close()
+		result.Examined = len(ids)
+		if len(ids) == 0 {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+modelsTable+" WHERE inventory_snapshot_id = ANY($1::uuid[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired provider inventory models: %w", err))
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+snapshotsTable+" WHERE inventory_snapshot_id = ANY($1::uuid[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired provider inventory snapshots: %w", err))
+		}
+		result.Deleted = len(ids)
+		return nil
+	})
+	if err != nil {
+		return maintenance.RetentionResult{}, err
+	}
+	return result, nil
+}
+
 // PublishOutbox inserts idempotent safe intent. Duplicate event_kind/dedupe
 // pairs are successful no-ops, so a retry cannot enqueue duplicate deletion.
 func (repository MaintenanceRepository) PublishOutbox(ctx context.Context, event maintenance.Event) error {
