@@ -27,6 +27,7 @@ func TestRenderRoleGrantsUsesLeastPrivilegeRuntimeCatalog(t *testing.T) {
 		`GRANT UPDATE (expires_at) ON TABLE "private"."tenant_blobs" TO llmtw_runtime;`,
 		`GRANT SELECT, INSERT, UPDATE ON TABLE "private"."tenant_operations" TO llmtw_runtime;`,
 		`GRANT SELECT (reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE ON TABLE "private"."tenant_budget_buckets" TO llmtw_runtime;`,
+		`GRANT SELECT (operation_id, window_id, state, reserved_cost_usd, reservation_revision), INSERT, UPDATE ON TABLE "private"."tenant_operation_budget_reservations" TO llmtw_runtime;`,
 		`GRANT UPDATE (response_digest) ON TABLE "private"."tenant_query_executions" TO llmtw_runtime;`,
 		`GRANT SELECT ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
 		`GRANT INSERT, UPDATE, DELETE ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
