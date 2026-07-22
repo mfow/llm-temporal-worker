@@ -188,7 +188,7 @@ WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND c.relname = ANY($2::text[])
 	}
 	for _, name := range expected {
 		if _, ok := found[name]; !ok {
-			return fmt.Errorf("PostgreSQL worker table %q is missing", namespace.TablePrefix+name)
+			return fmt.Errorf("PostgreSQL worker table %q is missing", name)
 		}
 	}
 	return nil
