@@ -123,7 +123,7 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 	// Repository validation and graph replay must use one clock. Without this,
 	// a test or caller-provided materializer clock can disagree with the graph's
 	// wall clock and incorrectly reject an otherwise live checkpoint.
-	graph.Now = materializer.clock
+	graph.Now = func() time.Time { return now }
 	for index := len(path) - 1; index >= 0; index-- {
 		value := path[index]
 		checkpoint := Checkpoint{
