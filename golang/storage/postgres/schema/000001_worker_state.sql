@@ -1408,7 +1408,9 @@ CREATE TABLE __SCHEMA__.__PREFIX__maintenance_outbox (
     lease_token uuid,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at timestamptz,
-    UNIQUE (event_kind, dedupe_key)
+    UNIQUE (event_kind, dedupe_key),
+    CHECK (state <> 'processing' OR (lease_expires_at IS NOT NULL AND lease_token IS NOT NULL)),
+    CHECK (state = 'processing' OR lease_expires_at IS NULL)
 );
 
 CREATE INDEX __PREFIX__maintenance_outbox_ready_idx
