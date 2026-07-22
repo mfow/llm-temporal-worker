@@ -39,37 +39,37 @@ type BlobGCResult struct {
 // shared by eligibility and claim queries.  Tombstoned cache rows are
 // logically dead; all active/retained operation, checkpoint, provider-state,
 // and cache paths continue to fence physical deletion.
-func blobReferenceFreeSQL(operations, checkpoints, providerState, cacheEntries, cacheUses, cacheFills string) string {
+func blobReferenceFreeSQL(cutoffPlaceholder, operations, checkpoints, providerState, cacheEntries, cacheUses, cacheFills string) string {
 	return "NOT EXISTS (SELECT 1 FROM " + operations + " o" +
 		" WHERE (o.request_blob_id = b.blob_id OR o.result_blob_id = b.blob_id)" +
 		" AND (o.state NOT IN ('completed', 'definite_failed', 'canceled')" +
-		" OR o.retention_expires_at IS NULL OR o.retention_expires_at > $1))" +
+		" OR o.retention_expires_at IS NULL OR o.retention_expires_at > " + cutoffPlaceholder + "))" +
 		" AND NOT EXISTS (SELECT 1 FROM " + checkpoints + " cp" +
 		" WHERE (cp.delta_blob_id = b.blob_id OR cp.response_blob_id = b.blob_id" +
 		" OR cp.settings_patch_blob_id = b.blob_id OR cp.materialized_snapshot_blob_id = b.blob_id)" +
-		" AND cp.expires_at > $1)" +
+		" AND cp.expires_at > " + cutoffPlaceholder + ")" +
 		" AND NOT EXISTS (SELECT 1 FROM " + providerState + " ps" +
 		" WHERE ps.state_blob_id = b.blob_id" +
-		" AND (ps.expires_at IS NULL OR ps.expires_at > $1))" +
+		" AND (ps.expires_at IS NULL OR ps.expires_at > " + cutoffPlaceholder + "))" +
 		" AND NOT EXISTS (SELECT 1 FROM " + cacheEntries + " c" +
 		" WHERE c.response_blob_id = b.blob_id AND c.state = 'ready')" +
 		" AND NOT EXISTS (SELECT 1 FROM " + cacheEntries + " c" +
 		" JOIN " + operations + " o ON o.cache_entry_id = c.cache_entry_id" +
 		" WHERE c.response_blob_id = b.blob_id" +
 		" AND (o.state NOT IN ('completed', 'definite_failed', 'canceled')" +
-		" OR o.retention_expires_at IS NULL OR o.retention_expires_at > $1))" +
+		" OR o.retention_expires_at IS NULL OR o.retention_expires_at > " + cutoffPlaceholder + "))" +
 		" AND NOT EXISTS (SELECT 1 FROM " + cacheEntries + " c" +
 		" JOIN " + checkpoints + " cp ON cp.origin_cache_entry_id = c.cache_entry_id" +
-		" WHERE c.response_blob_id = b.blob_id AND cp.expires_at > $1)" +
+		" WHERE c.response_blob_id = b.blob_id AND cp.expires_at > " + cutoffPlaceholder + ")" +
 		" AND NOT EXISTS (SELECT 1 FROM " + cacheUses + " u" +
 		" JOIN " + operations + " o ON o.operation_id = u.operation_id" +
 		" JOIN " + cacheEntries + " c ON c.cache_entry_id = u.cache_entry_id" +
 		" WHERE c.response_blob_id = b.blob_id" +
 		" AND (o.state NOT IN ('completed', 'definite_failed', 'canceled')" +
-		" OR o.retention_expires_at IS NULL OR o.retention_expires_at > $1))" +
+		" OR o.retention_expires_at IS NULL OR o.retention_expires_at > " + cutoffPlaceholder + "))" +
 		" AND NOT EXISTS (SELECT 1 FROM " + cacheFills + " f" +
 		" JOIN " + cacheEntries + " c ON c.cache_entry_id = f.cache_entry_id" +
-		" WHERE c.response_blob_id = b.blob_id AND f.state = 'filling' AND f.lease_expires_at > $1)"
+		" WHERE c.response_blob_id = b.blob_id AND f.state = 'filling' AND f.lease_expires_at > " + cutoffPlaceholder + ")"
 }
 
 func (repository MaintenanceRepository) blobGCTables() (map[string]string, error) {
@@ -100,18 +100,17 @@ func (repository MaintenanceRepository) MarkExpiredBlobsEligible(ctx context.Con
 	if err != nil {
 		return result, err
 	}
-	refs := blobReferenceFreeSQL(tables["operations"], tables["conversation_checkpoints"], tables["checkpoint_provider_state"], tables["response_cache_entries"], tables["response_cache_uses"], tables["response_cache_fills"])
+	refs := blobReferenceFreeSQL("$1", tables["operations"], tables["conversation_checkpoints"], tables["checkpoint_provider_state"], tables["response_cache_entries"], tables["response_cache_uses"], tables["response_cache_fills"])
 	candidateQuery := "SELECT b.blob_id FROM " + tables["blobs"] + " b" +
 		" WHERE b.deletion_state = 'retained' AND b.expires_at IS NOT NULL AND b.expires_at <= $1" +
 		" ORDER BY b.expires_at, b.blob_id LIMIT $2 FOR UPDATE OF b SKIP LOCKED"
-	refQuery := "SELECT 1 FROM " + tables["blobs"] + " b WHERE b.blob_id = $2 AND " + refs
+	refQuery := "SELECT EXISTS (SELECT 1 FROM " + tables["blobs"] + " b WHERE b.blob_id = $2 AND " + refs + ")"
 	updateQuery := "UPDATE " + tables["blobs"] + " SET deletion_state = 'eligible' WHERE blob_id = $1 AND deletion_state = 'retained'"
 	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, candidateQuery, now, limit)
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("mark expired blobs eligible: %w", err))
 		}
-		defer rows.Close()
 		var candidates []uuid.UUID
 		for rows.Next() {
 			var id uuid.UUID
@@ -120,17 +119,19 @@ func (repository MaintenanceRepository) MarkExpiredBlobsEligible(ctx context.Con
 			}
 			candidates = append(candidates, id)
 		}
+		rows.Close()
 		if err := rows.Err(); err != nil {
 			return redactPostgresError(fmt.Errorf("iterate eligible blobs: %w", err))
 		}
 		for _, id := range candidates {
 			result.Examined++
-			var retained int
-			if err := tx.QueryRow(ctx, refQuery, now, id).Scan(&retained); err == nil {
+			var free bool
+			if err := tx.QueryRow(ctx, refQuery, now, id).Scan(&free); err != nil {
+				return redactPostgresError(fmt.Errorf("recheck blob references: %w", err))
+			}
+			if !free {
 				result.Skipped++
 				continue
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				return redactPostgresError(fmt.Errorf("recheck blob references: %w", err))
 			}
 			updated, err := tx.Exec(ctx, updateQuery, id)
 			if err != nil {
@@ -160,7 +161,7 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 	if err != nil {
 		return nil, err
 	}
-	refs := blobReferenceFreeSQL(tables["operations"], tables["conversation_checkpoints"], tables["checkpoint_provider_state"], tables["response_cache_entries"], tables["response_cache_uses"], tables["response_cache_fills"])
+	refs := blobReferenceFreeSQL("$2", tables["operations"], tables["conversation_checkpoints"], tables["checkpoint_provider_state"], tables["response_cache_entries"], tables["response_cache_uses"], tables["response_cache_fills"])
 	statePredicate := "b.deletion_state = 'eligible'"
 	var args []any
 	if len(ids) > 0 {
@@ -174,7 +175,7 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 	}
 	candidateQuery := "SELECT b.blob_id FROM " + tables["blobs"] + " b WHERE " + statePredicate +
 		" ORDER BY b.expires_at NULLS LAST, b.blob_id LIMIT " + limitArg + " FOR UPDATE OF b SKIP LOCKED"
-	refQuery := "SELECT 1 FROM " + tables["blobs"] + " b WHERE b.blob_id = $2 AND " + refs
+	refQuery := "SELECT EXISTS (SELECT 1 FROM " + tables["blobs"] + " b WHERE b.blob_id = $1 AND " + refs + ")"
 	updateQuery := "UPDATE " + tables["blobs"] + " SET deletion_state = 'deleting' WHERE blob_id = $1 AND deletion_state IN ('retained', 'eligible') RETURNING blob_id, scope_id, store_id, sha256, byte_length, media_type, expires_at, created_at, deletion_state, locator_key_id, locator_ciphertext, encryption_context_digest"
 	var claims []BlobDeletionClaim
 	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
@@ -182,7 +183,6 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("claim blob deletion: %w", err))
 		}
-		defer rows.Close()
 		var candidates []uuid.UUID
 		for rows.Next() {
 			var id uuid.UUID
@@ -191,15 +191,17 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 			}
 			candidates = append(candidates, id)
 		}
+		rows.Close()
 		if err := rows.Err(); err != nil {
 			return redactPostgresError(fmt.Errorf("iterate blob deletion candidates: %w", err))
 		}
 		for _, id := range candidates {
-			var retained int
-			if err := tx.QueryRow(ctx, refQuery, now, id).Scan(&retained); err == nil {
-				continue
-			} else if !errors.Is(err, pgx.ErrNoRows) {
+			var free bool
+			if err := tx.QueryRow(ctx, refQuery, id, now).Scan(&free); err != nil {
 				return redactPostgresError(fmt.Errorf("recheck blob references before deletion: %w", err))
+			}
+			if !free {
+				continue
 			}
 			claim, err := scanBlobDeletionClaim(tx.QueryRow(ctx, updateQuery, id))
 			if errors.Is(err, pgx.ErrNoRows) {
