@@ -43,6 +43,8 @@ type fakeBudgetEventRedis struct {
 	appendArgs *redisclient.XAddArgs
 	appendID   string
 	appendErr  error
+	infoValue  *redisclient.XInfoStream
+	infoErr    error
 	readArgs   *redisclient.XReadArgs
 	readValue  []redisclient.XStream
 	readErr    error
@@ -52,6 +54,13 @@ func (fake *fakeBudgetEventRedis) XAdd(_ context.Context, args *redisclient.XAdd
 	copyArgs := *args
 	fake.appendArgs = &copyArgs
 	return redisclient.NewStringResult(fake.appendID, fake.appendErr)
+}
+
+func (fake *fakeBudgetEventRedis) XInfoStream(_ context.Context, _ string) *redisclient.XInfoStreamCmd {
+	cmd := redisclient.NewXInfoStreamCmd(context.Background(), "budget:events")
+	cmd.SetVal(fake.infoValue)
+	cmd.SetErr(fake.infoErr)
+	return cmd
 }
 
 func (fake *fakeBudgetEventRedis) XRead(_ context.Context, args *redisclient.XReadArgs) *redisclient.XStreamSliceCmd {
@@ -163,6 +172,7 @@ func TestRedisBudgetEventPortAppendsAndReadsBroadcastCursor(t *testing.T) {
 		t.Fatalf("XADD payload = %#v", fake.appendArgs.Values)
 	}
 
+	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "42-7"}}
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "42-8", Values: map[string]interface{}{budgetStreamEventField: payload}}}}}
 	rows, err := port.Read(context.Background(), "42-7", 10)
 	if err != nil || len(rows) != 1 || rows[0].ID != "42-8" || rows[0].Event.GenerationID != "generation" {
@@ -186,12 +196,17 @@ func TestRedisBudgetEventPortHandlesEmptyAndCorruptStreamsFailClosed(t *testing.
 	}
 	fake.readErr = nil
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "1-0", Values: map[string]interface{}{budgetStreamEventField: "{}"}}}}}
+	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "1-0"}}
 	if _, err := port.Read(context.Background(), "", 1); !errors.Is(err, ErrBudgetStreamInvalid) {
 		t.Fatalf("corrupt event error = %v", err)
 	}
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "1-0", Values: map[string]interface{}{budgetStreamEventField: "{}"}}}}}
 	if _, err := port.Read(context.Background(), "1-0", 1); !errors.Is(err, ErrBudgetStreamInvalid) {
 		t.Fatalf("non-advancing event error = %v", err)
+	}
+	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "2-0"}}
+	if _, err := port.Read(context.Background(), "1-0", 1); !errors.Is(err, ErrBudgetStreamGap) {
+		t.Fatalf("trimmed stream gap error = %v", err)
 	}
 	validEvent := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh, GenerationID: "generation", OccurredAt: time.Unix(1, 0).UTC()}
 	validPayload, err := validEvent.Marshal()

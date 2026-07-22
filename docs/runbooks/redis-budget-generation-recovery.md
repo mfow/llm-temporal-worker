@@ -86,6 +86,9 @@ generation and evidence until the incident owner closes the investigation.
 4. Have every replica independently verify the same manifest. A Stream event
    may wake replicas, but replicas reload the active-generation pointer and
    manifest directly from Redis.
+   If a worker's cursor predates the retained Stream prefix, the adapter
+   reports a gap and the worker discards its hints before reloading the
+   manifest; it never treats a partial Stream read as authorization state.
 5. Resume paid polling only after readiness reports the adopted generation.
    Confirm that this path executed zero PostgreSQL budget-table SELECTs.
 

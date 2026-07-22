@@ -16,6 +16,11 @@ import (
 // state, but accepting a malformed record could poison local readiness hints.
 var ErrBudgetStreamInvalid = errors.New("invalid budget stream state")
 
+// ErrBudgetStreamGap indicates that the requested cursor is older than the
+// retained Stream prefix. Callers must discard local hints and reload the
+// active generation; a Stream gap is never repaired from PostgreSQL online.
+var ErrBudgetStreamGap = errors.New("budget stream cursor gap")
+
 const (
 	maxActiveBudgetGenerationBytes = 1024
 	budgetStreamEventField         = "event"
@@ -184,6 +189,7 @@ func decodeActiveBudgetGeneration(raw string) (ActiveBudgetGeneration, error) {
 // or blocking reads: every worker independently tails the broadcast Stream.
 type BudgetEventRedisClient interface {
 	XAdd(context.Context, *redisclient.XAddArgs) *redisclient.StringCmd
+	XInfoStream(context.Context, string) *redisclient.XInfoStreamCmd
 	XRead(context.Context, *redisclient.XReadArgs) *redisclient.XStreamSliceCmd
 }
 
@@ -242,6 +248,23 @@ func (port *RedisBudgetEventPort) Read(ctx context.Context, cursor string, limit
 		afterMajor, afterMinor, err = parseRedisStreamID(cursor)
 		if err != nil {
 			return nil, err
+		}
+		info, err := port.client.XInfoStream(ctx, port.keys.EventsKey()).Result()
+		if errors.Is(err, redisclient.Nil) {
+			return nil, ErrBudgetStreamGap
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect budget stream: %w", err)
+		}
+		if info == nil || info.FirstEntry.ID == "" {
+			return nil, ErrBudgetStreamGap
+		}
+		firstMajor, firstMinor, err := parseRedisStreamID(info.FirstEntry.ID)
+		if err != nil || len(info.FirstEntry.ID) > MaxBudgetStreamIDBytes {
+			return nil, fmt.Errorf("%w: invalid Redis stream first ID", ErrBudgetStreamInvalid)
+		}
+		if firstMajor > afterMajor || (firstMajor == afterMajor && firstMinor > afterMinor) {
+			return nil, ErrBudgetStreamGap
 		}
 	}
 	streams, err := port.client.XRead(ctx, &redisclient.XReadArgs{
