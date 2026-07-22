@@ -138,6 +138,57 @@ func TestContinuationCreateGetAndTenantBinding(t *testing.T) {
 	}
 }
 
+func TestContinuationStoreRoundTripsNilTranscriptForRootAndChild(t *testing.T) {
+	now := time.Unix(100, 0)
+	harness := newContinuationHarness()
+	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootValue := testContinuation(t, now)
+	if rootValue.Transcript != nil {
+		t.Fatal("test must exercise nil transcript persistence")
+	}
+	root, err := store.CreateRoot(context.Background(), rootValue)
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	gotRoot, err := store.Get(context.Background(), root)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	if gotRoot.ID != root.String() {
+		t.Fatalf("get root returned handle %q, want %q", gotRoot.ID, root)
+	}
+	space, err := newKeySpace(testKeyOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRecord := harness.values[space.continuationKey("tenant-a", root.String())]
+	if !strings.Contains(rootRecord, `"Transcript":[]`) {
+		t.Fatalf("root record transcript = %s, want empty array", rootRecord)
+	}
+
+	childValue := testContinuation(t, now)
+	childValue.ParentID = root.String()
+	childValue.Depth = 1
+	child, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: childValue, OperationKey: "nil-transcript-operation"})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	gotChild, err := store.Get(context.Background(), child)
+	if err != nil {
+		t.Fatalf("get child: %v", err)
+	}
+	if gotChild.ID != child.String() {
+		t.Fatalf("get child returned handle %q, want %q", gotChild.ID, child)
+	}
+	childRecord := harness.values[space.continuationKey("tenant-a", child.String())]
+	if !strings.Contains(childRecord, `"Transcript":[]`) {
+		t.Fatalf("child record transcript = %s, want empty array", childRecord)
+	}
+}
+
 func TestContinuationChildIsImmutableAndOperationIdempotent(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
