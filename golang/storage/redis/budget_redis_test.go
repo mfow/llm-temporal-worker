@@ -113,6 +113,10 @@ func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.
 	if err != nil || loaded.GenerationID != manifest.GenerationID {
 		t.Fatalf("LoadManifest = %#v, %v", loaded, err)
 	}
+	fake.values[keys.ManifestKey(manifest.GenerationID)] = " \n" + string(canonical)
+	if _, err := port.LoadManifest(context.Background(), pointer); !errors.Is(err, ErrBudgetManifestInvalid) {
+		t.Fatalf("non-canonical manifest error = %v", err)
+	}
 }
 
 func TestRedisBudgetGenerationPortRejectsImmutableConflictAndMalformedState(t *testing.T) {
@@ -188,5 +192,17 @@ func TestRedisBudgetEventPortHandlesEmptyAndCorruptStreamsFailClosed(t *testing.
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "1-0", Values: map[string]interface{}{budgetStreamEventField: "{}"}}}}}
 	if _, err := port.Read(context.Background(), "1-0", 1); !errors.Is(err, ErrBudgetStreamInvalid) {
 		t.Fatalf("non-advancing event error = %v", err)
+	}
+	validEvent := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh, GenerationID: "generation", OccurredAt: time.Unix(1, 0).UTC()}
+	validPayload, err := validEvent.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{
+		{ID: "2-0", Values: map[string]interface{}{budgetStreamEventField: string(validPayload)}},
+		{ID: "1-9", Values: map[string]interface{}{budgetStreamEventField: string(validPayload)}},
+	}}}
+	if _, err := port.Read(context.Background(), "", 10); !errors.Is(err, ErrBudgetStreamInvalid) {
+		t.Fatalf("non-monotonic event error = %v", err)
 	}
 }

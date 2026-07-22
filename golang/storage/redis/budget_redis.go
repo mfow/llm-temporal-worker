@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -105,6 +106,13 @@ func (port *RedisBudgetGenerationPort) LoadManifest(ctx context.Context, pointer
 	var manifest BudgetManifest
 	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
 		return BudgetManifest{}, fmt.Errorf("%w: decode manifest: %v", ErrBudgetManifestInvalid, err)
+	}
+	canonical, err := manifest.Canonical()
+	if err != nil {
+		return BudgetManifest{}, err
+	}
+	if !bytes.Equal([]byte(raw), canonical) {
+		return BudgetManifest{}, fmt.Errorf("%w: manifest is not canonical", ErrBudgetManifestInvalid)
 	}
 	if err := pointer.ValidateAgainst(manifest); err != nil {
 		return BudgetManifest{}, err
@@ -249,15 +257,17 @@ func (port *RedisBudgetEventPort) Read(ctx context.Context, cursor string, limit
 		return nil, fmt.Errorf("read budget stream: %w", err)
 	}
 	result := make([]BudgetStreamRecord, 0, limit)
+	lastMajor, lastMinor := afterMajor, afterMinor
 	for _, stream := range streams {
 		if stream.Stream != port.keys.EventsKey() {
 			return nil, fmt.Errorf("%w: unexpected Redis stream key", ErrBudgetStreamInvalid)
 		}
 		for _, message := range stream.Messages {
 			major, minor, err := parseRedisStreamID(message.ID)
-			if err != nil || len(message.ID) > MaxBudgetStreamIDBytes || major < afterMajor || (major == afterMajor && minor <= afterMinor) {
+			if err != nil || len(message.ID) > MaxBudgetStreamIDBytes || major < lastMajor || (major == lastMajor && minor <= lastMinor) {
 				return nil, fmt.Errorf("%w: invalid or non-advancing Redis stream ID", ErrBudgetStreamInvalid)
 			}
+			lastMajor, lastMinor = major, minor
 			event, err := decodeBudgetStreamEvent(message.Values[budgetStreamEventField])
 			if err != nil {
 				return nil, err
