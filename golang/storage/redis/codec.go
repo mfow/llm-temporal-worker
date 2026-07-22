@@ -52,6 +52,7 @@ type attemptWire struct {
 	RouteID           string                      `json:"route_id"`
 	EndpointID        string                      `json:"endpoint_id"`
 	Provider          string                      `json:"provider"`
+	ResolvedModel     string                      `json:"resolved_model"`
 	ProviderRequestID string                      `json:"provider_request_id"`
 	ServiceClass      string                      `json:"service_class"`
 	Dispatch          admission.DispatchCertainty `json:"dispatch"`
@@ -188,6 +189,7 @@ func encodeAttemptWire(attempt admission.AttemptFacts) attemptWire {
 		RouteID:           attempt.RouteID,
 		EndpointID:        attempt.EndpointID,
 		Provider:          attempt.Provider,
+		ResolvedModel:     attempt.ResolvedModel,
 		ProviderRequestID: attempt.ProviderRequestID,
 		ServiceClass:      attempt.ServiceClass,
 		Dispatch:          attempt.Dispatch,
@@ -200,6 +202,7 @@ func decodeAttemptWire(wire attemptWire) admission.AttemptFacts {
 		RouteID:           wire.RouteID,
 		EndpointID:        wire.EndpointID,
 		Provider:          wire.Provider,
+		ResolvedModel:     wire.ResolvedModel,
 		ProviderRequestID: wire.ProviderRequestID,
 		ServiceClass:      wire.ServiceClass,
 		Dispatch:          wire.Dispatch,

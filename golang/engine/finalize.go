@@ -84,7 +84,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	if err != nil {
 		return llm.Response{}, engine.finishFailed(finalCtx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "result store write failed", err), actual.MicroUSD)
 	}
-	attempt := admission.AttemptFacts{RouteID: candidate.candidate.RouteID, EndpointID: candidate.candidate.EndpointID, Provider: candidate.candidate.Provider, ProviderRequestID: response.Provider.RequestID, ServiceClass: string(candidate.candidate.AttemptedClass), AttemptNumber: index + 1, Dispatch: admission.Accepted}
+	attempt := admission.AttemptFacts{RouteID: candidate.candidate.RouteID, EndpointID: candidate.candidate.EndpointID, Provider: candidate.candidate.Provider, ResolvedModel: call.Model, ProviderRequestID: response.Provider.RequestID, ServiceClass: string(candidate.candidate.AttemptedClass), AttemptNumber: index + 1, Dispatch: admission.Accepted}
 	var ref *state.BlobRef
 	if resultRef.Valid() {
 		copyRef := resultRef
