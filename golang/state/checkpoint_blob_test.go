@@ -62,6 +62,22 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	}
 }
 
+func TestCheckpointBlobCodecRejectsEmptyReasoningPatchValues(t *testing.T) {
+	codec := CheckpointBlobCodec{}
+	emptyEffort := llm.ReasoningEffort("")
+	emptySummary := llm.ReasoningSummary("")
+	for name, patch := range map[string]SettingsPatch{
+		"reasoning effort":  {ReasoningEffort: SetPatch(emptyEffort)},
+		"reasoning summary": {ReasoningSummary: SetPatch(emptySummary)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := codec.EncodeSettingsPatch(patch); err == nil {
+				t.Fatal("EncodeSettingsPatch accepted an explicit empty reasoning value")
+			}
+		})
+	}
+}
+
 func TestCheckpointBlobCodecRejectsVersionKindAndEnvelopeTampering(t *testing.T) {
 	codec := CheckpointBlobCodec{}
 	encoded, err := codec.EncodeDelta(nil)

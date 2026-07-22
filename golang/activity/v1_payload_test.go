@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -168,6 +169,81 @@ func TestV1PayloadCodecsEnforceInlineLimitOnEncodeAndDecode(t *testing.T) {
 	}
 	if _, err := UnmarshalQueryV1(encoded, limits); err == nil {
 		t.Fatal("oversize v1 payload was accepted during decode")
+	}
+}
+
+func TestV1PayloadCodecsRoundTripContractMatrix(t *testing.T) {
+	limits := PayloadLimits{MaxInlineBytes: 1 << 20}
+	for _, name := range []string{
+		"generate-fork-patch-set.json",
+		"generate-fork-patch-clear.json",
+		"generate-variant-positive-temperature.json",
+		"generate-response-disabled-cache.json",
+		"generate-response-cache-hit.json",
+		"generate-response-miss-not-populated.json",
+		"compact-request-no-cache.json",
+		"query-model-inventory.json",
+		"query-credit-status.json",
+		"query-budget-status.json",
+		"query-spend-summary.json",
+		"query-model-inventory-response.json",
+		"query-credit-status-response.json",
+		"query-budget-status-response.json",
+		"query-spend-summary-response.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := readV1PayloadFixture(t, name)
+			var encoded []byte
+			var err error
+			switch {
+			case name == "compact-request-no-cache.json":
+				var value llm.CompactRequestV1
+				if err = json.Unmarshal(data, &value); err == nil {
+					encoded, err = MarshalCompactV1(value, limits)
+					if err == nil {
+						_, err = UnmarshalCompactV1(encoded, limits)
+					}
+				}
+			case strings.HasPrefix(name, "generate-response-"):
+				var value llm.GenerateResponseV1
+				if err = json.Unmarshal(data, &value); err == nil {
+					encoded, err = MarshalGenerateResponseV1(value, limits)
+					if err == nil {
+						_, err = UnmarshalGenerateResponseV1(encoded, limits)
+					}
+				}
+			case strings.HasPrefix(name, "query-") && strings.HasSuffix(name, "-response.json"):
+				var value llm.QueryResponseV1
+				if err = json.Unmarshal(data, &value); err == nil {
+					encoded, err = MarshalQueryResponseV1(value, limits)
+					if err == nil {
+						_, err = UnmarshalQueryResponseV1(encoded, limits)
+					}
+				}
+			case strings.HasPrefix(name, "query-"):
+				var value llm.QueryRequestV1
+				if err = json.Unmarshal(data, &value); err == nil {
+					encoded, err = MarshalQueryV1(value, limits)
+					if err == nil {
+						_, err = UnmarshalQueryV1(encoded, limits)
+					}
+				}
+			default:
+				var value llm.GenerateRequestV1
+				if err = json.Unmarshal(data, &value); err == nil {
+					encoded, err = MarshalGenerateV1(value, limits)
+					if err == nil {
+						_, err = UnmarshalGenerateV1(encoded, limits)
+					}
+				}
+			}
+			if err != nil {
+				t.Fatalf("matrix codec round trip: %v", err)
+			}
+			if len(encoded) == 0 {
+				t.Fatal("matrix codec returned empty payload")
+			}
+		})
 	}
 }
 

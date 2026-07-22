@@ -14,6 +14,16 @@ Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.
 
+The v1 wire schemas are closed tagged records. Generate responses may carry
+only `generation` or `cache_replay` checkpoints; Compact policies contain only
+the documented `target_tokens` and `summary_style` controls; and each Query
+`kind` is bound to its corresponding filter and result page. Cache variants
+remain signed 32-bit values; once inherited settings are materialized, a
+non-zero variant requires a positive temperature, while Compact accepts variant
+zero only. These checks are performed by the JSON schema gate where
+representable and by the Go contract validators before an Activity is
+dispatched.
+
 `Activities.QueryService` is an independent seam for `llm.query.v1`. It may be
 provided before the Generate/Compact runtime is composed; the Activity still
 fails closed when neither seam is configured. The boundary authorizes the

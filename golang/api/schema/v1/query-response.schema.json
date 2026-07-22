@@ -21,6 +21,13 @@
     "cost_method": {"enum": ["control_query_zero", "provider_reported", "catalog_usage"]},
     "cost_unknown_reason_code": {"type": "string", "pattern": "^[a-z0-9_]{1,64}$"}
   },
+  "allOf": [{"oneOf": [
+    {"properties": {"kind": {"const": "provider_status"}, "result": {"$ref": "#/$defs/provider_page"}}},
+    {"properties": {"kind": {"const": "model_inventory"}, "result": {"$ref": "#/$defs/model_page"}}},
+    {"properties": {"kind": {"const": "credit_status"}, "result": {"$ref": "#/$defs/credit_page"}}},
+    {"properties": {"kind": {"const": "budget_status"}, "result": {"$ref": "#/$defs/budget"}}},
+    {"properties": {"kind": {"const": "spend_summary"}, "result": {"$ref": "#/$defs/spend"}}}
+  ]}],
   "$defs": {
     "provider_page": {"type": "object", "additionalProperties": false, "required": ["routes"], "properties": {"routes": {"type": "array", "items": {"$ref": "#/$defs/route"}}}},
     "route": {"type": "object", "additionalProperties": false, "required": ["route_id", "provider", "endpoint", "availability", "observed_at", "stale_after"], "properties": {"route_id": {"type": "string"}, "provider": {"type": "string"}, "endpoint": {"type": "string"}, "availability": {"enum": ["available", "degraded", "unavailable"]}, "credit_state": {"enum": ["ok", "low", "exhausted", "unknown"]}, "billing_state": {"enum": ["ok", "blocked", "unknown"]}, "circuit_state": {"enum": ["closed", "open", "half_open"]}, "observed_at": {"type": "string", "format": "date-time"}, "stale_after": {"type": "string", "format": "date-time"}, "safe_code": {"type": "string"}}},

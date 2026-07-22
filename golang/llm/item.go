@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -378,6 +379,9 @@ func decodeItem(data []byte) (Item, error) {
 }
 
 func decodeItems(data []byte) ([]Item, error) {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil, fmt.Errorf("items must be an array")
+	}
 	var values []json.RawMessage
 	if err := decodeJSON(data, &values); err != nil {
 		return nil, err
@@ -822,6 +826,9 @@ func decodePart(data []byte) (Part, error) {
 }
 
 func decodeParts(data []byte) ([]Part, error) {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil, fmt.Errorf("parts must be an array")
+	}
 	var values []json.RawMessage
 	if err := decodeJSON(data, &values); err != nil {
 		return nil, err

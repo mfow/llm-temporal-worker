@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -90,6 +91,9 @@ func decodeDiagnostic(data []byte) (Diagnostic, error) {
 }
 
 func decodeDiagnostics(data []byte) ([]Diagnostic, error) {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil, fmt.Errorf("diagnostics must be an array")
+	}
 	var values []json.RawMessage
 	if err := decodeJSON(data, &values); err != nil {
 		return nil, err

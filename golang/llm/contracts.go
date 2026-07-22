@@ -54,6 +54,37 @@ type CachePolicyV1 struct {
 	Variant       int32 `json:"variant,omitempty"`
 }
 
+func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return fmt.Errorf("cache policy must be an object")
+	}
+	if err := checkUnknownFields(fields, "max_age_seconds", "variant"); err != nil {
+		return err
+	}
+	maxAgeRaw, err := requireField(fields, "max_age_seconds")
+	if err != nil {
+		return err
+	}
+	maxAge, err := decodeInt64(maxAgeRaw)
+	if err != nil {
+		return err
+	}
+	variant := int32(0)
+	if raw, ok := fields["variant"]; ok {
+		variant, err = decodeInt32(raw)
+		if err != nil {
+			return err
+		}
+	}
+	result := CachePolicyV1{MaxAgeSeconds: maxAge, Variant: variant}
+	if err := result.validate(false); err != nil {
+		return err
+	}
+	*policy = result
+	return nil
+}
+
 func (policy CachePolicyV1) validate(compact bool) error {
 	if policy.MaxAgeSeconds <= 0 || policy.MaxAgeSeconds > 31536000 {
 		return fmt.Errorf("cache max_age_seconds must be between 1 and 31536000")
@@ -95,6 +126,40 @@ type SettingsPatchV1 struct {
 }
 
 func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
+	if patch.ServiceClass.Set != nil && !patch.ServiceClass.Set.Valid() {
+		return nil, fmt.Errorf("service_class: invalid value %q", *patch.ServiceClass.Set)
+	}
+	if patch.ServiceClassFallbacks.Set != nil {
+		seen := make(map[ServiceClass]struct{}, len(*patch.ServiceClassFallbacks.Set))
+		for _, class := range *patch.ServiceClassFallbacks.Set {
+			if !class.Valid() {
+				return nil, fmt.Errorf("service_class_fallbacks: invalid value %q", class)
+			}
+			if _, exists := seen[class]; exists {
+				return nil, fmt.Errorf("service_class_fallbacks: duplicate value %q", class)
+			}
+			seen[class] = struct{}{}
+		}
+	}
+	if patch.Portability.Set != nil && !patch.Portability.Set.Valid() {
+		return nil, fmt.Errorf("portability: invalid value %q", *patch.Portability.Set)
+	}
+	if patch.ReasoningEffort.Set != nil && !validReasoningEffort(*patch.ReasoningEffort.Set) {
+		return nil, fmt.Errorf("reasoning_effort: invalid value %q", *patch.ReasoningEffort.Set)
+	}
+	if patch.ReasoningSummary.Set != nil && !validReasoningSummary(*patch.ReasoningSummary.Set) {
+		return nil, fmt.Errorf("reasoning_summary: invalid value %q", *patch.ReasoningSummary.Set)
+	}
+	if patch.CompactionPolicy.Set != nil {
+		if _, err := decodeObject(*patch.CompactionPolicy.Set); err != nil {
+			return nil, fmt.Errorf("compaction_policy.set must be an object")
+		}
+	}
+	if patch.Extensions.Set != nil {
+		if *patch.Extensions.Set == nil {
+			return nil, fmt.Errorf("extensions.set must be an object")
+		}
+	}
 	fields := map[string]any{}
 	add := func(name string, value any, clear bool) error {
 		if clear {
@@ -227,12 +292,81 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 			return zero, fmt.Errorf("%s.set: %w", name, err)
 		}
 		return any(*value).(T), nil
+	case ServiceClass:
+		var value ServiceClass
+		if err := json.Unmarshal(raw, &value); err != nil || !value.Valid() {
+			return zero, fmt.Errorf("%s.set: service class is invalid", name)
+		}
+		return any(value).(T), nil
+	case []ServiceClass:
+		var value []ServiceClass
+		if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+			return zero, fmt.Errorf("%s.set: service class fallbacks must be an array", name)
+		}
+		seen := make(map[ServiceClass]struct{}, len(value))
+		for _, class := range value {
+			if !class.Valid() {
+				return zero, fmt.Errorf("%s.set: service class fallback is invalid", name)
+			}
+			if _, exists := seen[class]; exists {
+				return zero, fmt.Errorf("%s.set: duplicate service class fallback", name)
+			}
+			seen[class] = struct{}{}
+		}
+		return any(value).(T), nil
+	case PortabilityMode:
+		var value PortabilityMode
+		if err := json.Unmarshal(raw, &value); err != nil || !value.Valid() {
+			return zero, fmt.Errorf("%s.set: portability mode is invalid", name)
+		}
+		return any(value).(T), nil
+	case ReasoningEffort:
+		var value ReasoningEffort
+		if err := json.Unmarshal(raw, &value); err != nil || !validReasoningEffort(value) {
+			return zero, fmt.Errorf("%s.set: reasoning effort is invalid", name)
+		}
+		return any(value).(T), nil
+	case ReasoningSummary:
+		var value ReasoningSummary
+		if err := json.Unmarshal(raw, &value); err != nil || !validReasoningSummary(value) {
+			return zero, fmt.Errorf("%s.set: reasoning summary is invalid", name)
+		}
+		return any(value).(T), nil
+	case json.RawMessage:
+		if _, err := decodeObject(raw); err != nil {
+			return zero, fmt.Errorf("%s.set: value must be an object", name)
+		}
+		return any(copyRaw(raw)).(T), nil
+	case map[string]json.RawMessage:
+		fields, err := decodeObject(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: value must be an object", name)
+		}
+		return any(fields).(T), nil
 	default:
 		value := zero
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return zero, fmt.Errorf("%s.set: %w", name, err)
 		}
 		return value, nil
+	}
+}
+
+func validReasoningEffort(value ReasoningEffort) bool {
+	switch value {
+	case ReasoningEffortProviderDefault, ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortMaximum:
+		return true
+	default:
+		return false
+	}
+}
+
+func validReasoningSummary(value ReasoningSummary) bool {
+	switch value {
+	case ReasoningSummaryProviderDefault, ReasoningSummaryNone, ReasoningSummaryAuto, ReasoningSummaryConcise, ReasoningSummaryDetailed:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -396,7 +530,11 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
-	fields := map[string]any{"api_version": APIVersion, "operation_key": request.OperationKey, "context": request.Context, "append": request.Append}
+	appendItems := request.Append
+	if appendItems == nil {
+		appendItems = []Item{}
+	}
+	fields := map[string]any{"api_version": APIVersion, "operation_key": request.OperationKey, "context": request.Context, "append": appendItems}
 	if request.Parent != nil {
 		fields["parent"] = string(*request.Parent)
 	}
@@ -488,12 +626,52 @@ type CacheDispositionV1 struct {
 	Variant         int32  `json:"variant"`
 	EntryAgeSeconds *int64 `json:"entry_age_seconds,omitempty"`
 }
+
+func (disposition CacheDispositionV1) MarshalJSON() ([]byte, error) {
+	if !validateCacheDisposition(disposition.Disposition) || disposition.Variant < 0 {
+		return nil, fmt.Errorf("invalid cache disposition")
+	}
+	if disposition.EntryAgeSeconds != nil && *disposition.EntryAgeSeconds < 0 {
+		return nil, fmt.Errorf("entry_age_seconds must not be negative")
+	}
+	fields := map[string]any{"disposition": disposition.Disposition, "variant": disposition.Variant}
+	if disposition.EntryAgeSeconds != nil {
+		fields["entry_age_seconds"] = *disposition.EntryAgeSeconds
+	}
+	return marshalObject(fields)
+}
+
 type CostV1 struct {
 	Status         string  `json:"status"`
 	ActualCostUSD  *string `json:"actual_cost_usd"`
 	Method         string  `json:"method,omitempty"`
 	CatalogVersion string  `json:"catalog_version,omitempty"`
 	UnknownReason  string  `json:"unknown_reason,omitempty"`
+}
+
+func (cost CostV1) MarshalJSON() ([]byte, error) {
+	if err := cost.validate(); err != nil {
+		return nil, err
+	}
+	actualCost := cost.ActualCostUSD
+	if actualCost != nil {
+		canonical, err := canonicalDecimalString(*actualCost)
+		if err != nil {
+			return nil, err
+		}
+		actualCost = &canonical
+	}
+	fields := map[string]any{"status": cost.Status, "actual_cost_usd": actualCost}
+	if cost.Method != "" {
+		fields["method"] = cost.Method
+	}
+	if cost.CatalogVersion != "" {
+		fields["catalog_version"] = cost.CatalogVersion
+	}
+	if cost.UnknownReason != "" {
+		fields["unknown_reason"] = cost.UnknownReason
+	}
+	return marshalObject(fields)
 }
 
 func (metadata *CheckpointMetadata) UnmarshalJSON(data []byte) error {
@@ -512,12 +690,17 @@ func (metadata *CheckpointMetadata) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	switch kind {
+	case "generation", "compaction", "cache_replay":
+	default:
+		return fmt.Errorf("checkpoint kind %q is invalid", kind)
+	}
 	depth, err := decodeInt(fields["depth"])
 	if err != nil {
 		return err
 	}
 	result := CheckpointMetadata{Handle: CheckpointHandle(handle), Kind: kind, Depth: int32(depth)}
-	if !result.Handle.valid() || depth < 0 {
+	if !result.Handle.valid() || depth < 0 || depth > math.MaxInt32 {
 		return fmt.Errorf("checkpoint metadata is invalid")
 	}
 	if raw, ok := fields["parent"]; ok && string(raw) != "null" {
@@ -589,7 +772,11 @@ func (cost *CostV1) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
-		result.ActualCostUSD = &value
+		canonical, err := canonicalDecimalString(value)
+		if err != nil {
+			return err
+		}
+		result.ActualCostUSD = &canonical
 	}
 	if result.Method, _, err = optionalString(fields, "method"); err != nil {
 		return err
@@ -618,15 +805,40 @@ func validateCacheDisposition(value string) bool {
 
 var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$`)
 
+func canonicalDecimalString(value string) (string, error) {
+	if !decimalPattern.MatchString(value) {
+		return "", fmt.Errorf("decimal %q is invalid", value)
+	}
+	parts := strings.SplitN(value, ".", 2)
+	if len(parts) == 1 {
+		return value, nil
+	}
+	fraction := strings.TrimRight(parts[1], "0")
+	if fraction == "" {
+		return parts[0], nil
+	}
+	return parts[0] + "." + fraction, nil
+}
+
 func (cost CostV1) validate() error {
 	switch cost.Status {
 	case "exact":
-		if cost.ActualCostUSD == nil || !decimalPattern.MatchString(*cost.ActualCostUSD) || cost.Method == "" {
+		if cost.ActualCostUSD == nil || !decimalPattern.MatchString(*cost.ActualCostUSD) || cost.Method == "" || cost.UnknownReason != "" {
 			return fmt.Errorf("exact cost requires decimal actual_cost_usd and method")
 		}
+		switch cost.Method {
+		case "provider_reported", "catalog_usage", "control_query_zero":
+		default:
+			return fmt.Errorf("exact cost method %q is invalid", cost.Method)
+		}
 	case "unknown":
-		if cost.ActualCostUSD != nil || cost.Method != "" || cost.UnknownReason == "" {
+		if cost.ActualCostUSD != nil || cost.Method != "" || cost.CatalogVersion != "" || cost.UnknownReason == "" {
 			return fmt.Errorf("unknown cost requires null actual_cost_usd, reason, and no method")
+		}
+		switch cost.UnknownReason {
+		case "provider_did_not_report_cost", "catalog_incomplete", "state_unavailable", "ambiguous_dispatch":
+		default:
+			return fmt.Errorf("unknown cost reason %q is invalid", cost.UnknownReason)
 		}
 	default:
 		return fmt.Errorf("cost status %q is invalid", cost.Status)
@@ -661,7 +873,11 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 	if err := response.Cost.validate(); err != nil {
 		return nil, err
 	}
-	fields := map[string]any{"api_version": APIVersion, "operation_key": response.OperationKey, "operation_id": response.OperationID, "status": response.Status, "output": response.Output, "checkpoint": response.Checkpoint, "cache": response.Cache, "cost": response.Cost}
+	output := response.Output
+	if output == nil {
+		output = []Item{}
+	}
+	fields := map[string]any{"api_version": APIVersion, "operation_key": response.OperationKey, "operation_id": response.OperationID, "status": response.Status, "output": output, "checkpoint": response.Checkpoint, "cache": response.Cache, "cost": response.Cost}
 	if response.Route != nil {
 		fields["route"] = response.Route
 	}
@@ -718,6 +934,9 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(checkpointRaw, &checkpoint); err != nil {
 		return err
 	}
+	if checkpoint.Kind != "generation" && checkpoint.Kind != "cache_replay" {
+		return fmt.Errorf("invalid generation checkpoint kind %q", checkpoint.Kind)
+	}
 	cacheRaw, err := requireField(fields, "cache")
 	if err != nil {
 		return err
@@ -753,7 +972,9 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 		result.Usage = &usage
 	}
 	if raw, ok := fields["diagnostics"]; ok {
-		if err := json.Unmarshal(raw, &result.Diagnostics); err != nil {
+		var err error
+		result.Diagnostics, err = decodeDiagnostics(raw)
+		if err != nil {
 			return err
 		}
 	}
@@ -771,8 +992,19 @@ type CompactRequestV1 struct {
 }
 
 func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
+	if request.APIVersion != "" && request.APIVersion != CompactAPIVersion {
+		return nil, fmt.Errorf("api_version %q is unsupported", request.APIVersion)
+	}
 	if request.OperationKey == "" || request.Parent == "" || request.Context.Tenant == "" || request.Context.Project == "" || request.Context.Actor == "" {
 		return nil, fmt.Errorf("compact operation, parent, and context are required")
+	}
+	if !request.Parent.valid() {
+		return nil, fmt.Errorf("compact parent checkpoint is invalid")
+	}
+	if len(request.Policy) > 0 {
+		if err := validateCompactPolicy(request.Policy); err != nil {
+			return nil, err
+		}
 	}
 	if request.Cache != nil {
 		if err := request.Cache.validate(true); err != nil {
@@ -820,9 +1052,12 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	result := CompactRequestV1{APIVersion: version, OperationKey: key, Parent: CheckpointHandle(parent), Context: context}
+	if !result.Parent.valid() {
+		return fmt.Errorf("compact parent checkpoint is invalid")
+	}
 	if raw, ok := fields["policy"]; ok {
-		if !validObjectJSON(raw) {
-			return fmt.Errorf("compact policy must be an object")
+		if err := validateCompactPolicy(raw); err != nil {
+			return err
 		}
 		result.Policy = copyRaw(raw)
 	}
@@ -840,6 +1075,38 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// validateCompactPolicy keeps compaction's control-plane policy separate from
+// Generate settings. It intentionally has no tools, tool choice, output, or
+// provider-specific fields: compaction is a lossily summarized child and
+// application tool/structured-output configuration is restored by Generate.
+func validateCompactPolicy(raw json.RawMessage) error {
+	fields, err := decodeObject(raw)
+	if err != nil {
+		return fmt.Errorf("compact policy must be an object")
+	}
+	if err := checkUnknownFields(fields, "target_tokens", "summary_style"); err != nil {
+		return fmt.Errorf("compact policy: %w", err)
+	}
+	if value, ok := fields["target_tokens"]; ok {
+		target, err := decodeInt(value)
+		if err != nil || target < 1 || target > 10000000 {
+			return fmt.Errorf("compact policy target_tokens must be between 1 and 10000000")
+		}
+	}
+	if value, ok := fields["summary_style"]; ok {
+		style, err := requiredString(map[string]json.RawMessage{"summary_style": value}, "summary_style")
+		if err != nil {
+			return err
+		}
+		switch style {
+		case "concise", "balanced", "detailed":
+		default:
+			return fmt.Errorf("compact policy summary_style %q is invalid", style)
+		}
+	}
+	return nil
+}
+
 type CompactResponseV1 struct {
 	APIVersion   string
 	OperationKey string
@@ -853,8 +1120,14 @@ type CompactResponseV1 struct {
 }
 
 func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
-	if response.OperationKey == "" || response.OperationID == "" || response.Checkpoint.Kind != "compaction" || !response.Checkpoint.Handle.valid() {
+	if response.APIVersion != "" && response.APIVersion != CompactAPIVersion {
+		return nil, fmt.Errorf("api_version %q is unsupported", response.APIVersion)
+	}
+	if response.OperationKey == "" || response.OperationID == "" || response.Checkpoint.Kind != "compaction" || !response.Checkpoint.Handle.valid() || response.Checkpoint.Depth < 0 {
 		return nil, fmt.Errorf("compact response identity is invalid")
+	}
+	if response.Checkpoint.Parent == nil || !response.Checkpoint.Parent.valid() {
+		return nil, fmt.Errorf("compact response parent checkpoint is invalid")
 	}
 	if response.Cache.Variant < 0 || !validateCacheDisposition(response.Cache.Disposition) {
 		return nil, fmt.Errorf("invalid compact cache disposition")
@@ -907,6 +1180,9 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(checkpointRaw, &checkpoint); err != nil || checkpoint.Kind != "compaction" {
 		return fmt.Errorf("compact checkpoint must be compaction")
 	}
+	if checkpoint.Parent == nil || !checkpoint.Parent.valid() {
+		return fmt.Errorf("compact checkpoint parent is invalid")
+	}
 	cacheRaw, err := requireField(fields, "cache")
 	if err != nil {
 		return err
@@ -938,7 +1214,9 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 		result.Usage = &usage
 	}
 	if raw, ok := fields["diagnostics"]; ok {
-		if err := json.Unmarshal(raw, &result.Diagnostics); err != nil {
+		var err error
+		result.Diagnostics, err = decodeDiagnostics(raw)
+		if err != nil {
 			return err
 		}
 	}
@@ -1220,7 +1498,15 @@ func (response QueryResponseV1) MarshalJSON() ([]byte, error) {
 	if err := response.Cost.validate(); err != nil {
 		return nil, err
 	}
-	fields := map[string]any{"api_version": QueryAPIVersion, "operation_key": response.OperationKey, "query_execution_id": response.QueryExecutionID, "kind": response.Kind, "observed_at": response.ObservedAt, "source": response.Source, "freshness": response.Freshness, "complete": response.Complete, "result": response.Result, "cost_status": response.Cost.Status, "actual_cost_usd": response.Cost.ActualCostUSD}
+	actualCost := response.Cost.ActualCostUSD
+	if actualCost != nil {
+		canonical, err := canonicalDecimalString(*actualCost)
+		if err != nil {
+			return nil, err
+		}
+		actualCost = &canonical
+	}
+	fields := map[string]any{"api_version": QueryAPIVersion, "operation_key": response.OperationKey, "query_execution_id": response.QueryExecutionID, "kind": response.Kind, "observed_at": response.ObservedAt, "source": response.Source, "freshness": response.Freshness, "complete": response.Complete, "result": response.Result, "cost_status": response.Cost.Status, "actual_cost_usd": actualCost}
 	if response.NextCursor != nil {
 		fields["next_cursor"] = *response.NextCursor
 	}
@@ -1317,7 +1603,11 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
-		cost.ActualCostUSD = &value
+		canonical, err := canonicalDecimalString(value)
+		if err != nil {
+			return err
+		}
+		cost.ActualCostUSD = &canonical
 	}
 	if cost.Method, _, err = optionalString(fields, "cost_method"); err != nil {
 		return err
