@@ -3,6 +3,7 @@ package state
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -28,6 +29,20 @@ func rootCheckpoint(handle, tenant, operation string) Checkpoint {
 func childCheckpoint(handle, parent, tenant, operation, text string) Checkpoint {
 	parentHandle := Handle(parent)
 	return Checkpoint{Handle: Handle(handle), Parent: &parentHandle, Tenant: tenant, OperationKey: operation, Delta: []llm.Item{message(text)}}
+}
+
+func TestCheckpointGraphUsesInjectedClockForExpiry(t *testing.T) {
+	clock := time.Unix(0, 0).UTC()
+	graph := NewCheckpointGraph(MaterializeLimits{})
+	graph.Now = func() time.Time { return clock }
+	checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
+	checkpoint.ExpiresAt = clock.Add(time.Hour)
+	if err := graph.PutRoot(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := graph.Materialize("tenant-a", "root"); err != nil {
+		t.Fatalf("materialize with injected live clock: %v", err)
+	}
 }
 
 func TestCheckpointGraphRootLinearAndSiblingMaterialization(t *testing.T) {
