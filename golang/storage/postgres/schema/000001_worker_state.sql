@@ -1502,12 +1502,19 @@ DECLARE
     referenced_id uuid;
     referenced_state text;
 BEGIN
-    referenced_id := NULLIF(to_jsonb(NEW)->>TG_ARGV[0], '')::uuid;
+    IF TG_ARGV[1] = 'cache_entry_state' THEN
+        IF NEW.state <> 'ready' OR NEW.response_blob_id IS NULL THEN
+            RETURN NEW;
+        END IF;
+        referenced_id := NEW.response_blob_id;
+    ELSE
+        referenced_id := NULLIF(to_jsonb(NEW)->>TG_ARGV[0], '')::uuid;
+    END IF;
     IF referenced_id IS NULL THEN
         RETURN NEW;
     END IF;
 
-    IF TG_ARGV[1] = 'cache_entry' THEN
+    IF TG_ARGV[1] IN ('cache_entry', 'cache_entry_state') THEN
         SELECT b.deletion_state INTO referenced_state
         FROM __SCHEMA__.__PREFIX__response_cache_entries c
         JOIN __SCHEMA__.__PREFIX__blobs b ON b.blob_id = c.response_blob_id
@@ -1558,6 +1565,9 @@ CREATE TRIGGER __PREFIX__provider_state_blob_guard
 CREATE TRIGGER __PREFIX__cache_response_blob_guard
     BEFORE INSERT OR UPDATE OF response_blob_id ON __SCHEMA__.__PREFIX__response_cache_entries
     FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('response_blob_id');
+CREATE TRIGGER __PREFIX__cache_state_guard
+    BEFORE INSERT OR UPDATE OF state ON __SCHEMA__.__PREFIX__response_cache_entries
+    FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('state', 'cache_entry_state');
 CREATE TRIGGER __PREFIX__cache_use_guard
     BEFORE INSERT OR UPDATE OF cache_entry_id ON __SCHEMA__.__PREFIX__response_cache_uses
     FOR EACH ROW EXECUTE FUNCTION __SCHEMA__.__PREFIX__reject_blob_gc_reference('cache_entry_id', 'cache_entry');
