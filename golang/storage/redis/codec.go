@@ -283,7 +283,16 @@ type continuationDecodeWire struct {
 }
 
 func encodeContinuation(value state.Continuation) ([]byte, error) {
-	return json.Marshal(continuationWire{Schema: continuationSchema, Value: value.Clone()})
+	// Continuation transcripts are represented as arrays on the v1 wire. A
+	// zero-value continuation may carry a nil slice, which encoding/json would
+	// otherwise emit as JSON null and the strict item decoder correctly rejects.
+	// Normalize the internal nil-as-empty representation at this persistence
+	// boundary without mutating the caller's continuation.
+	encoded := value.Clone()
+	if encoded.Transcript == nil {
+		encoded.Transcript = []llm.Item{}
+	}
+	return json.Marshal(continuationWire{Schema: continuationSchema, Value: encoded})
 }
 
 func decodeContinuation(data []byte) (state.Continuation, error) {

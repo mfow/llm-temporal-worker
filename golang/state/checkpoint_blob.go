@@ -249,6 +249,15 @@ func (codec CheckpointBlobCodec) DecodeSnapshot(data []byte) (CheckpointSnapshot
 
 func settingsPatchFromModel(model ModelState) SettingsPatch {
 	patch := SettingsPatch{Model: SetPatch(model.Model), ServiceClass: SetPatch(model.ServiceClass), Portability: SetPatch(model.Portability), ReasoningEffort: SetPatch(model.ReasoningEffort), ReasoningSummary: SetPatch(model.ReasoningSummary)}
+	// Empty reasoning values are the materialized zero (provider-inherited)
+	// state, not explicit wire patch values. Leave them omitted so the closed
+	// v1 patch enum cannot emit schema-invalid Set("") values.
+	if model.ReasoningEffort == "" {
+		patch.ReasoningEffort = Patch[llm.ReasoningEffort]{}
+	}
+	if model.ReasoningSummary == "" {
+		patch.ReasoningSummary = Patch[llm.ReasoningSummary]{}
+	}
 	if model.ToolPolicy != (llm.ToolPolicy{}) {
 		patch.ToolPolicy = SetPatch(model.ToolPolicy)
 	}

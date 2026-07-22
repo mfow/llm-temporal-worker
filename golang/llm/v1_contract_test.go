@@ -77,6 +77,40 @@ func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 	}
 }
 
+func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
+	value, err := json.Marshal(llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("10.500000000000"), Method: "provider_reported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(value, []byte(`"actual_cost_usd":"10.5"`)) {
+		t.Fatalf("cost was not canonicalized: %s", value)
+	}
+	var cost llm.CostV1
+	if err := json.Unmarshal([]byte(`{"status":"exact","actual_cost_usd":"0.1000","method":"provider_reported"}`), &cost); err != nil {
+		t.Fatal(err)
+	}
+	value, err = json.Marshal(cost)
+	if err != nil || !bytes.Contains(value, []byte(`"actual_cost_usd":"0.1"`)) {
+		t.Fatalf("round-trip cost was not canonicalized: %s (%v)", value, err)
+	}
+	if _, err := json.Marshal(llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "estimate"}); err == nil {
+		t.Fatal("unknown exact cost method accepted")
+	}
+	if _, err := json.Marshal(llm.CostV1{Status: "unknown", UnknownReason: "state_unavailable", CatalogVersion: "catalog-1"}); err == nil {
+		t.Fatal("unknown cost with catalog version accepted")
+	}
+	request := llm.GenerateRequestV1{OperationKey: "nil-arrays", Context: llm.RequestContext{Tenant: "t", Project: "p", Actor: "a"}}
+	value, err = json.Marshal(request)
+	if err != nil || !bytes.Contains(value, []byte(`"append":[]`)) {
+		t.Fatalf("nil append was not normalized: %s (%v)", value, err)
+	}
+	response := llm.GenerateResponseV1{OperationKey: "nil-output", OperationID: "id", Status: llm.ResponseStatusCompleted, Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.nil", Kind: "generation", Depth: 0}, Cache: llm.CacheDispositionV1{Disposition: "disabled"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"}}
+	value, err = json.Marshal(response)
+	if err != nil || !bytes.Contains(value, []byte(`"output":[]`)) {
+		t.Fatalf("nil output was not normalized: %s (%v)", value, err)
+	}
+}
+
 func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"provider_status","query":%s}`
 	for _, test := range []struct {
@@ -252,21 +286,158 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 }
 
 func TestV1VariantBoundariesAndTemperature(t *testing.T) {
-	for _, variant := range []int32{0, 1, 2, 2147483647} {
+	zero := 0.0
+	for _, variant := range []int32{0} {
 		if err := llm.ValidateVariantTemperature(variant, nil); err != nil {
 			t.Fatalf("variant %d: %v", variant, err)
+		}
+	}
+	for _, variant := range []int32{1, 2, 2147483647} {
+		if err := llm.ValidateVariantTemperature(variant, &zero); err == nil {
+			t.Fatalf("variant %d with zero temperature accepted", variant)
+		}
+		if err := llm.ValidateVariantTemperature(variant, nil); err != nil {
+			t.Fatalf("variant %d with inherited temperature rejected: %v", variant, err)
 		}
 	}
 	if err := llm.ValidateVariantTemperature(-1, nil); err == nil {
 		t.Fatal("negative variant accepted")
 	}
-	zero := 0.0
 	if err := llm.ValidateVariantTemperature(1, &zero); err == nil {
 		t.Fatal("positive variant with zero temperature accepted")
 	}
 	positive := 0.2
 	if err := llm.ValidateVariantTemperature(2147483647, &positive); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
+	for _, name := range []string{
+		"generate-fork-patch-set.json",
+		"generate-fork-patch-clear.json",
+		"generate-variant-unknown-temperature.json",
+		"generate-variant-positive-temperature.json",
+		"compact-request-no-cache.json",
+		"query-model-inventory.json",
+		"query-credit-status.json",
+		"query-budget-status.json",
+		"query-spend-summary.json",
+		"query-model-inventory-response.json",
+		"query-credit-status-response.json",
+		"query-budget-status-response.json",
+		"query-spend-summary-response.json",
+		"generate-response-disabled-cache.json",
+		"generate-response-cache-hit.json",
+		"generate-response-miss-not-populated.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := readV1Fixture(t, name)
+			var value any
+			switch {
+			case strings.HasPrefix(name, "generate-"):
+				if strings.HasPrefix(name, "generate-response-") {
+					value = new(llm.GenerateResponseV1)
+				} else {
+					value = new(llm.GenerateRequestV1)
+				}
+			case strings.HasPrefix(name, "compact-"):
+				value = new(llm.CompactRequestV1)
+			case strings.HasPrefix(name, "query-") && strings.HasSuffix(name, "-response.json"):
+				value = new(llm.QueryResponseV1)
+			default:
+				value = new(llm.QueryRequestV1)
+			}
+			if err := json.Unmarshal(data, value); err != nil {
+				t.Fatalf("fixture decode: %v", err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("fixture encode: %v", err)
+			}
+			repeated, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("fixture re-encode: %v", err)
+			}
+			if !bytes.Equal(encoded, repeated) {
+				t.Fatalf("fixture encoding was not deterministic: %s != %s", encoded, repeated)
+			}
+		})
+	}
+}
+
+func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
+	var unknown llm.GenerateRequestV1
+	if err := json.Unmarshal(readV1Fixture(t, "generate-variant-unknown-temperature.json"), &unknown); err != nil {
+		t.Fatal(err)
+	}
+	if err := llm.ValidateVariantTemperature(unknown.Cache.Variant, nil); err != nil {
+		t.Fatalf("positive variant with inherited temperature rejected: %v", err)
+	}
+
+	var positive llm.GenerateRequestV1
+	if err := json.Unmarshal(readV1Fixture(t, "generate-variant-positive-temperature.json"), &positive); err != nil {
+		t.Fatal(err)
+	}
+	if positive.SettingsPatch.Temperature.Set == nil {
+		t.Fatal("positive-temperature fixture omitted the temperature patch")
+	}
+	if err := llm.ValidateVariantTemperature(positive.Cache.Variant, positive.SettingsPatch.Temperature.Set); err != nil {
+		t.Fatalf("positive temperature variant rejected: %v", err)
+	}
+
+	var zero llm.GenerateRequestV1
+	if err := json.Unmarshal(readV1Fixture(t, "generate-variant-zero-temperature.json"), &zero); err != nil {
+		t.Fatal(err)
+	}
+	if zero.SettingsPatch.Temperature.Set == nil {
+		t.Fatal("zero-temperature fixture omitted the temperature patch")
+	}
+	if err := llm.ValidateVariantTemperature(zero.Cache.Variant, zero.SettingsPatch.Temperature.Set); err == nil {
+		t.Fatal("positive variant with zero temperature accepted")
+	}
+}
+
+func TestV1RejectsNegativeContractFixtures(t *testing.T) {
+	for _, name := range []string{
+		"negative-generate-transcript.json",
+		"negative-currency-field.json",
+		"negative-numeric-usd.json",
+		"negative-generate-cost-cross-variant.json",
+		"negative-generate-enum-patch.json",
+		"negative-generate-empty-reasoning-patch.json",
+		"negative-generate-compaction-scalar.json",
+		"negative-generate-extensions-null.json",
+		"negative-compact-tools.json",
+		"negative-compact-structured-output.json",
+		"negative-compact-positive-variant.json",
+		"negative-query-mismatched-result.json",
+		"negative-query-page-size.json",
+		"negative-query-cursor.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := readV1Fixture(t, name)
+			var value any
+			switch {
+			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json":
+				value = new(llm.GenerateRequestV1)
+			case strings.HasPrefix(name, "negative-generate"),
+				strings.HasPrefix(name, "negative-currency"),
+				strings.HasPrefix(name, "negative-numeric"):
+				value = new(llm.GenerateResponseV1)
+			case strings.HasPrefix(name, "negative-compact"):
+				value = new(llm.CompactRequestV1)
+			default:
+				if strings.Contains(name, "mismatched") {
+					value = new(llm.QueryResponseV1)
+				} else {
+					value = new(llm.QueryRequestV1)
+				}
+			}
+			if err := json.Unmarshal(data, value); err == nil {
+				t.Fatal("negative fixture was accepted")
+			}
+		})
 	}
 }
 

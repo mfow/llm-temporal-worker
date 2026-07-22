@@ -148,3 +148,24 @@ func TestContinuationCodecRejectsMalformedItemUnion(t *testing.T) {
 		t.Fatal("malformed continuation item union was accepted")
 	}
 }
+
+func TestContinuationCodecNormalizesNilTranscriptForPersistence(t *testing.T) {
+	value := state.Continuation{Tenant: "tenant-a"}
+	encoded, err := encodeContinuation(value)
+	if err != nil {
+		t.Fatalf("encode nil transcript: %v", err)
+	}
+	if strings.Contains(string(encoded), `"Transcript":null`) {
+		t.Fatalf("encoded continuation contains a null transcript: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"Transcript":[]`) {
+		t.Fatalf("encoded continuation does not contain an empty transcript array: %s", encoded)
+	}
+	decoded, err := decodeContinuation(encoded)
+	if err != nil {
+		t.Fatalf("decode normalized transcript: %v", err)
+	}
+	if decoded.Transcript == nil || len(decoded.Transcript) != 0 {
+		t.Fatalf("decoded transcript = %#v, want non-nil empty array", decoded.Transcript)
+	}
+}
