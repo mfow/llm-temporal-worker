@@ -93,6 +93,31 @@ An omitted component is not a zero-dollar quote. The loader retains the
 component as `unknown` on the compiled pricing entry (the zero value remains
 reserved for an explicitly quoted free component). `pricing.CostFromUsage` and
 the budget estimator fail closed when a request needs an unknown component, so
-partial catalogs cannot silently undercharge. A later durable catalog schema
-will persist the same distinction as nullable USD columns and an explicit
-partial/unknown status.
+partial catalogs cannot silently undercharge.
+
+## PostgreSQL catalog snapshots
+
+`storage/postgres.PricingCatalogRepository` is the maintenance/control-plane
+writer and runtime snapshot reader for the `price_catalogs` and
+`price_entries` tables. `Store` validates the compiled digest again, requires
+both source and compiled SHA-256 digests, and inserts the catalog and every
+entry in one synchronous transaction. Repeating the same version and digests
+is idempotent; reusing a version or compiled digest for different content is a
+hard error. A successful newer snapshot retires older active snapshots in the
+same transaction, so readers never observe a half-published catalog.
+
+The existing projection is intentionally strict about digest round-tripping:
+persisted entries must have a non-zero `effective_from`, no prose `provenance`,
+and an entry `version` equal to the catalog version. Catalogs carrying
+unrepresentable metadata are rejected instead of silently changing their
+compiled digest. A future-dated snapshot schedules predecessor retirement and
+`LoadActive` continues returning the predecessor until the replacement's
+effective time.
+
+The PostgreSQL projection is intentionally USD-only. Decimal values are bound
+as exact text to `NUMERIC(38,18)`; an explicitly quoted zero is stored as zero,
+while an omitted component is stored as `NULL` and listed in
+`unknown_component_codes`. `price_status` is therefore `exact`, `partial`, or
+`unknown` and the runtime cannot reinterpret `NULL` as free. The source
+document's prose provenance is represented by the source digest; the compiled
+digest remains authoritative when a snapshot is loaded.
