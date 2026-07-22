@@ -1,0 +1,46 @@
+version: 1
+capability_facts:
+  - best_effort
+  - continuation
+  - service_class
+  - stream_decoder
+  - streaming
+  - strict_loss
+  - usage
+cases:
+  - id: semantic-request
+    capability: ""
+    artifacts: [semantic]
+  - id: captured-wire-request
+    capability: ""
+    artifacts: [wire]
+  - id: response
+    capability: ""
+    artifacts: [semantic, wire]
+  - id: classified-error
+    capability: ""
+    artifacts: [wire]
+  - id: security-redaction
+    capability: ""
+    artifacts: [wire]
+  - id: usage-cost
+    capability: usage
+    artifacts: [semantic, wire]
+  - id: full-stream
+    capability: stream_decoder
+    artifacts: [events]
+  - id: fragmented-stream
+    capability: stream_decoder
+    artifacts: [events]
+  - id: strict-loss
+    capability: strict_loss
+    artifacts: [semantic, wire]
+  - id: best-effort-diagnostic
+    capability: best_effort
+    artifacts: [semantic]
+  - id: class-facts
+    capability: service_class
+    artifacts: [semantic, wire]
+  - id: continuation-compatibility
+    capability: continuation
+    artifacts: [semantic, wire]
