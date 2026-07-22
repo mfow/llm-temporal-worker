@@ -80,6 +80,24 @@ Both CI workflows run `make redis-benchmark-compile`, which compiles the
 build-tagged code with tests and benchmarks disabled; it has no Redis address,
 operator gate, provider call, or Docker dependency.
 
+## PostgreSQL query-plan checks
+
+The PostgreSQL integration suite includes
+`TestInventoryQueryPlansUseTheLatestIndex`. It loads 10,000 immutable inventory
+snapshots across 100 endpoint routes, runs `ANALYZE`, and asks PostgreSQL for
+JSON plans for both the latest-snapshot horizon query and its model-page query.
+The test uses normal planner settings and requires the configured
+`provider_inventory_latest_account_idx`; a regression to an unbounded
+sequential scan fails the integration gate. This is an index eligibility check
+at a bounded representative cardinality, not a latency or production-SLO
+measurement.
+
+The fixture is isolated by a unique configuration digest and removes its model,
+snapshot, and configuration rows before closing the integration pool. It runs
+through `make postgres-integration`, so local runs without
+`LLMTW_POSTGRES_ADDR` remain a deterministic skip while CI executes the real
+PostgreSQL plan.
+
 The staged Redis/PostgreSQL/conversation work has an unimplemented
 [production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
 whose phase/status authority is centralized in
