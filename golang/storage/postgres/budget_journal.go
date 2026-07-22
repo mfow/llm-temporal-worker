@@ -199,9 +199,20 @@ func journalAppendSQL(journalTable string) string {
 		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)" +
 		" ON CONFLICT DO UPDATE SET event_id = " + journalTable + ".event_id" +
 		" WHERE " + journalTable + ".event_id = EXCLUDED.event_id" +
+		" AND " + journalTable + ".redis_generation_id = EXCLUDED.redis_generation_id" +
 		" AND " + journalTable + ".operation_id = EXCLUDED.operation_id" +
 		" AND " + journalTable + ".window_id = EXCLUDED.window_id" +
+		" AND " + journalTable + ".bucket_start = EXCLUDED.bucket_start" +
 		" AND " + journalTable + ".reservation_revision = EXCLUDED.reservation_revision" +
+		" AND " + journalTable + ".event_kind = EXCLUDED.event_kind" +
+		" AND " + journalTable + ".reserved_increase_usd = EXCLUDED.reserved_increase_usd" +
+		" AND " + journalTable + ".reserved_decrease_usd = EXCLUDED.reserved_decrease_usd" +
+		" AND " + journalTable + ".accounted_increase_usd = EXCLUDED.accounted_increase_usd" +
+		" AND " + journalTable + ".accounted_decrease_usd = EXCLUDED.accounted_decrease_usd" +
+		" AND " + journalTable + ".actual_cost_usd IS NOT DISTINCT FROM EXCLUDED.actual_cost_usd" +
+		" AND " + journalTable + ".actual_cost_status = EXCLUDED.actual_cost_status" +
+		" AND " + journalTable + ".actual_cost_unknown_reason_code IS NOT DISTINCT FROM EXCLUDED.actual_cost_unknown_reason_code" +
+		" AND " + journalTable + ".occurred_at = EXCLUDED.occurred_at" +
 		" RETURNING journal_id, event_id, (xmax = 0) AS inserted"
 }
 

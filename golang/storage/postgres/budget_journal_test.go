@@ -74,6 +74,22 @@ func TestBudgetJournalAppendSQLIsWriteOnly(t *testing.T) {
 	}
 }
 
+func TestBudgetJournalRetryRejectsChangedPayload(t *testing.T) {
+	query := journalAppendSQL(`"llm_worker"."budget_journal_events"`)
+	for _, required := range []string{
+		"redis_generation_id = EXCLUDED.redis_generation_id",
+		"event_kind = EXCLUDED.event_kind",
+		"reserved_increase_usd = EXCLUDED.reserved_increase_usd",
+		"actual_cost_usd IS NOT DISTINCT FROM EXCLUDED.actual_cost_usd",
+		"actual_cost_unknown_reason_code IS NOT DISTINCT FROM EXCLUDED.actual_cost_unknown_reason_code",
+		"occurred_at = EXCLUDED.occurred_at",
+	} {
+		if !strings.Contains(query, required) {
+			t.Fatalf("journal retry predicate missing %q: %s", required, query)
+		}
+	}
+}
+
 func TestBudgetCompletionProjectionGuardsStateAndRevision(t *testing.T) {
 	query := reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`, budget.JournalFinalizeExact)
 	for _, required := range []string{"reservation_revision < $9", "state IN ('reserved')"} {

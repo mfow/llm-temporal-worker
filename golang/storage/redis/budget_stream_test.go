@@ -82,14 +82,21 @@ func TestMemoryBudgetGenerationPortPublishesAndValidatesPointer(t *testing.T) {
 	if err != nil || loaded.GenerationID != manifest.GenerationID {
 		t.Fatalf("load manifest = %#v, %v", loaded, err)
 	}
-	pointer.ManifestDigest = strings.Repeat("0", 64)
-	if _, err := port.LoadManifest(context.Background(), pointer); err == nil {
+	tampered := pointer
+	tampered.ManifestDigest = strings.Repeat("0", 64)
+	if _, err := port.LoadManifest(context.Background(), tampered); err == nil {
 		t.Fatal("tampered pointer accepted")
 	}
 	mutated := manifest
 	mutated.IncarnationID = BudgetIncarnationID("incarnation-2")
 	if _, err := port.PublishGeneration(context.Background(), mutated); !errors.Is(err, ErrBudgetGenerationConflict) {
 		t.Fatalf("mutable generation accepted: %v", err)
+	}
+	if _, err := port.PublishGeneration(context.Background(), manifest); err != nil {
+		t.Fatalf("idempotent generation publish: %v", err)
+	}
+	if active, err := port.ActiveGeneration(context.Background()); err != nil || active != pointer {
+		t.Fatalf("active generation after idempotent publish = %#v, %v; want %#v", active, err, pointer)
 	}
 }
 

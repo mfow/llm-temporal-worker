@@ -209,6 +209,7 @@ func (port *MemoryBudgetGenerationPort) PublishGeneration(ctx context.Context, m
 		if digestErr != nil || existingDigest != pointer.ManifestDigest {
 			return ActiveBudgetGeneration{}, ErrBudgetGenerationConflict
 		}
+		port.active = pointer
 		return pointer, nil
 	}
 	port.manifests[manifest.GenerationID] = manifest
@@ -246,7 +247,7 @@ func (port *MemoryBudgetEventPort) Read(ctx context.Context, cursor string, limi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var afterMajor, afterMinor int64
+	var afterMajor, afterMinor uint64
 	if cursor != "" {
 		var err error
 		afterMajor, afterMinor, err = parseRedisStreamID(cursor)
@@ -276,16 +277,16 @@ func (port *MemoryBudgetEventPort) Read(ctx context.Context, cursor string, limi
 	return result, nil
 }
 
-func parseRedisStreamID(value string) (int64, int64, error) {
+func parseRedisStreamID(value string) (uint64, uint64, error) {
 	if !redisStreamIDPattern.MatchString(value) {
 		return 0, 0, fmt.Errorf("invalid Redis Stream cursor")
 	}
 	parts := strings.SplitN(value, "-", 2)
-	major, err := strconv.ParseInt(parts[0], 10, 64)
+	major, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("invalid Redis Stream cursor")
 	}
-	minor, err := strconv.ParseInt(parts[1], 10, 64)
+	minor, err := strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("invalid Redis Stream cursor")
 	}
