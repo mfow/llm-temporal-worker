@@ -42,6 +42,27 @@ var caseRegistry = []CaseRequirement{
 	{ID: "continuation-compatibility", Capability: "continuation", Artifacts: []ArtifactKind{ArtifactSemantic, ArtifactWire}},
 }
 
+// CaseRequirements returns the code-owned fixture matrix. A copy is returned
+// so tests and tooling cannot mutate the registry that governs validation.
+func CaseRequirements() []CaseRequirement {
+	result := make([]CaseRequirement, 0, len(caseRegistry))
+	for _, requirement := range caseRegistry {
+		copy := requirement
+		copy.Artifacts = append([]ArtifactKind(nil), requirement.Artifacts...)
+		result = append(result, copy)
+	}
+	return result
+}
+
+// GovernedCapabilityFacts returns every metadata capability fact that an
+// enforced profile must declare, including facts that do not have a fixture
+// artifact of their own.
+func GovernedCapabilityFacts() []string {
+	result := append([]string(nil), governedCapabilityFacts...)
+	sort.Strings(result)
+	return result
+}
+
 // governedCapabilityFacts remain mandatory metadata for every enforced
 // profile, including facts such as public streaming that do not themselves
 // require an offline fixture artifact.

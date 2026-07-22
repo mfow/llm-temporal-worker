@@ -55,6 +55,19 @@ the checked-in release matrix until it supplies the required semantic request,
 captured wire request, response, usage/cost, error, loss/diagnostic,
 service-class, continuation, and security fixtures.
 
+The runtime-facing `llm/provider.Registry` is a separate, explicit profile
+catalog. Each registration is keyed by `(family, profile_id)` and validates a
+concrete adapter, every governed capability fact, all three public service
+classes, a private adapter-owned SDK-parameter check, a side-effect-free
+compile probe, and one successful configured client construction. It does not
+infer a profile from a hostname, expose SDK request types, retain a client
+constructed for validation, or allow a provider-default service class. The
+checked-in `llm/provider/testdata/contracts/required-cases.yaml` inventory is
+compared with the code-owned case registry by `TestFixtureManifestComplete`;
+the same test rejects any bootstrap profile. Registration therefore cannot
+silently drift away from the enforced fixture matrix while adapter SDK types
+remain inside their owning packages.
+
 The Bedrock suite proves exact opaque-state replay, service-tier
 lowering/lifting, classified-error redaction, and captured SSE decoding and
 assembly across deterministic fragment boundaries. Anthropic Direct declares
