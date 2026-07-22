@@ -153,14 +153,35 @@ context.
 ## Current offline traceability record
 
 The latest protected master run with a retained `release-evidence` artifact is
-workflow run `29814306235` at revision
-`1d5cdd2482e98dd57eea3b7e393ce42b7323edb5`. The artifact is named
-`release-evidence` and has SHA-256 digest
-`091c4158cb43a07397149c708729482271b2fa0ba61a1a281e17c2622b9b3e5f`.
+[workflow run `29930640574`](https://github.com/mfow/llm-temporal-worker/actions/runs/29930640574) at revision
+`aa9c67f9eb744e8fb74f3f419d88775af3e7b098`. The artifact is named
+`release-evidence` (artifact `8534526845`) and has SHA-256 digest
+`0c68eb8fc93b6f391131c5b6e612c7815826e80e5534efba8924c6801862f9ad`.
 The v1 catalog binds offline implementation and conformance records to this
 run and digest. This is not production SLO evidence: the admission/compilation
 p99 and worker-error-rate requirements remain explicitly unrecorded, protected
 live-provider runs remain pending, and publication remains authorization-gated.
+
+## Recent merged validation
+
+The latest candidate includes these independently green pull-request runs. The
+pull-request runs prove the changed slice; the protected master run above is
+the only run bound to the retained release-evidence artifact.
+
+| Change | Merge commit | Pull-request run |
+| --- | --- | --- |
+| [#263](https://github.com/mfow/llm-temporal-worker/pull/263) closed tagged schema boundaries | `97a1c7d688bcdd65640b587621d16ecca7969218` | [29891380461](https://github.com/mfow/llm-temporal-worker/actions/runs/29891380461) |
+| [#265](https://github.com/mfow/llm-temporal-worker/pull/265) added the typed PostgreSQL spend-summary read | `943b4f424ac4b4cb0461a0790add398f066545bf` | [29905847340](https://github.com/mfow/llm-temporal-worker/actions/runs/29905847340) |
+| [#266](https://github.com/mfow/llm-temporal-worker/pull/266) proved resumable polling across worker restart | `13b9f3cc066e1214ab5919577d812050769fc0b3` | [29918566908](https://github.com/mfow/llm-temporal-worker/actions/runs/29918566908) |
+| [#267](https://github.com/mfow/llm-temporal-worker/pull/267) fenced reclaimed maintenance leases | `6d5c23ac36416a9971bf29759a8c973f9180203b` | [29917652182](https://github.com/mfow/llm-temporal-worker/actions/runs/29917652182) |
+
+PR #265 intentionally remains a storage read seam. The production query
+composition still requires an explicit PostgreSQL-authoritative builder for
+spend summary and remains fail-closed when that builder is absent, as described
+in [the Activity runtime boundary](../reference/activity-runtime.md) and
+[persisted query composition](../reference/persisted-query-service.md). This
+note records the implementation boundary; it does not turn the gap into a
+completed v1 requirement or claim a live provider or publication run.
 
 ## Guarded manual publication boundary
 
