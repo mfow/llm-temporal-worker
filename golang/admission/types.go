@@ -49,6 +49,7 @@ type AttemptFacts struct {
 	RouteID           string
 	EndpointID        string
 	Provider          string
+	ResolvedModel     string
 	ProviderRequestID string
 	ServiceClass      string
 	Dispatch          DispatchCertainty

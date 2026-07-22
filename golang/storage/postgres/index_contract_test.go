@@ -13,6 +13,7 @@ func TestMigrationIndexesRemainExplicit(t *testing.T) {
 	sql := string(data)
 	for _, index := range []string{
 		"operations_completed_brin_idx",
+		"operations_scope_spend_idx",
 		"budget_journal_time_brin_idx",
 		"provider_status_event_brin_idx",
 		"provider_route_query_idx",
@@ -20,6 +21,7 @@ func TestMigrationIndexesRemainExplicit(t *testing.T) {
 		"response_cache_reusable_key_uidx",
 		"operations_provider_operation_uidx",
 		"query_executions_unknown_cost_idx",
+		"query_executions_scope_time_idx",
 		"provider_inventory_latest_account_idx",
 	} {
 		if !strings.Contains(sql, "CREATE ") || !strings.Contains(sql, index) {

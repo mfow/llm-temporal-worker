@@ -40,7 +40,7 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 		OperationID: observer.operation.ID, DispatchToken: observer.operation.DispatchToken,
 		Attempt: admission.AttemptFacts{
 			RouteID: observer.candidate.RouteID, EndpointID: observer.candidate.EndpointID,
-			Provider: observer.candidate.Provider, ServiceClass: string(observer.candidate.AttemptedClass),
+			Provider: observer.candidate.Provider, ResolvedModel: observer.candidate.Model, ServiceClass: string(observer.candidate.AttemptedClass),
 			AttemptNumber: observer.attempt,
 		},
 		LeaseUntil: observer.leaseUntil,
@@ -197,7 +197,7 @@ func (engine *Engine) continueAfterDefiniteFailure(ctx context.Context, operatio
 	}
 	request := admission.ContinueRequest{
 		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
-		Outcome:   admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ServiceClass: string(candidate.AttemptedClass), Dispatch: admission.Rejected}},
+		Outcome:   admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ResolvedModel: candidate.Model, ServiceClass: string(candidate.AttemptedClass), Dispatch: admission.Rejected}},
 		Remaining: quoted.maximum, RemainingUSD: quoted.maximumUSD, Reservations: aggregateReservations(remaining), LeaseUntil: engine.dependencies.Clock().Add(lease), ExpiresAt: operation.ExpiresAt,
 	}
 	if failure != nil && failure.Provider.RequestID != "" {
@@ -218,7 +218,7 @@ func (engine *Engine) finishFailed(ctx context.Context, operation admission.Oper
 	if attemptNumber <= 0 {
 		attemptNumber = candidate.RouteIndex + 1
 	}
-	attempt := admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ProviderRequestID: failure.Provider.RequestID, ServiceClass: string(candidate.AttemptedClass), AttemptNumber: attemptNumber}
+	attempt := admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ResolvedModel: candidate.Model, ProviderRequestID: failure.Provider.RequestID, ServiceClass: string(candidate.AttemptedClass), AttemptNumber: attemptNumber}
 	attempt.Dispatch = admissionCertainty(failure.Dispatch)
 	finalCtx, cancel := engine.finalizationContext(ctx)
 	defer cancel()

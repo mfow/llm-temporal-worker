@@ -378,7 +378,11 @@ func (r OperationRepository) transitionDispatch(ctx context.Context, request adm
 		if disposition == "" {
 			disposition = string(admission.Accepted)
 		}
-		_, err = tx.Exec(ctx, "INSERT INTO "+attempts+" (attempt_id,operation_id,attempt_number,route_index,fallback_index,route_id,endpoint_id,provider,endpoint_family,resolved_model,route_model_revision,state,dispatch_disposition,reserved_cost_usd,cost_status,safe_diagnostics) VALUES ($1,$2,$3,0,0,$4,$5,$6,'unknown','unknown','unknown','submitted',$7,0,'pending','{}'::jsonb) ON CONFLICT (operation_id,attempt_number) DO NOTHING", uuid.New(), opID, facts.AttemptNumber, facts.RouteID, facts.EndpointID, facts.Provider, disposition)
+		resolvedModel := facts.ResolvedModel
+		if resolvedModel == "" {
+			resolvedModel = "unknown"
+		}
+		_, err = tx.Exec(ctx, "INSERT INTO "+attempts+" (attempt_id,operation_id,attempt_number,route_index,fallback_index,route_id,endpoint_id,provider,endpoint_family,resolved_model,route_model_revision,state,dispatch_disposition,reserved_cost_usd,cost_status,safe_diagnostics) VALUES ($1,$2,$3,0,0,$4,$5,$6,'unknown',$7,'unknown','submitted',$8,0,'pending','{}'::jsonb) ON CONFLICT (operation_id,attempt_number) DO NOTHING", uuid.New(), opID, facts.AttemptNumber, facts.RouteID, facts.EndpointID, facts.Provider, resolvedModel, disposition)
 		return err
 	})
 }
@@ -508,6 +512,10 @@ func (r OperationRepository) Complete(ctx context.Context, request admission.Com
 	if err != nil {
 		return err
 	}
+	attempts, err := r.Namespace.Render("operation_attempts")
+	if err != nil {
+		return err
+	}
 	actual, err := usdText(request.ActualCostUSD)
 	if err != nil {
 		return err
@@ -547,8 +555,10 @@ func (r OperationRepository) Complete(ctx context.Context, request admission.Com
 			method = ""
 			request.UnknownReason = safeReason(request.UnknownReason)
 		}
-		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, result_byte_length=$5, result_media_type=$6, actual_cost_usd=$7, cost_status=$8, cost_method=$9, cost_unknown_reason_code=$10, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$11 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], request.ResultRef.Size, request.ResultRef.Media, nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds())
-		return err
+		if _, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, result_byte_length=$5, result_media_type=$6, actual_cost_usd=$7, cost_status=$8, cost_method=$9, cost_unknown_reason_code=$10, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$11 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], request.ResultRef.Size, request.ResultRef.Media, nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds()); err != nil {
+			return err
+		}
+		return updateLatestAttemptFacts(ctx, tx, attempts, opID, request.Attempt)
 	})
 }
 
@@ -736,7 +746,7 @@ func (r OperationRepository) Attempts(ctx context.Context, id string) ([]admissi
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.Pool.Query(ctx, "SELECT attempt_number, route_id, endpoint_id, provider, COALESCE(dispatch_disposition,'not_dispatched') FROM "+relation+" WHERE operation_id=$1 ORDER BY attempt_number", operationUUID(id))
+	rows, err := r.Pool.Query(ctx, "SELECT attempt_number, route_id, endpoint_id, provider, resolved_model, COALESCE(dispatch_disposition,'not_dispatched') FROM "+relation+" WHERE operation_id=$1 ORDER BY attempt_number", operationUUID(id))
 	if err != nil {
 		return nil, redactPostgresError(err)
 	}
@@ -745,13 +755,22 @@ func (r OperationRepository) Attempts(ctx context.Context, id string) ([]admissi
 	for rows.Next() {
 		var a admission.AttemptFacts
 		var d string
-		if err := rows.Scan(&a.AttemptNumber, &a.RouteID, &a.EndpointID, &a.Provider, &d); err != nil {
+		if err := rows.Scan(&a.AttemptNumber, &a.RouteID, &a.EndpointID, &a.Provider, &a.ResolvedModel, &d); err != nil {
 			return nil, err
 		}
 		a.Dispatch = admission.DispatchCertainty(d)
 		attempts = append(attempts, a)
 	}
 	return attempts, rows.Err()
+}
+
+func updateLatestAttemptFacts(ctx context.Context, tx pgx.Tx, relation string, operationID uuid.UUID, attempt admission.AttemptFacts) error {
+	returnValue := attempt.AttemptNumber
+	if returnValue < 0 {
+		returnValue = 0
+	}
+	_, err := tx.Exec(ctx, "UPDATE "+relation+" SET provider=CASE WHEN $2='' THEN provider ELSE $2 END, resolved_model=CASE WHEN $3='' THEN resolved_model ELSE $3 END WHERE operation_id=$1 AND attempt_number=COALESCE(NULLIF($4,0),(SELECT MAX(attempt_number) FROM "+relation+" WHERE operation_id=$1))", operationID, attempt.Provider, attempt.ResolvedModel, returnValue)
+	return err
 }
 
 // ProviderOperation opens the encrypted provider reference for reconciliation
