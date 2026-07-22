@@ -70,6 +70,157 @@ func Verify(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error 
 	if string(stored) != string(digest[:]) {
 		return fmt.Errorf("PostgreSQL schema contract digest does not match %s", ContractVersion)
 	}
+	if err := verifyReadOnlySchema(ctx, pool, namespace, migration); err != nil {
+		return err
+	}
+	return nil
+}
+
+// verifyReadOnlySchema proves the immutable physical contract that the
+// readiness gate relies on. The migration digest alone is not sufficient:
+// an operator can drop a table or index after installation without changing
+// the marker row. Keep this check in one short read-only transaction so a
+// worker never starts polling against a partially restored namespace.
+func verifyReadOnlySchema(ctx context.Context, pool *pgxpool.Pool, namespace Namespace, migration string) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("begin PostgreSQL readiness transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var database, timezone, accessMode string
+	if err := tx.QueryRow(ctx, "SELECT current_database(), current_setting('TimeZone'), current_setting('transaction_read_only')").Scan(&database, &timezone, &accessMode); err != nil {
+		return fmt.Errorf("verify PostgreSQL readiness transaction: %w", err)
+	}
+	if database != namespace.Database {
+		return fmt.Errorf("PostgreSQL readiness transaction database %q does not match %q", database, namespace.Database)
+	}
+	if !strings.EqualFold(timezone, "UTC") {
+		return fmt.Errorf("PostgreSQL readiness transaction timezone %q is not UTC", timezone)
+	}
+	if !strings.EqualFold(accessMode, "on") {
+		return fmt.Errorf("PostgreSQL readiness transaction is not read-only")
+	}
+
+	tables, indexes := migrationObjectNames(migration, namespace)
+	if err := verifyTables(ctx, tx, namespace, tables); err != nil {
+		return err
+	}
+	if err := verifyIndexes(ctx, tx, namespace, indexes); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit PostgreSQL readiness transaction: %w", err)
+	}
+	return nil
+}
+
+// migrationObjectNames derives the required physical names from the exact
+// migration whose digest was checked above. Keeping the migration as the
+// source of truth avoids a second hand-maintained readiness catalog that could
+// silently drift when a new table or index is added.
+func migrationObjectNames(migration string, namespace Namespace) (tables, indexes []string) {
+	seenTables := map[string]struct{}{}
+	seenIndexes := map[string]struct{}{}
+	for _, line := range strings.Split(migration, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "CREATE" {
+			continue
+		}
+		switch {
+		case fields[1] == "TABLE":
+			name := strings.TrimSuffix(fields[2], "(")
+			prefix := namespace.Schema + "."
+			if strings.HasPrefix(name, prefix) {
+				name = strings.TrimPrefix(name, prefix)
+			}
+			if name != "" {
+				if _, ok := seenTables[name]; !ok {
+					seenTables[name] = struct{}{}
+					tables = append(tables, name)
+				}
+			}
+		case fields[1] == "INDEX":
+			name := fields[2]
+			if _, ok := seenIndexes[name]; !ok {
+				seenIndexes[name] = struct{}{}
+				indexes = append(indexes, name)
+			}
+		case fields[1] == "UNIQUE" && len(fields) >= 4 && fields[2] == "INDEX":
+			name := fields[3]
+			if _, ok := seenIndexes[name]; !ok {
+				seenIndexes[name] = struct{}{}
+				indexes = append(indexes, name)
+			}
+		}
+	}
+	sort.Strings(tables)
+	sort.Strings(indexes)
+	return tables, indexes
+}
+
+type readinessQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func verifyTables(ctx context.Context, queryer readinessQueryer, namespace Namespace, expected []string) error {
+	if len(expected) == 0 {
+		return fmt.Errorf("PostgreSQL migration has no required tables")
+	}
+	rows, err := queryer.Query(ctx, `SELECT c.relname
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND c.relname = ANY($2::text[])`, namespace.Schema, expected)
+	if err != nil {
+		return fmt.Errorf("verify PostgreSQL worker tables: %w", err)
+	}
+	defer rows.Close()
+	found := make(map[string]struct{}, len(expected))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scan PostgreSQL worker table: %w", err)
+		}
+		found[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate PostgreSQL worker tables: %w", err)
+	}
+	for _, name := range expected {
+		if _, ok := found[name]; !ok {
+			return fmt.Errorf("PostgreSQL worker table %q is missing", namespace.TablePrefix+name)
+		}
+	}
+	return nil
+}
+
+func verifyIndexes(ctx context.Context, queryer readinessQueryer, namespace Namespace, expected []string) error {
+	if len(expected) == 0 {
+		return fmt.Errorf("PostgreSQL migration has no required indexes")
+	}
+	rows, err := queryer.Query(ctx, `SELECT indexname
+FROM pg_indexes
+WHERE schemaname = $1 AND indexname = ANY($2::text[])`, namespace.Schema, expected)
+	if err != nil {
+		return fmt.Errorf("verify PostgreSQL worker indexes: %w", err)
+	}
+	defer rows.Close()
+	found := make(map[string]struct{}, len(expected))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scan PostgreSQL worker index: %w", err)
+		}
+		found[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate PostgreSQL worker indexes: %w", err)
+	}
+	for _, name := range expected {
+		if _, ok := found[name]; !ok {
+			return fmt.Errorf("PostgreSQL worker index %q is missing", name)
+		}
+	}
 	return nil
 }
 

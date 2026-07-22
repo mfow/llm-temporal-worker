@@ -111,3 +111,45 @@ func TestResponseCacheStorageIdentityIncludesRoute(t *testing.T) {
 		t.Fatal("response cache fill identity does not include route identity")
 	}
 }
+
+func TestMigrationObjectNamesCoverTablesAndIndexes(t *testing.T) {
+	namespace, err := NewNamespace("llm_worker", "private", "tenant_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migration, err := RenderMigration(namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, indexes := migrationObjectNames(migration, namespace)
+	if len(tables) != 26 {
+		t.Fatalf("migration table count = %d, want 26: %v", len(tables), tables)
+	}
+	if len(indexes) != 71 {
+		t.Fatalf("migration index count = %d, want 71", len(indexes))
+	}
+	for _, name := range []string{
+		"tenant_schema_contract", "tenant_operations", "tenant_query_executions",
+	} {
+		if !containsString(tables, name) {
+			t.Fatalf("required table %q was not derived from migration", name)
+		}
+	}
+	for _, name := range []string{
+		"tenant_operations_poll_due_idx", "tenant_response_cache_reusable_key_uidx",
+		"tenant_query_executions_unknown_cost_idx",
+	} {
+		if !containsString(indexes, name) {
+			t.Fatalf("required index %q was not derived from migration", name)
+		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
