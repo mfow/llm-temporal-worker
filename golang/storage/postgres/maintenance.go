@@ -162,6 +162,11 @@ func (repository MaintenanceRepository) PublishOutbox(ctx context.Context, event
 	if err := repository.validate(); err != nil {
 		return err
 	}
+	canonical, err := maintenance.NormalizeSafePayload(event.SafePayload)
+	if err != nil {
+		return err
+	}
+	event.SafePayload = canonical
 	if err := event.Validate(); err != nil {
 		return err
 	}
@@ -190,7 +195,7 @@ func (repository MaintenanceRepository) PublishOutbox(ctx context.Context, event
 	}
 	if tag.RowsAffected() == 0 {
 		var same bool
-		if err := repository.Pool.QueryRow(ctx, "SELECT aggregate_id = $2 AND safe_payload = $3::jsonb FROM "+outboxTable+" WHERE event_kind = $1 AND dedupe_key = $4", string(event.Kind), aggregateID, event.SafePayload, event.DedupeKey[:]).Scan(&same); err != nil {
+		if err := repository.Pool.QueryRow(ctx, "SELECT aggregate_type = $2 AND aggregate_id = $3 AND safe_payload = $4::jsonb FROM "+outboxTable+" WHERE event_kind = $1 AND dedupe_key = $5", string(event.Kind), event.AggregateType, aggregateID, event.SafePayload, event.DedupeKey[:]).Scan(&same); err != nil {
 			return redactPostgresError(fmt.Errorf("inspect maintenance outbox dedupe: %w", err))
 		}
 		if !same {

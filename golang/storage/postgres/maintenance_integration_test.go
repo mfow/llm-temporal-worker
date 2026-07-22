@@ -53,6 +53,12 @@ func TestMaintenanceOutboxFencesReclaimedLeaseAndDeduplicatesCompletion(t *testi
 	if err := repository.PublishOutbox(ctx, conflict); !errors.Is(err, ErrMaintenanceOutboxConflict) {
 		t.Fatalf("conflicting dedupe enqueue was accepted: %v", err)
 	}
+	typeConflict := event
+	typeConflict.ID = uuid.New().String()
+	typeConflict.AggregateType = "provider_state"
+	if err := repository.PublishOutbox(ctx, typeConflict); !errors.Is(err, ErrMaintenanceOutboxConflict) {
+		t.Fatalf("aggregate-type dedupe conflict was accepted: %v", err)
+	}
 	first, err := repository.ClaimOutbox(ctx, maintenance.ClaimOptions{Now: now, Limit: 1, Lease: 10 * time.Minute})
 	if err != nil || len(first) != 1 {
 		t.Fatalf("first claim=%+v err=%v", first, err)
