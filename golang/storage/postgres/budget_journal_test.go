@@ -77,6 +77,7 @@ func TestBudgetJournalAppendSQLIsWriteOnly(t *testing.T) {
 func TestBudgetJournalRetryRejectsChangedPayload(t *testing.T) {
 	query := journalAppendSQL(`"llm_worker"."budget_journal_events"`)
 	for _, required := range []string{
+		"ON CONFLICT (operation_id, window_id, reservation_revision)",
 		"redis_generation_id = EXCLUDED.redis_generation_id",
 		"event_kind = EXCLUDED.event_kind",
 		"reserved_increase_usd = EXCLUDED.reserved_increase_usd",
@@ -92,7 +93,7 @@ func TestBudgetJournalRetryRejectsChangedPayload(t *testing.T) {
 
 func TestBudgetCompletionProjectionGuardsStateAndRevision(t *testing.T) {
 	query := reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`, budget.JournalFinalizeExact)
-	for _, required := range []string{"reservation_revision < $9", "state IN ('reserved')"} {
+	for _, required := range []string{"reservation_revision < $9", "state IN ('reserved')", "$7::numeric IS NULL"} {
 		if !strings.Contains(query, required) {
 			t.Fatalf("completion update missing %q: %s", required, query)
 		}

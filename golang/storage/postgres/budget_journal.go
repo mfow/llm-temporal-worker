@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -148,6 +149,13 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 		if errors.Is(insertErr, pgx.ErrNoRows) {
 			return ErrBudgetJournalConflict
 		}
+		// The event identity is also independently unique. A retry that reuses
+		// an event ID with a different operation/window/revision therefore hits
+		// that constraint before the composite idempotency target. Normalize both
+		// unique-constraint paths to the same safe conflict sentinel.
+		if isPostgresUniqueViolation(insertErr) {
+			return ErrBudgetJournalConflict
+		}
 		if insertErr != nil {
 			return redactPostgresError(fmt.Errorf("append budget journal event: %w", insertErr))
 		}
@@ -197,7 +205,7 @@ func journalAppendSQL(journalTable string) string {
 		" reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd," +
 		" actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at)" +
 		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)" +
-		" ON CONFLICT DO UPDATE SET event_id = " + journalTable + ".event_id" +
+		" ON CONFLICT (operation_id, window_id, reservation_revision) DO UPDATE SET event_id = " + journalTable + ".event_id" +
 		" WHERE " + journalTable + ".event_id = EXCLUDED.event_id" +
 		" AND " + journalTable + ".redis_generation_id = EXCLUDED.redis_generation_id" +
 		" AND " + journalTable + ".operation_id = EXCLUDED.operation_id" +
@@ -214,6 +222,11 @@ func journalAppendSQL(journalTable string) string {
 		" AND " + journalTable + ".actual_cost_unknown_reason_code IS NOT DISTINCT FROM EXCLUDED.actual_cost_unknown_reason_code" +
 		" AND " + journalTable + ".occurred_at = EXCLUDED.occurred_at" +
 		" RETURNING journal_id, event_id, (xmax = 0) AS inserted"
+}
+
+func isPostgresUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func budgetBucketUpsertSQL(bucketTable string) string {
@@ -238,7 +251,7 @@ func reservationCompletionSQL(reservationTable string, kind budget.JournalEventK
 		allowedStates = "'reserved', 'retained_ambiguous'"
 	}
 	return "UPDATE " + reservationTable + " SET state=$3, actual_cost_usd=$4, actual_cost_status=$5," +
-		" actual_cost_unknown_reason_code=$6, budget_charge_usd=CASE WHEN $7 IS NULL THEN reserved_cost_usd ELSE $7 END, budget_charge_basis=$8," +
+		" actual_cost_unknown_reason_code=$6, budget_charge_usd=CASE WHEN $7::numeric IS NULL THEN reserved_cost_usd ELSE $7::numeric END, budget_charge_basis=$8," +
 		" reservation_revision=$9, last_journal_id=$10, finalized_at=$11" +
 		" WHERE operation_id=$1 AND window_id=$2 AND reservation_revision < $9 AND state IN (" + allowedStates + ")"
 }
