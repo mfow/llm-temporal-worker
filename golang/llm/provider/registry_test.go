@@ -136,6 +136,9 @@ func TestRegistryRejectsInvalidContractsWithoutFactorySideEffects(t *testing.T) 
 		{name: "invalid profile ID", edit: func(value *provider.Registration) { value.ProfileID = "Fixture Chat" }, want: "profile ID"},
 		{name: "typed nil adapter", edit: func(value *provider.Registration) { var adapter *registryFixtureAdapter; value.Adapter = adapter }, want: "concrete adapter"},
 		{name: "missing feature", edit: func(value *provider.Registration) { delete(value.Capabilities.Features, provider.FeatureUsage) }, want: "usage"},
+		{name: "capability drift", edit: func(value *provider.Registration) {
+			value.Capabilities.Features[provider.FeatureText] = provider.Capability{State: provider.CapabilityUnsupported}
+		}, want: "do not match"},
 		{name: "unknown feature", edit: func(value *provider.Registration) {
 			value.Capabilities.Features[provider.Feature("future_feature")] = provider.Capability{State: provider.CapabilityUnsupported}
 		}, want: "not governed"},
@@ -167,7 +170,7 @@ func TestRegistryRejectsInvalidContractsWithoutFactorySideEffects(t *testing.T) 
 			if strings.Contains(err.Error(), "secret api key") {
 				t.Fatal("factory error leaked through registry diagnostics")
 			}
-			if test.name == "invalid family" || test.name == "invalid profile ID" || test.name == "typed nil adapter" || test.name == "missing feature" || test.name == "unknown feature" || test.name == "streaming advertised" || test.name == "missing tier" || test.name == "probe mismatch" || test.name == "missing probe" || test.name == "missing factory" {
+			if test.name == "invalid family" || test.name == "invalid profile ID" || test.name == "typed nil adapter" || test.name == "missing feature" || test.name == "capability drift" || test.name == "unknown feature" || test.name == "streaming advertised" || test.name == "missing tier" || test.name == "probe mismatch" || test.name == "missing probe" || test.name == "missing factory" {
 				if factoryCalls != 0 {
 					t.Fatalf("factory calls = %d for pre-construction validation", factoryCalls)
 				}

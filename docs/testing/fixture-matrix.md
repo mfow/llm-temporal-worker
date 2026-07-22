@@ -64,9 +64,11 @@ infer a profile from a hostname, expose SDK request types, retain a client
 constructed for validation, or allow a provider-default service class. The
 checked-in `llm/provider/testdata/contracts/required-cases.yaml` inventory is
 compared with the code-owned case registry by `TestFixtureManifestComplete`;
-the same test rejects any bootstrap profile. Registration therefore cannot
-silently drift away from the enforced fixture matrix while adapter SDK types
-remain inside their owning packages.
+the same test rejects any bootstrap fixture profile. This fixture gate is
+deliberately separate from runtime route composition: startup code must bind
+each configured `Registration` to the corresponding enforced fixture profile
+when it assembles the deployment registry. Adapter SDK types remain inside
+their owning packages.
 
 The Bedrock suite proves exact opaque-state replay, service-tier
 lowering/lifting, classified-error redaction, and captured SSE decoding and
@@ -76,7 +78,8 @@ checked-in decoder fixture proves parser behavior only. In both cases, captured
 SSE coverage is protocol evidence only; it does not establish a v1 client
 dispatch path. The registry is intentionally code-owned so
 a future semantic field or capability cannot silently escape an enforced
-profile's fixture matrix.
+profile's fixture matrix; runtime registration and fixture profile binding
+remain an explicit startup composition responsibility.
 
 ### Responses profile boundary
 

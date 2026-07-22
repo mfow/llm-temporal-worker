@@ -23,9 +23,10 @@ type requiredCaseRecord struct {
 }
 
 // TestFixtureManifestComplete is the repository-wide release gate for the
-// code-owned matrix. Individual adapter packages retain focused conversion
-// assertions; this test ensures every enforced profile is present and that
-// the reviewed YAML inventory cannot drift from the registry.
+// code-owned fixture matrix. Individual adapter packages retain focused
+// conversion assertions; this test ensures every checked-in fixture profile is
+// enforced and that the reviewed YAML inventory cannot drift from the case
+// registry. Runtime route composition binds those profiles separately.
 func TestFixtureManifestComplete(t *testing.T) {
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {

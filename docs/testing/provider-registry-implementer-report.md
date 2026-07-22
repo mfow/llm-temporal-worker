@@ -31,6 +31,9 @@ registry unit tests.
 - Typed-nil adapters, missing capabilities, streaming claims, incomplete tier
   mappings, compile-probe mismatches, and failed client construction fail
   closed.
+- The declared capability set is queried from the concrete adapter at
+  registration and must match the declaration exactly; route composition cannot
+  silently advertise unsupported features.
 - Factory errors are intentionally sanitized so credentials or endpoint details
   cannot enter startup diagnostics.
 - The registry is immutable-by-convention after startup; callers must complete
@@ -39,6 +42,6 @@ registry unit tests.
 ## Remaining concern
 
 Concrete runtime route construction still owns how configured profiles are
-turned into registrations. This PR supplies the validated boundary and does
-not invent provider-specific constructors or credentials for that composition
-layer.
+turned into registrations and binds those registrations to enforced fixture
+profiles. This PR supplies the validated boundary and does not invent
+provider-specific constructors or credentials for that composition layer.

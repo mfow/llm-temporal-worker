@@ -159,6 +159,17 @@ func validateRegistration(registration Registration) error {
 		return fmt.Errorf("provider registry profile %q: %w", registration.ProfileID, err)
 	}
 	registration.Capabilities = capabilities
+	adapterCapabilities, err := registration.Adapter.Capabilities(context.Background(), CapabilityQuery{Family: registration.Family})
+	if err != nil {
+		return fmt.Errorf("provider registry profile %q adapter capability query failed", registration.ProfileID)
+	}
+	adapterCapabilities, err = validateCapabilities(adapterCapabilities)
+	if err != nil {
+		return fmt.Errorf("provider registry profile %q adapter capabilities are invalid", registration.ProfileID)
+	}
+	if !capabilitiesEqual(registration.Capabilities, adapterCapabilities) {
+		return fmt.Errorf("provider registry profile %q capabilities do not match the concrete adapter", registration.ProfileID)
+	}
 	if err := validateServiceTiers(registration.ServiceTiers); err != nil {
 		return fmt.Errorf("provider registry profile %q: %w", registration.ProfileID, err)
 	}
@@ -258,6 +269,18 @@ func cloneCapabilities(set CapabilitySet) CapabilitySet {
 		}
 	}
 	return copy
+}
+
+func capabilitiesEqual(left, right CapabilitySet) bool {
+	if left.Version != right.Version || len(left.Features) != len(right.Features) {
+		return false
+	}
+	for feature, capability := range left.Features {
+		if capability != right.Features[feature] {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneServiceTiers(tiers map[llm.ServiceClass]string) map[llm.ServiceClass]string {
