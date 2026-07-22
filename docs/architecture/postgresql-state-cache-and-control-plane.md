@@ -1597,9 +1597,12 @@ input are removed. All price columns are USD-specific by name and type.
 Downstream Go/JSON/OCaml contracts expose USD decimal properties and never
 report **currency = USD**.
 
-All currently supported provider catalogs are USD, so this phase has no FX
-adapter, rate-refresh policy, snapshot table, configuration, or maintenance
-job. A non-USD provider price is classified as unknown and cannot support
+All currently supported provider price sources must declare USD, so this phase
+has no FX adapter, rate-refresh policy, snapshot table, configuration, or
+maintenance job. The catalog loader rejects a source that declares another
+currency before it can enter a runtime snapshot; it never accepts a
+caller-supplied rate or silently treats a foreign amount as USD. An omitted
+component in an otherwise valid USD source remains unknown and cannot support
 catalog-derived actual cost or monetary admission unless the explicit unpriced
 policy allows it. When a concrete non-USD provider is added, a separate ADR
 must design the Go-owned rate source, staleness/failure policy, exact conversion,
