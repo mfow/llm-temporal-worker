@@ -47,6 +47,14 @@ func (codec *CursorCodec) Sign(request QueryRequest, position string, horizon, i
 	if codec == nil || len(codec.Key) == 0 || !ok || filterQueryKind != request.Kind || position == "" {
 		return "", ErrQueryCursor
 	}
+	// CursorCodec is a public seam used by storage adapters as well as by
+	// QueryService.  Do not let a direct caller sign a cursor for a malformed
+	// typed request and rely on the Activity wrapper to catch it later.  The
+	// same closed request validation used at the wire boundary also rejects
+	// unsafe tenant/project/actor values and invalid page/filter fields.
+	if err := validateCursorRequest(request); err != nil {
+		return "", ErrQueryCursor
+	}
 	max := codec.MaxPosition
 	if max <= 0 {
 		max = 128
@@ -85,6 +93,12 @@ func (codec *CursorCodec) Decode(request QueryRequest, token QueryCursor, now ti
 		return claims, ErrQueryCursor
 	}
 	if _, ok := filterKind(request.Filter); !ok {
+		return claims, ErrQueryCursor
+	}
+	// Validate before parsing attacker-controlled cursor material.  Besides
+	// making direct Decode calls safe, this prevents malformed requests from
+	// being used as an oracle for otherwise valid signed cursors.
+	if err := validateCursorRequest(request); err != nil {
 		return claims, ErrQueryCursor
 	}
 	parts := strings.Split(string(token), ".")
@@ -128,6 +142,9 @@ func (codec *CursorCodec) Decode(request QueryRequest, token QueryCursor, now ti
 }
 
 func cursorDigests(request QueryRequest) (string, string, error) {
+	if err := validateCursorRequest(request); err != nil {
+		return "", "", err
+	}
 	kind, ok := filterKind(request.Filter)
 	if !ok || kind != request.Kind {
 		return "", "", errors.New("query filter kind mismatch")
@@ -150,6 +167,23 @@ func cursorDigests(request QueryRequest) (string, string, error) {
 	}
 	filterHash := sha256.Sum256(data)
 	return hex.EncodeToString(scopeHash[:]), hex.EncodeToString(filterHash[:]), nil
+}
+
+// validateCursorRequest applies the canonical typed/wire validation before a
+// cursor is signed, decoded, or bound to a digest.  Cursor integrity depends
+// on the request being a valid closed query; otherwise callers could create a
+// token for values that QueryService would later reject.
+func validateCursorRequest(request QueryRequest) error {
+	if err := validateScope(llm.RequestContext{
+		Tenant: string(request.Scope.Tenant), Project: string(request.Scope.Project),
+		Actor: string(request.Scope.Actor), Tags: cloneTags(request.Scope.Tags),
+	}); err != nil {
+		return err
+	}
+	if _, err := EncodeQueryRequest(request); err != nil {
+		return err
+	}
+	return nil
 }
 
 func canonicalFilter(filter QueryFilter) QueryFilter {
