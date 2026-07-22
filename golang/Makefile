@@ -17,7 +17,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -349,6 +349,16 @@ kustomize-verify:
 
 adapter-contracts:
 	$(GO) test -v ./llm/provider/contracttest ./llm/provider/...
+
+# Exercises the route/continuation security contract without contacting a
+# provider or external state service. Longer fuzzing remains opt-in through
+# routing-fuzz so pull-request checks stay bounded and deterministic.
+routing-contracts:
+	$(GO) test -race ./routing ./state ./storage/memory -run '^Test(PlannerNeverMovesAcrossRequiredContinuationPin|ProviderCacheAffinityCannotBypassHealthEligibility|ContinuationSecurity|ContinuationConstraintsMarkOnlyRequiredProviderStateAsPinned|CheckPinningDropsOnlyOptionalStateForBestEffortPortableTranscript|CanonicalTranscript)'
+
+routing-fuzz:
+	$(GO) test ./routing -run '^$$' -fuzz '^FuzzPlannerNeverSelectsUnauthorizedClasses$$' -fuzztime "$${ROUTING_FUZZ_TIME:-60s}" -parallel=1
+	$(GO) test ./state -run '^$$' -fuzz '^FuzzCanonicalTranscriptNeverPanics$$' -fuzztime "$${ROUTING_FUZZ_TIME:-60s}" -parallel=1
 
 security-verify:
 	@workspace="$$(mktemp -d)"; \

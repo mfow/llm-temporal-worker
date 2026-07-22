@@ -88,8 +88,9 @@ func validContinuation(t *testing.T, now time.Time, tenant string) state.Continu
 		TranscriptDigest:   digest,
 		TranscriptComplete: true,
 		ProviderState: []state.OpaqueStateRef{{
-			Provider: "openai", EndpointID: "endpoint-1", Family: string(provider.FamilyOpenAIResponses), Media: "application/vnd.openai.response-id", Data: []byte("resp_123"), Required: true,
+			Provider: "openai", EndpointID: "endpoint-1", Family: string(provider.FamilyOpenAIResponses), ModelLineage: "lineage-1", Media: "application/vnd.openai.response-id", Data: []byte("resp_123"), Required: true,
 		}},
+		Pinning:   state.Pinning{Provider: "openai", EndpointID: "endpoint-1", Family: string(provider.FamilyOpenAIResponses), ModelLineage: "lineage-1"},
 		CreatedAt: now.Add(-time.Minute),
 		ExpiresAt: now.Add(time.Hour),
 	}

@@ -33,8 +33,9 @@ func validContinuation(t *testing.T, now time.Time) Continuation {
 		Transcript:         transcript,
 		TranscriptDigest:   digest,
 		TranscriptComplete: true,
+		Pinning:            Pinning{Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude"},
 		ProviderState: []OpaqueStateRef{{
-			Provider: "anthropic", EndpointID: "prod", Family: "messages", Media: "application/json", Data: []byte("opaque"),
+			Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude", Media: "application/json", Data: []byte("opaque"),
 		}},
 		ExpiresAt: now.Add(time.Hour),
 	}
@@ -182,7 +183,7 @@ func TestContinuationConstraintsExposeRoutingFacts(t *testing.T) {
 		ProviderState:      []OpaqueStateRef{{Required: false}},
 	}
 	constraints := continuation.Constraints(llm.PortabilityBestEffort)
-	if !constraints.Present || constraints.Tenant != continuation.Tenant || !constraints.RequiresOpaqueState || !constraints.TranscriptComplete || constraints.Portability != llm.PortabilityBestEffort {
+	if !constraints.Present || constraints.Tenant != continuation.Tenant || constraints.RequiresOpaqueState || !constraints.TranscriptComplete || constraints.Portability != llm.PortabilityBestEffort {
 		t.Fatalf("Constraints() = %#v", constraints)
 	}
 	if constraints.Provider != continuation.Pinning.Provider || constraints.EndpointID != continuation.Pinning.EndpointID || constraints.AccountRegion != continuation.Pinning.AccountRegion || constraints.Family != continuation.Pinning.Family || constraints.ModelLineage != continuation.Pinning.ModelLineage {
@@ -191,5 +192,57 @@ func TestContinuationConstraintsExposeRoutingFacts(t *testing.T) {
 
 	if got := (Continuation{Tenant: "tenant-a"}).Constraints(llm.PortabilityStrict); got.Present || got.RequiresOpaqueState || got.TranscriptComplete || got.Portability != llm.PortabilityStrict {
 		t.Fatalf("empty continuation constraints = %#v", got)
+	}
+}
+
+func TestContinuationConstraintsMarkOnlyRequiredProviderStateAsPinned(t *testing.T) {
+	continuation := Continuation{ID: "continuation-1", Tenant: "tenant-a", ProviderState: []OpaqueStateRef{
+		{Provider: "provider", EndpointID: "endpoint", Family: "family", Media: "application/json", Data: []byte("optional"), Required: false},
+		{Provider: "provider", EndpointID: "endpoint", Family: "family", Media: "application/json", Data: []byte("required"), Required: true},
+	}}
+	if constraints := continuation.Constraints(llm.PortabilityBestEffort); !constraints.RequiresOpaqueState {
+		t.Fatal("a required provider-state entry did not pin the continuation")
+	}
+	continuation.ProviderState[1].Required = false
+	if constraints := continuation.Constraints(llm.PortabilityBestEffort); constraints.RequiresOpaqueState {
+		t.Fatal("optional provider-state entries unexpectedly pinned the continuation")
+	}
+}
+
+func TestContinuationValidateRejectsRequiredStateWithoutMatchingPinning(t *testing.T) {
+	now := time.Unix(100, 0)
+	base := validContinuation(t, now)
+	base.ProviderState[0].Required = true
+	base.Pinning = Pinning{}
+	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "requires complete continuation pinning") {
+		t.Fatalf("required state without pinning Validate() = %v", err)
+	}
+	base.Pinning = Pinning{Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude"}
+	base.ProviderState[0].ModelLineage = "other-lineage"
+	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "does not match continuation pinning") {
+		t.Fatalf("mismatched required state Validate() = %v", err)
+	}
+}
+
+func TestContinuationValidateRejectsOptionalStateWithoutPinning(t *testing.T) {
+	now := time.Unix(100, 0)
+	base := validContinuation(t, now)
+	base.Pinning = Pinning{}
+	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "requires complete continuation pinning") {
+		t.Fatalf("optional state without pinning Validate() = %v", err)
+	}
+}
+
+func TestContinuationValidateRejectsOptionalStateWithMismatchedProvenance(t *testing.T) {
+	now := time.Unix(100, 0)
+	base := validContinuation(t, now)
+	base.Pinning = Pinning{Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude"}
+	base.ProviderState[0].ModelLineage = "claude"
+	if err := base.Validate(now); err != nil {
+		t.Fatal(err)
+	}
+	base.ProviderState[0].Provider = "openai"
+	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "does not match continuation pinning") {
+		t.Fatalf("mismatched optional state Validate() = %v", err)
 	}
 }

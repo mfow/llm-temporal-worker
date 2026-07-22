@@ -130,6 +130,11 @@ func (continuation Continuation) Validate(now time.Time) error {
 	if digest != continuation.TranscriptDigest {
 		return fmt.Errorf("continuation transcript digest mismatch")
 	}
+	if len(continuation.ProviderState) > 0 {
+		if err := ValidatePinning(continuation.Pinning); err != nil {
+			return fmt.Errorf("provider state requires complete continuation pinning: %w", err)
+		}
+	}
 	for index, state := range continuation.ProviderState {
 		if state.Provider == "" || state.EndpointID == "" || state.Family == "" || state.Media == "" {
 			return fmt.Errorf("provider state %d is incomplete", index)
@@ -137,8 +142,22 @@ func (continuation Continuation) Validate(now time.Time) error {
 		if len(state.Data) == 0 {
 			return fmt.Errorf("provider state %d is empty", index)
 		}
+		if !providerStateMatchesPinning(state, continuation.Pinning) {
+			return fmt.Errorf("provider state %d does not match continuation pinning", index)
+		}
+		if state.Required {
+			if err := ValidatePinning(continuation.Pinning); err != nil {
+				return fmt.Errorf("required provider state %d has incomplete continuation pinning: %w", index, err)
+			}
+		}
 	}
 	return nil
+}
+
+func providerStateMatchesPinning(state OpaqueStateRef, pin Pinning) bool {
+	return state.Provider == pin.Provider && state.EndpointID == pin.EndpointID &&
+		state.AccountRegion == pin.AccountRegion && state.Family == pin.Family &&
+		state.ModelLineage == pin.ModelLineage
 }
 
 // Constraints are the subset of continuation lineage that route planning
@@ -157,7 +176,13 @@ type Constraints struct {
 }
 
 func (continuation Continuation) Constraints(mode llm.PortabilityMode) Constraints {
-	requires := len(continuation.ProviderState) > 0
+	// Provider state is not automatically a hard pin. Adapters mark state
+	// Required when replaying it is necessary to preserve semantics; optional
+	// state may be dropped only by CheckPinning in best-effort mode when the
+	// canonical transcript is complete. Keeping this distinction here prevents
+	// a persisted optional observation from silently becoming an authorization
+	// constraint.
+	requires := false
 	for _, state := range continuation.ProviderState {
 		requires = requires || state.Required
 	}

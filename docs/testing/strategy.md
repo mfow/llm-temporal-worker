@@ -247,6 +247,34 @@ survivor is therefore a gate failure; adding a mutation requires either a
 failing invariant or a documented semantic boundary before it can enter the
 manifest.
 
+### Routing and continuation security contract
+
+The bounded routing contract gate runs without a provider or external state
+service:
+
+```sh
+make routing-contracts
+```
+
+It combines route-planner properties with continuation pinning, cache-affinity
+health eligibility, canonical transcript, and malformed-handle/record fixtures.
+The fixture corpus under `golang/testdata/contracts/security/continuation/`
+must fail closed (including tenant/MAC mismatches) rather than being treated as
+valid input. The longer-running versions of the two new targets are opt-in:
+
+```sh
+make routing-fuzz ROUTING_FUZZ_TIME=60s
+```
+
+Every provider-state record must carry complete provenance matching the
+continuation pin. The `Required` marker controls whether that pinned state is a
+hard routing constraint; best-effort portability may drop a correctly pinned
+optional record only when the canonical transcript is complete, and records a
+diagnostic for that decision.
+When a persisted provider-cache observation is marked `HardPinned`, the gate
+requires an exact eligible route and rejects the plan rather than leaving a
+fallback candidate that could dispatch on another route.
+
 ### Store conformance
 
 `storage/conformance` holds one black-box suite that accepts a `StoreFactory`.

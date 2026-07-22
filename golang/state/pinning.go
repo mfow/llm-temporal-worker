@@ -34,6 +34,18 @@ func CheckPinning(constraints Constraints, candidate Pinning) CompatibilityResul
 		equalNonEmpty(constraints.AccountRegion, candidate.AccountRegion) &&
 		equalNonEmpty(constraints.Family, candidate.Family) &&
 		equalNonEmpty(constraints.ModelLineage, candidate.ModelLineage)
+	if constraints.RequiresOpaqueState {
+		// Required opaque state cannot use empty constraint fields as wildcards:
+		// a malformed continuation must not become compatible with an arbitrary
+		// route merely because it omitted its pinning metadata.
+		if constraints.Provider == "" || constraints.EndpointID == "" || constraints.Family == "" || constraints.ModelLineage == "" ||
+			constraints.Provider != candidate.Provider || constraints.EndpointID != candidate.EndpointID ||
+			constraints.AccountRegion != candidate.AccountRegion || constraints.Family != candidate.Family ||
+			constraints.ModelLineage != candidate.ModelLineage {
+			return CompatibilityResult{Decision: CompatibilityRejected, Diagnostics: []llm.Diagnostic{{Code: "continuation_pinned", Severity: llm.DiagnosticError, Message: "required provider continuation state has no matching route pin"}}}
+		}
+		return CompatibilityResult{Decision: CompatibilityCompatible}
+	}
 	if sameLineage {
 		return CompatibilityResult{Decision: CompatibilityCompatible}
 	}

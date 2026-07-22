@@ -140,12 +140,12 @@ func (engine *Engine) persistContinuation(ctx context.Context, request llm.Reque
 	if err != nil {
 		return nil, engineError(provider.CodeStateCorrupt, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetryNever, "continuation transcript is invalid", err)
 	}
-	providerStates := []state.OpaqueStateRef{{Provider: candidate.Provider, EndpointID: candidate.EndpointID, Family: candidate.Family, Media: providerHandleMedia, Data: []byte(providerValue.Handle), Required: true}}
+	providerStates := []state.OpaqueStateRef{{Provider: candidate.Provider, EndpointID: candidate.EndpointID, AccountRegion: candidate.Pinning.AccountRegion, Family: candidate.Family, ModelLineage: candidate.ModelLineage, Media: providerHandleMedia, Data: []byte(providerValue.Handle), Required: true}}
 	for _, value := range providerValue.ProviderStates {
 		if value.Provider == "" || value.EndpointFamily == "" || value.MediaType == "" || len(value.Opaque) == 0 {
 			return nil, engineError(provider.CodeProviderInvalidResponse, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetryNever, "provider continuation state is incomplete", nil)
 		}
-		providerStates = append(providerStates, state.OpaqueStateRef{Provider: value.Provider, EndpointID: candidate.EndpointID, Family: value.EndpointFamily, Media: value.MediaType, Data: append([]byte(nil), value.Opaque...), Required: true})
+		providerStates = append(providerStates, state.OpaqueStateRef{Provider: value.Provider, EndpointID: candidate.EndpointID, AccountRegion: candidate.Pinning.AccountRegion, Family: value.EndpointFamily, ModelLineage: candidate.ModelLineage, Media: value.MediaType, Data: append([]byte(nil), value.Opaque...), Required: true})
 	}
 	child := state.Continuation{Tenant: request.Context.Tenant, ParentID: "", Transcript: transcript, TranscriptDigest: digest, TranscriptComplete: true, ProviderState: providerStates, Pinning: candidate.Pinning, LastOperationID: operationID, CapabilityVersion: candidate.CapabilityVersion, PriceVersion: candidate.PriceVersion, CreatedAt: now, ExpiresAt: now.Add(ttl), Depth: 0}
 	var handle state.Handle
