@@ -58,11 +58,15 @@ func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	if total != 1 {
 		t.Fatalf("concurrent claims returned %d rows, want exactly one", total)
 	}
-	if err := store.Complete(context.Background(), event.ID, at.Add(time.Second)); err != nil {
+	items, err := store.Claim(context.Background(), ClaimOptions{Now: at.Add(2 * time.Minute), Limit: 1, Lease: time.Minute})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("claim for completion failed: items=%+v err=%v", items, err)
+	}
+	if err := store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Complete(context.Background(), event.ID, at.Add(time.Second)); !errors.Is(err, ErrOutboxNotClaimed) {
-		t.Fatalf("completed row was mutable again: %v", err)
+	if err := store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)); err != nil {
+		t.Fatalf("duplicate completion was not idempotent: %v", err)
 	}
 }
 
@@ -99,6 +103,21 @@ func TestDispatcherMakesMissingObjectSuccessAndRetriesFailures(t *testing.T) {
 			}
 		}
 	}
+	claimed, err := store.Claim(context.Background(), ClaimOptions{Now: at.Add(time.Minute), Limit: 1, Lease: time.Minute})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim failed-row recovery failed: items=%+v err=%v", claimed, err)
+	}
+	if err := store.Retry(context.Background(), claimed[0].ID, claimed[0].LeaseToken, at.Add(time.Minute), at.Add(2*time.Minute)); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if err := store.Retry(context.Background(), claimed[0].ID, claimed[0].LeaseToken, at.Add(time.Minute+time.Second), at.Add(3*time.Minute)); err != nil {
+		t.Fatalf("duplicate retry was not idempotent: %v", err)
+	}
+	for _, event := range store.Snapshot() {
+		if event.ID == claimed[0].ID && !event.AvailableAt.Equal(at.Add(2*time.Minute)) {
+			t.Fatalf("duplicate retry changed the original retry schedule: %+v", event)
+		}
+	}
 }
 
 func TestOutboxLeaseRecovery(t *testing.T) {
@@ -108,7 +127,8 @@ func TestOutboxLeaseRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Claim(context.Background(), ClaimOptions{Now: at, Limit: 1, Lease: time.Minute}); err != nil {
+	first, err := store.Claim(context.Background(), ClaimOptions{Now: at, Limit: 1, Lease: time.Minute})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if items, err := store.Claim(context.Background(), ClaimOptions{Now: at.Add(30 * time.Second), Limit: 1, Lease: time.Minute}); err != nil {
@@ -122,5 +142,17 @@ func TestOutboxLeaseRecovery(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].AttemptCount != 2 {
 		t.Fatalf("expired lease was not recovered: %+v", items)
+	}
+	if first[0].LeaseToken == items[0].LeaseToken {
+		t.Fatal("reclaimed outbox item reused the old lease token")
+	}
+	if err := store.Complete(context.Background(), event.ID, first[0].LeaseToken, at.Add(2*time.Minute+time.Second)); !errors.Is(err, ErrOutboxNotClaimed) {
+		t.Fatalf("stale claimant completed reclaimed item: %v", err)
+	}
+	if err := store.Retry(context.Background(), event.ID, first[0].LeaseToken, at.Add(2*time.Minute+time.Second), at.Add(3*time.Minute)); !errors.Is(err, ErrOutboxNotClaimed) {
+		t.Fatalf("stale claimant retried reclaimed item: %v", err)
+	}
+	if err := store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)); err != nil {
+		t.Fatalf("current claimant could not complete item: %v", err)
 	}
 }

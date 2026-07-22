@@ -2027,9 +2027,12 @@ CREATE TABLE llm_worker.maintenance_outbox (
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     available_at timestamptz NOT NULL,
     lease_expires_at timestamptz,
+    lease_token uuid,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at timestamptz,
-    UNIQUE (event_kind, dedupe_key)
+    UNIQUE (event_kind, dedupe_key),
+    CHECK (state <> 'processing' OR (lease_expires_at IS NOT NULL AND lease_token IS NOT NULL)),
+    CHECK (state = 'processing' OR lease_expires_at IS NULL)
 );
 
 CREATE INDEX maintenance_outbox_ready_idx
@@ -2042,8 +2045,11 @@ CREATE INDEX maintenance_outbox_lease_idx
 ~~~
 
 Workers claim outbox rows in short transactions with **FOR UPDATE SKIP LOCKED**.
-The payload contains encrypted locators or safe identifiers only. Completion is
-idempotent; a missing external object is a successful delete.
+Each claim writes a fresh opaque `lease_token`; completion and retry must match
+that token while the lease is still live. A reclaim therefore fences a stale
+worker, while retaining the terminal token makes a duplicate completion or
+failure request idempotent. The payload contains encrypted locators or safe
+identifiers only. A missing external object is a successful delete.
 
 The reusable Go contract and dispatcher live in
 [`golang/maintenance`](../../golang/maintenance); the PostgreSQL adapter is
