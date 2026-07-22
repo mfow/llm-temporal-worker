@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"crypto/sha256"
+	"errors"
 	"testing"
 	"time"
 
@@ -130,6 +131,9 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	}
 	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET response_inline_ciphertext=NULL, response_key_id=NULL, response_blob_id=$1 WHERE cache_entry_id=$2", free.BlobID, entry.ID); err == nil {
 		t.Fatal("late cache blob reference was accepted after deletion claim")
+	}
+	if _, err := blobs.PutLocator(fixture.ctx, fixture.scope.ID, "blob-gc-test", BlobMetadata{StoreID: free.StoreID, Digest: free.Digest, ByteLength: free.ByteLength, MediaType: free.MediaType}, []byte("late-reuse")); !errors.Is(err, ErrBlobNotWritable) {
+		t.Fatalf("late content-addressed blob reuse error=%v, want ErrBlobNotWritable", err)
 	}
 	if err := maintenance.FinalizeBlobDeletion(fixture.ctx, free.BlobID); err != nil {
 		t.Fatal(err)

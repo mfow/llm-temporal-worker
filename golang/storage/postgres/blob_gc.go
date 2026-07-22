@@ -15,7 +15,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var ErrBlobDeletionNotClaimed = errors.New("blob deletion was not claimed")
+var (
+	ErrBlobDeletionNotClaimed = errors.New("blob deletion was not claimed")
+	ErrBlobNotWritable        = errors.New("blob is not accepting writes")
+)
 
 // BlobDeletionClaim is the metadata needed by an object-store deleter.  The
 // locator remains sealed; opening it is an explicit operation outside the SQL
@@ -160,15 +163,14 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 	refs := blobReferenceFreeSQL(tables["operations"], tables["conversation_checkpoints"], tables["checkpoint_provider_state"], tables["response_cache_entries"], tables["response_cache_uses"], tables["response_cache_fills"])
 	statePredicate := "b.deletion_state = 'eligible'"
 	var args []any
-	args = append(args, now)
 	if len(ids) > 0 {
-		statePredicate = "b.blob_id = ANY($2::uuid[]) AND b.deletion_state IN ('retained', 'eligible')"
+		statePredicate = "b.blob_id = ANY($1::uuid[]) AND b.deletion_state IN ('retained', 'eligible')"
 		args = append(args, ids)
 	}
 	args = append(args, limit)
-	limitArg := "$2"
+	limitArg := "$1"
 	if len(ids) > 0 {
-		limitArg = "$3"
+		limitArg = "$2"
 	}
 	candidateQuery := "SELECT b.blob_id FROM " + tables["blobs"] + " b WHERE " + statePredicate +
 		" ORDER BY b.expires_at NULLS LAST, b.blob_id LIMIT " + limitArg + " FOR UPDATE OF b SKIP LOCKED"

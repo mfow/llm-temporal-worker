@@ -37,6 +37,14 @@ row succeeds. Consequently an object-store `not found` response can be
 acknowledged without retrying forever. A row in `retained` or `eligible` cannot
 be finalized without first acquiring the `deleting` fence.
 
+This slice is the PostgreSQL metadata contract only. It does not wire a
+`BlobResultStore` or runtime engine to an object-store client; the maintenance
+outbox/deleter integration must call claim, perform the physical delete, and
+then finalize. A worker crash after claiming leaves a row in `deleting` and
+there is intentionally no automatic lease expiry in this contract. Recovery
+must be an explicit, audited operator/reconciliation action rather than a
+blind retry that could race a still-running deleter.
+
 The implementation lives in `golang/storage/postgres/blob_gc.go`; the
 integration test is skipped unless `LLMTW_POSTGRES_ADDR` is configured and
 covers active operation, checkpoint, provider-state, and ready-cache fences,

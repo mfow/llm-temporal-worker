@@ -1512,12 +1512,12 @@ BEGIN
         FROM __SCHEMA__.__PREFIX__response_cache_entries c
         JOIN __SCHEMA__.__PREFIX__blobs b ON b.blob_id = c.response_blob_id
         WHERE c.cache_entry_id = referenced_id
-        FOR KEY SHARE OF b;
+        FOR UPDATE OF b;
     ELSE
         SELECT b.deletion_state INTO referenced_state
         FROM __SCHEMA__.__PREFIX__blobs b
         WHERE b.blob_id = referenced_id
-        FOR KEY SHARE OF b;
+        FOR UPDATE OF b;
     END IF;
 
     IF referenced_state IN ('deleting', 'deleted') THEN
