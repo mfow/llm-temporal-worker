@@ -213,6 +213,13 @@ Planning follows these rules:
 4. in best-effort mode, portability may drop only state explicitly marked
    optional, with a diagnostic and a new branch.
 
+Every persisted provider-state record carries complete provenance matching the
+continuation pin. The `Required` marker is part of the continuation contract,
+not a property inferred from the mere presence of provider state: it controls
+whether the pinned state is a hard route constraint. Persisted optional state
+must not silently turn a portable transcript into a hard route pin, nor may
+unpinned opaque bytes be lowered to a provider request.
+
 An expired provider conversation does not authorize silently replaying the
 prompt. If a complete canonical transcript exists, the compiler may deliberately
 reconstruct a new provider request and records that action.

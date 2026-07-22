@@ -1,0 +1,6 @@
+[
+  {"name":"empty-provider-media","provider":"provider","endpoint":"endpoint","family":"family","media":"","data":"opaque"},
+  {"name":"empty-provider-data","provider":"provider","endpoint":"endpoint","family":"family","media":"application/json","data":""},
+  {"name":"negative-depth","provider":"provider","endpoint":"endpoint","family":"family","media":"application/json","data":"opaque","depth":-1},
+  {"name":"digest-mismatch","provider":"provider","endpoint":"endpoint","family":"family","media":"application/json","data":"opaque","digest_mismatch":true}
+]

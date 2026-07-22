@@ -134,6 +134,33 @@ func TestPreferProviderCacheAffinityMovesExactRouteWithoutAuthorizingIt(t *testi
 	}
 }
 
+func TestPreferProviderCacheAffinityHardPinRejectsFallback(t *testing.T) {
+	accountA := [32]byte{6}
+	accountB := [32]byte{7}
+	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
+	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountB, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := llm.Request{OperationKey: "hard-affinity", Model: "logical", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant"}}
+	hard := affinityForRoute("second", "ep-second", "openai", "openai_responses", "us-east-1", accountB, "lineage", "revision", now)
+	hard.HardPinned = true
+	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog, Now: now, Affinity: &AffinityPreferences{HardPin: &hard}})
+	if err != nil || len(plan.Candidates) != 1 || plan.Candidates[0].RouteID != "second" {
+		t.Fatalf("hard pin plan = %#v, err=%v", plan, err)
+	}
+	missing := hard
+	missing.RouteID = "not-configured"
+	missing.EndpointID = "ep-nope"
+	plan, err = (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog, Now: now, Affinity: &AffinityPreferences{HardPin: &missing}})
+	if err == nil || len(plan.Candidates) != 0 {
+		t.Fatalf("missing hard pin plan = %#v, err=%v; want pin error", plan, err)
+	}
+}
+
 func TestExpiredProviderCacheAffinityIsIgnored(t *testing.T) {
 	account := [32]byte{5}
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)

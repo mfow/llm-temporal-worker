@@ -154,6 +154,22 @@ func PreferProviderCacheAffinity(plan Plan, preferences *AffinityPreferences, no
 		return Plan{}, err
 	}
 	result := plan.Clone()
+	if preferences.HardPin != nil {
+		if !preferences.HardPin.Active(now) {
+			return Plan{}, fmt.Errorf("provider cache hard pin %q is expired or invalid", preferences.HardPin.RouteID)
+		}
+		for _, candidate := range result.Candidates {
+			if affinityMatchesCandidate(*preferences.HardPin, candidate) {
+				// A hard pin is an eligibility constraint, not a preference. Do
+				// not leave fallback candidates behind for a later dispatch.
+				result.Candidates = []Candidate{candidate}
+				result.Digest = digestPlan(result)
+				result.DigestHex = fmt.Sprintf("%x", result.Digest[:])
+				return result, nil
+			}
+		}
+		return Plan{}, fmt.Errorf("provider cache hard pin %q is not eligible", preferences.HardPin.RouteID)
+	}
 	if len(result.Candidates) < 2 {
 		return result, nil
 	}
