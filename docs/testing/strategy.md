@@ -349,6 +349,13 @@ and scans logs, traces, and metrics for tenant/content markers. Run it with:
 go test -race ./integration
 ```
 
+The engine recovery suite also reconstructs a replacement `Engine` after a
+resumable provider has accepted work. It reads the provider-owned operation ID
+from the shared admission ledger, resumes polling with a fresh result
+repository, and asserts exactly one `Submit` across the restart boundary. This
+is the offline proof for the restart-safe provider-poll invariant; the live
+Temporal/Compose gate adds the real worker and task-queue boundary.
+
 ### Deployment tests
 
 - strict configuration schema/golden effective config;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -14,10 +15,22 @@ type resumableEngineAdapter struct {
 	mu             sync.Mutex
 	submits        int
 	polls          int
+	sharedCounters *resumableCallCounters
 	terminal       bool
 	submitErr      error
+	pollErrors     []error
 	pollResponses  []provider.ResumableResult
 	recoveryPollID string
+}
+
+// resumableCallCounters are test instrumentation shared by two separately
+// constructed adapters. The provider-owned operation state is represented by
+// the stable operation ID, while these counters let the restart assertion
+// prove that no second Submit crossed the process boundary.
+type resumableCallCounters struct {
+	mu      sync.Mutex
+	submits int
+	polls   int
 }
 
 func (adapter *resumableEngineAdapter) Name() string { return "resumable-fixture" }
@@ -41,6 +54,11 @@ func (adapter *resumableEngineAdapter) Submit(ctx context.Context, _ provider.Ca
 	adapter.mu.Lock()
 	adapter.submits++
 	adapter.mu.Unlock()
+	if adapter.sharedCounters != nil {
+		adapter.sharedCounters.mu.Lock()
+		adapter.sharedCounters.submits++
+		adapter.sharedCounters.mu.Unlock()
+	}
 	if adapter.submitErr != nil {
 		return provider.ResumableResult{}, adapter.submitErr
 	}
@@ -51,9 +69,18 @@ func (adapter *resumableEngineAdapter) Poll(_ context.Context, _ provider.Call, 
 	adapter.mu.Lock()
 	adapter.polls++
 	poll := adapter.polls
+	pollErrors := adapter.pollErrors
 	responses := adapter.pollResponses
 	recoveryPollID := adapter.recoveryPollID
 	adapter.mu.Unlock()
+	if adapter.sharedCounters != nil {
+		adapter.sharedCounters.mu.Lock()
+		adapter.sharedCounters.polls++
+		adapter.sharedCounters.mu.Unlock()
+	}
+	if poll <= len(pollErrors) && pollErrors[poll-1] != nil {
+		return provider.ResumableResult{}, pollErrors[poll-1]
+	}
 	if len(responses) > 0 {
 		if recoveryPollID != "" && id != recoveryPollID {
 			return provider.ResumableResult{}, provider.NewError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "unexpected recovered provider id")
@@ -125,6 +152,73 @@ func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	}
 	if polls != 2 {
 		t.Fatalf("Poll calls = %d, want 2", polls)
+	}
+}
+
+func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T) {
+	counters := &resumableCallCounters{}
+	firstAdapter := &resumableEngineAdapter{
+		sharedCounters: counters,
+		pollErrors:     []error{context.Canceled},
+	}
+	first := newHarness(t, firstAdapter)
+	request := baseRequest("resumable-engine-restart")
+
+	if _, err := first.engine.Generate(context.Background(), request); err == nil {
+		t.Fatal("first attempt unexpectedly completed")
+	}
+	operationID := operationIDForTest(t, request)
+	operation, err := first.admission.Get(context.Background(), operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.State != admission.StateProviderPending {
+		t.Fatalf("operation state after interrupted poll = %q, want provider_pending", operation.State)
+	}
+	pending, ok := first.admission.(admission.ProviderPendingStore)
+	if !ok {
+		t.Fatal("test admission store does not expose provider-pending recovery")
+	}
+	providerOperationID, err := pending.ProviderOperation(context.Background(), operationID)
+	if err != nil {
+		t.Fatalf("load persisted provider operation ID: %v", err)
+	}
+	if providerOperationID != "fixture-provider-operation" {
+		t.Fatalf("persisted provider operation ID = %q, want fixture-provider-operation", providerOperationID)
+	}
+
+	// A replacement worker gets a fresh Engine, result repository, and provider
+	// adapter while the durable operation ledger and provider-owned operation
+	// remain available. Recovery must use the persisted provider operation ID
+	// and poll it; it must not call Submit again after the process boundary.
+	resumedResponse := successfulResponse()
+	resumedResponse.OperationKey = request.OperationKey
+	replacementAdapter := &resumableEngineAdapter{
+		sharedCounters: counters,
+		pollResponses: []provider.ResumableResult{{
+			State:               provider.ResumableCompleted,
+			ProviderOperationID: providerOperationID,
+			Dispatch:            provider.DispatchAccepted,
+			Result:              provider.Result{Response: resumedResponse},
+		}},
+		recoveryPollID: providerOperationID,
+	}
+	replacement := newHarnessWithAdmission(t, replacementAdapter, first.admission, func() time.Time { return first.clock })
+	response, err := replacement.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatalf("resume after engine restart failed: %v", err)
+	}
+	if response.Status != llm.ResponseStatusCompleted {
+		t.Fatalf("response status = %q, want completed", response.Status)
+	}
+	counters.mu.Lock()
+	submits, polls := counters.submits, counters.polls
+	counters.mu.Unlock()
+	if submits != 1 {
+		t.Fatalf("Submit calls across engine restart = %d, want exactly one", submits)
+	}
+	if polls != 2 {
+		t.Fatalf("Poll calls across engine restart = %d, want initial and resumed poll", polls)
 	}
 }
 
