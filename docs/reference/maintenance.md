@@ -24,10 +24,18 @@ set into a worker process.
 
 The policy contract includes status, inventory, operation, budget, and
 checkpoint horizons so adapters can add table-specific retention safely. The
-current PostgreSQL implementation intentionally exposes only the cache
-tombstone path and outbox lifecycle: operation, checkpoint, and budget rows
-have restrictive foreign keys and audit/rebuild obligations that must be
-handled in their own transaction before a physical delete is enabled.
+PostgreSQL adapter exposes bounded status-history and inventory-snapshot
+cleanup in addition to the cache tombstone path. Status cleanup preserves
+every event referenced by `provider_route_status.last_event_id`. Inventory
+cleanup deletes child model rows in the same transaction and preserves the
+latest snapshot for each configuration/provider/endpoint/account epoch, even when that
+snapshot has expired. Both passes use `FOR UPDATE SKIP LOCKED` and bounded
+expiry indexes (`provider_status_expiry_idx` and
+`provider_inventory_expiry_idx`); the inventory latest-row check uses the
+account-epoch ordering rather than an unlocked pre-scan. Operation, checkpoint,
+and budget rows remain disabled
+until their restrictive foreign keys and audit/rebuild obligations can be
+handled in their own transaction.
 
 ## Outbox lifecycle
 
