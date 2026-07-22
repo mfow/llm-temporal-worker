@@ -314,10 +314,13 @@ func TestV1VariantBoundariesAndTemperature(t *testing.T) {
 
 func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
 	for _, name := range []string{
+		"compact-request.json",
 		"generate-fork-patch-set.json",
 		"generate-fork-patch-clear.json",
 		"generate-variant-unknown-temperature.json",
 		"generate-variant-positive-temperature.json",
+		"query-provider-status.json",
+		"query-provider-response.json",
 		"compact-request-no-cache.json",
 		"query-model-inventory.json",
 		"query-credit-status.json",
@@ -400,6 +403,11 @@ func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 
 func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 	for _, name := range []string{
+		"negative-generate-cache-field.json",
+		"negative-generate-compaction-checkpoint.json",
+		"negative-generate-cost-enum.json",
+		"negative-generate-depth-overflow.json",
+		"negative-generate-diagnostics.json",
 		"negative-generate-transcript.json",
 		"negative-currency-field.json",
 		"negative-numeric-usd.json",
@@ -408,6 +416,7 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 		"negative-generate-empty-reasoning-patch.json",
 		"negative-generate-compaction-scalar.json",
 		"negative-generate-extensions-null.json",
+		"negative-generate-null-output.json",
 		"negative-compact-tools.json",
 		"negative-compact-structured-output.json",
 		"negative-compact-positive-variant.json",
