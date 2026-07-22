@@ -1,10 +1,30 @@
 # PostgreSQL repository foundation
 
 The PostgreSQL repository slices are implemented in
-[`golang/storage/postgres`](../../golang/storage/postgres). It is intentionally
-limited to the connection, namespace, scope, encrypted-locator, exact USD
-codec, and one-shot operation/attempt/result boundaries. Checkpoints, budgets,
-and cache repositories remain separate delivery slices.
+[`golang/storage/postgres`](../../golang/storage/postgres). They cover the
+connection, namespace, scope, encrypted-locator, exact USD codec, one-shot
+operation/attempt/result boundaries, and the landed Phase B write-only budget
+journal foundation. Checkpoints remain a separate delivery slice; response
+cache publication is described in [the cache reference](postgresql-response-cache.md).
+
+The Phase B budget boundary is deliberately split across two packages:
+
+- `postgres.BudgetJournal` appends validated reservation and completion events
+  and updates the durable bucket/reservation projections in one transaction.
+  It has no active-budget read method, so normal admission cannot turn
+  PostgreSQL into a budget-state fallback. Idempotent retries return the
+  existing journal identity only when the complete event identity and payload
+  match; unknown costs retain SQL `NULL` with an explicit reason.
+- `redis.BudgetGenerationPort` and `redis.BudgetEventPort` define active
+  generation adoption/publication and broadcast Stream coordination. Their
+  memory implementations provide deterministic offline contract coverage; a
+  Stream event is only a coordination hint and never authorizes work.
+
+These are ports and durable write primitives, not the production composition.
+Task 19 still has to sequence Redis acceptance, the PostgreSQL journal write,
+and provider dispatch in the runtime, and must implement the guarded
+dependency/readiness, generation recovery, and cross-store crash-boundary
+proofs before this composition can be enabled for paid production work.
 
 ## Connection and transaction boundary
 
