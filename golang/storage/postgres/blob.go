@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -93,13 +94,17 @@ func (repository BlobRepository) PutLocator(ctx context.Context, scopeID uuid.UU
 	}
 	query := "INSERT INTO " + relation + " (blob_id, scope_id, store_id, locator_ciphertext, locator_key_id, sha256, byte_length, media_type, encryption_context_digest, expires_at) " +
 		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) " +
-		"ON CONFLICT (scope_id, store_id, sha256, byte_length, media_type) DO UPDATE SET expires_at = EXCLUDED.expires_at " +
+		"ON CONFLICT (scope_id, store_id, sha256, byte_length, media_type) DO UPDATE SET deletion_state = 'retained', expires_at = EXCLUDED.expires_at " +
+		"WHERE " + relation + ".deletion_state IN ('retained', 'eligible') " +
 		"RETURNING blob_id, created_at, deletion_state, locator_key_id, locator_ciphertext, encryption_context_digest"
 	var returnedContextHash []byte
 	if err := repository.Pool.QueryRow(ctx, query,
 		metadata.BlobID, scopeID, metadata.StoreID, sealed.Ciphertext, sealed.KeyID,
 		metadata.Digest[:], metadata.ByteLength, metadata.MediaType, sealed.ContextHash[:], metadata.ExpiresAt,
 	).Scan(&record.BlobID, &record.CreatedAt, &record.DeletionState, &record.LocatorKeyID, &record.Locator.Ciphertext, &returnedContextHash); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BlobRecord{}, fmt.Errorf("blob content-addressed row is not writable: %w", ErrBlobNotWritable)
+		}
 		return BlobRecord{}, redactPostgresError(fmt.Errorf("insert PostgreSQL blob metadata: %w", err))
 	}
 	if len(returnedContextHash) != keyDigestBytes {
