@@ -327,6 +327,14 @@ the conservative `llm_ambiguous_dispatch` result without another dispatch or
 budget reservation. It never calls `provider-mock` and must not create a
 Docker-private-address bypass to satisfy this proof.
 
+The production Temporal client performs an eager capability handshake before
+worker polling. A transient gRPC `Unavailable` during frontend startup is
+retried at most five times with 250 ms exponential backoff capped at 2 s. The
+retry is bounded and does not apply to authentication, TLS, target, or caller
+cancellation errors, so a persistent outage still fails worker startup rather
+than becoming an unbounded loop. Compose independently gates the worker on
+Temporal's semantic `SERVING` cluster-health check.
+
 Live-provider contracts are opt-in, require explicit environment flags and tiny
 cost ceilings, and run only through the protected [Guarded live-provider
 contracts](../reference/live-provider-contracts.md) workflow. The workflow

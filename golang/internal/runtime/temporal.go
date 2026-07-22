@@ -9,10 +9,33 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"go.temporal.io/sdk/client"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+const (
+	// Temporal's auto-setup image can report cluster health while the frontend
+	// is still completing its first RPC accept. Keep the eager client boundary
+	// fail-closed, but absorb that narrow transient with a short bounded retry.
+	temporalDialMaxAttempts    = 5
+	temporalDialInitialBackoff = 250 * time.Millisecond
+	temporalDialMaxBackoff     = 2 * time.Second
+)
+
+// TemporalDialContext is the eager Temporal SDK dial seam used by the
+// production factory. It is exported so applications embedding the runtime
+// can provide a transport-aware dialer without replacing the whole runtime.
+type TemporalDialContext func(context.Context, client.Options) (client.Client, error)
+
+type temporalDialRetryPolicy struct {
+	maxAttempts    int
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
+}
 
 // TemporalClientFactory is the process boundary for creating a Temporal
 // client. Runtime construction uses this interface so tests and local tools
@@ -37,6 +60,9 @@ type DefaultTemporalClientFactory struct {
 	Identity string
 	// ReadFile is injectable for tests. The default reads bounded local files.
 	ReadFile func(string) ([]byte, error)
+	// DialContext is injectable for tests and custom transports. Production
+	// callers normally leave it nil, which uses the official eager SDK dial.
+	DialContext TemporalDialContext
 }
 
 func (factory DefaultTemporalClientFactory) New(ctx context.Context, value config.Config) (client.Client, error) {
@@ -62,7 +88,78 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 		}
 		options.ConnectionOptions.TLS = tlsConfig
 	}
-	return client.DialContext(ctx, options)
+	dial := factory.DialContext
+	if dial == nil {
+		dial = client.DialContext
+	}
+	return dialTemporalWithRetry(ctx, dial, options, temporalDialRetryPolicy{
+		maxAttempts:    temporalDialMaxAttempts,
+		initialBackoff: temporalDialInitialBackoff,
+		maxBackoff:     temporalDialMaxBackoff,
+	})
+}
+
+// dialTemporalWithRetry retries only gRPC Unavailable responses from the
+// eager GetSystemInfo handshake. Authentication, TLS, malformed-target, and
+// caller cancellation errors remain fail-closed and are returned immediately.
+// The retry budget is intentionally short and bounded: the worker must not
+// hide a persistent Temporal outage behind an unbounded startup loop.
+func dialTemporalWithRetry(ctx context.Context, dial TemporalDialContext, options client.Options, policy temporalDialRetryPolicy) (client.Client, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if dial == nil {
+		return nil, errors.New("Temporal client dialer is unavailable")
+	}
+	if policy.maxAttempts <= 0 {
+		policy.maxAttempts = 1
+	}
+	if policy.initialBackoff <= 0 {
+		policy.initialBackoff = temporalDialInitialBackoff
+	}
+	if policy.maxBackoff < policy.initialBackoff {
+		policy.maxBackoff = policy.initialBackoff
+	}
+	backoff := policy.initialBackoff
+	var lastErr error
+	for attempt := 1; attempt <= policy.maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		value, err := dial(ctx, options)
+		if err == nil {
+			return value, nil
+		}
+		lastErr = err
+		if !isTemporalDialRetryable(err) || attempt == policy.maxAttempts {
+			return nil, err
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < policy.maxBackoff/2 {
+			backoff *= 2
+		} else {
+			backoff = policy.maxBackoff
+		}
+	}
+	return nil, lastErr
+}
+
+func isTemporalDialRetryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return status.Code(err) == codes.Unavailable
 }
 
 func (factory DefaultTemporalClientFactory) identity(prefix string) string {
