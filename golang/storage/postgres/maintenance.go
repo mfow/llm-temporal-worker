@@ -321,8 +321,16 @@ func (repository MaintenanceRepository) updateOutboxState(ctx context.Context, i
 	if err != nil {
 		return err
 	}
-	query := "UPDATE " + outboxTable + " SET state = $3, lease_expires_at = NULL, available_at = CASE WHEN $4 THEN available_at ELSE $5 END, completed_at = CASE WHEN $4 THEN $6 ELSE NULL END WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > clock_timestamp()"
-	tag, err := repository.Pool.Exec(ctx, query, outboxID, uuid.UUID(token), state, completed, availableAt, at)
+	var query string
+	var args []any
+	if completed {
+		query = "UPDATE " + outboxTable + " SET state = 'completed', lease_expires_at = NULL, completed_at = $3 WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > clock_timestamp()"
+		args = []any{outboxID, uuid.UUID(token), at}
+	} else {
+		query = "UPDATE " + outboxTable + " SET state = 'failed', lease_expires_at = NULL, available_at = $3, completed_at = NULL WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > clock_timestamp()"
+		args = []any{outboxID, uuid.UUID(token), availableAt}
+	}
+	tag, err := repository.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return redactPostgresError(fmt.Errorf("update maintenance outbox: %w", err))
 	}
