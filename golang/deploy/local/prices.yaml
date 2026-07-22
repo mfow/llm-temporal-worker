@@ -1,5 +1,4 @@
 version: local-v1
-currency: USD
 entries:
   - endpoint: provider-mock
     family: openai_chat

@@ -71,9 +71,10 @@ provider + endpoint family + billing region/account class
 ```
 
 It contains all applicable USD unit prices, provenance, effective timestamps,
-and a content digest/version. The source file's `currency: USD` declaration is
-validated as provenance and is not part of the runtime catalog. Logical aliases
-are resolved before pricing.
+and a content digest/version. USD is the only supported denomination: field
+names and the strict `pricing.CompileUSD` boundary establish the denomination;
+there is no generic source `currency` field or caller-supplied FX rate. Logical
+aliases are resolved before pricing.
 
 Catalog precedence is explicit:
 
