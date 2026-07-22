@@ -6,14 +6,19 @@
 > production paid work. This runbook never authorizes direct Redis key edits,
 > `FLUSHDB`, or an unfenced PostgreSQL rebuild.
 
-The Go `storage/redis` package now provides the bounded, storage-neutral
+The Go `storage/redis` package provides the bounded, storage-neutral
 `budget-manifest/v1` record and deterministic validator used by this runbook's
 manifest checks. It verifies generation/incarnation provenance, config/price
 and policy/window hashes, concrete journal/Stream high-water marks, complete
 coverage, every expected member, catalog identity, and the conservative
-rounding version. It does not yet publish the active pointer, materialize
-window keys, or execute the Redis admission Function; those integration steps
-remain subject to the fenced procedures below.
+rounding version. `RedisBudgetGenerationPort` atomically stores an immutable
+manifest and switches the active pointer, while `RedisBudgetEventPort` tails
+the coordination Stream without consumer groups. These adapters do not
+materialize window keys or execute the Redis admission Function; runtime
+composition and the fenced recovery coordinator remain subject to the
+procedures below. The event adapter intentionally never trims the Stream: a
+separate retention coordinator must use the minimum non-expired worker cursor
+plus a configured safety margin, and remains a pending Task 6 slice.
 
 ## Purpose and safety invariant
 
@@ -81,6 +86,9 @@ generation and evidence until the incident owner closes the investigation.
 4. Have every replica independently verify the same manifest. A Stream event
    may wake replicas, but replicas reload the active-generation pointer and
    manifest directly from Redis.
+   If a worker's cursor predates the retained Stream prefix, the adapter
+   reports a gap and the worker discards its hints before reloading the
+   manifest; it never treats a partial Stream read as authorization state.
 5. Resume paid polling only after readiness reports the adopted generation.
    Confirm that this path executed zero PostgreSQL budget-table SELECTs.
 
