@@ -97,10 +97,9 @@ let () =
    | Ok _ -> failwith "typed pagination dropped the provider cursor"
    | Error error -> failf "unexpected pagination error: %s" (Temporal.Error.message error));
   (match Query.next provider { first_page with complete = true } with
-   | Error error when String.equal (Temporal.Error.message error)
-                         "query response cannot be complete while next_cursor is present" -> ()
-   | Error error -> failf "unexpected complete-page error: %s" (Temporal.Error.message error)
-   | Ok _ -> failwith "complete query unexpectedly exposed a next page");
+   | Ok (Some (Query.Provider_status { cursor = Some next; _ })) when next = provider_cursor -> ()
+   | Ok _ -> failwith "complete page dropped its worker-provided cursor"
+   | Error error -> failf "unexpected complete-page pagination error: %s" (Temporal.Error.message error));
   (match Query.next budget { (run budget) with complete = false; next_cursor = Some provider_cursor } with
    | Error error when String.equal (Temporal.Error.message error)
                          "query response.budget_status must not include next_cursor" -> ()

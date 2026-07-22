@@ -118,10 +118,6 @@ let response_metadata (response : query_response) value =
     next_cursor = response.next_cursor;
     cost = response.cost }
 
-let complete_with_cursor () =
-  Temporal.Error.codec
-    ~message:"query response cannot be complete while next_cursor is present"
-
 let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
   fun query response ->
     match validate_next_cursor query response.next_cursor with
@@ -129,7 +125,6 @@ let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
     | Ok () ->
         match response.next_cursor with
         | None -> Ok None
-        | Some _cursor when response.complete -> Error (complete_with_cursor ())
         | Some cursor ->
             match query with
             | Provider_status filter -> Ok (Some (Provider_status { filter with cursor = Some cursor }))

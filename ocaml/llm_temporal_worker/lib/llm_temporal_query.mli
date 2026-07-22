@@ -38,7 +38,9 @@ val of_response :
     result type.  Snapshot queries return [Ok None]; paginated queries return
     [Ok (Some query)] when the worker supplies a cursor.  Cursor kind and
     snapshot invariants are checked again so callers using a custom
-    dispatcher cannot bypass the protocol boundary. *)
+    dispatcher cannot bypass the protocol boundary.  The worker may mark a
+    response complete while still returning a cursor; cursor presence, not the
+    completion flag, determines whether another page is available. *)
 val next : 'a t -> 'a response -> ('a t option, Temporal.Error.t) result
 
 type dispatcher =
