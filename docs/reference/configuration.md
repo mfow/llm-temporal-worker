@@ -390,11 +390,16 @@ and cross-worker coordination optimization.
 In durable mode the runtime constructs and probes both stores before admitting
 work. The PostgreSQL dependency probe checks the current database, UTC session
 timezone, and the installed schema contract for the configured namespace; the
-Redis probe performs its normal connectivity, clock, policy, function, prefix,
-and manifest checks. A failure or timeout keeps readiness closed, and both
-clients are closed during a failed build, configuration replacement, or worker
-shutdown. Schema installation remains a deployment concern (`postgres.Install`)
-and is never performed by a worker during readiness probing.
+Redis probe performs its normal connectivity, clock, policy, and configured
+Function or Lua script identity checks. The validated
+`state.redis.key_prefix` is applied to every worker-owned key constructor and
+rendered in effective configuration, but readiness does not currently inspect
+the Redis keyspace or prove an ACL/prefix or active-manifest identity marker.
+Those checks require an explicit read-only state contract. A failure or timeout
+keeps readiness closed, and both clients are closed during a failed build,
+configuration replacement, or worker shutdown. Schema installation remains a
+deployment concern (`postgres.Install`) and is never performed by a worker
+during readiness probing.
 
 `state.kind: redis` is retained only as a development/test fixture for the
 legacy Redis-only composition and is rejected in production. `state.kind:
@@ -576,9 +581,12 @@ transient worker drain the monitor keeps checking dependencies, but it never
 starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
-`noeviction` policy, configured budget code identity, active generation,
-complete manifest, coverage, and the enabled Stream's structural health. It also checks a bounded
-PostgreSQL transaction, physical namespace/schema contract/index identities,
+`noeviction` policy, and configured budget code identity. It does not yet
+inspect the worker keyspace or verify the active-generation manifest,
+coverage, or enabled Stream's structural health; the storage validator and
+recovery runbook cover those records until an authoritative read-only readiness
+contract is added. It also checks a bounded PostgreSQL transaction, physical
+namespace/schema contract/index identities,
 UTC, and runtime grants. It checks
 the configured S3 bucket with bucket metadata only; it never reads or writes a
 tenant object. Provider endpoints are intentionally excluded because one route
@@ -602,8 +610,10 @@ their named mechanism. Any mismatch fails readiness closed.
 keeps cross-replica invalidation/generation-switch wake-ups fast. It does not
 change authority: a Stream gap or an explicitly disabled tailer discards local
 hints and reloads the manifest/policy state directly from Redis. Readiness
-validates the Stream key/type/retention policy when enabled, but a recoverable
-cursor gap does not invalidate an otherwise complete budget generation.
+does not yet validate the Stream key/type/retention policy; an authoritative
+read-only readiness contract must add that check. A recoverable cursor gap does
+not invalidate an otherwise complete budget generation once the storage and
+recovery validators have proved it.
 
 The active-generation manifest is a bounded `budget-manifest/v1` value. Its
 immutable generation and Redis-incarnation IDs, configuration/price versions,

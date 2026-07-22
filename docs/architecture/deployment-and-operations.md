@@ -96,11 +96,12 @@ while another is valid. A configuration with zero eligible routes is not ready.
 The runtime's required state checks are bounded by the configured readiness
 timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
 configured AOF/RDB policy, and expose the exact configured budget Function
-library/version/digest plus a complete active budget generation/manifest and
-its optional coordination Stream when Stream tailing is enabled. A missing or
-gapped Stream invalidates local hints and increases direct Redis reads; it does
-not invalidate an otherwise complete generation or authorize work. The default Function path is provisioned by deployment
-automation before the worker starts; the runtime only verifies and calls it.
+library/version/digest. Readiness does not yet inspect the worker keyspace or
+verify an active budget generation/manifest or its optional coordination
+Stream; those records are validated by the storage/recovery code until an
+authoritative read-only readiness contract is added. The default Function path
+is provisioned by deployment automation before the worker starts; the runtime
+only verifies and calls it.
 The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. PostgreSQL must complete a
 bounded read-only transaction, match the configured database/schema/prefix and

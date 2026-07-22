@@ -115,6 +115,31 @@ func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.
 	}
 }
 
+func TestReadinessDocumentationStatesRedisPrefixBoundary(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, relative := range []string{
+		"docs/reference/configuration.md",
+		"docs/architecture/deployment-and-operations.md",
+	} {
+		t.Run(relative, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(root, relative))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(strings.Fields(string(data)), " ")
+			if !strings.Contains(text, "Readiness does not yet inspect the worker keyspace") &&
+				!strings.Contains(text, "readiness does not currently inspect the Redis keyspace") {
+				t.Fatalf("%s must state that readiness does not verify Redis keyspace identity", relative)
+			}
+			if strings.Contains(text, "Redis probe performs its normal connectivity, clock, policy, function, prefix, and manifest checks") ||
+				strings.Contains(text, "expose the exact configured budget Function library/version/digest plus a complete active budget generation/manifest") ||
+				strings.Contains(text, "Readiness validates the Stream key/type/retention policy when enabled") {
+				t.Fatalf("%s still overstates Redis readiness coverage", relative)
+			}
+		})
+	}
+}
+
 func TestDockerBuildInstructionsUseGoModuleContext(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, relative := range []string{
