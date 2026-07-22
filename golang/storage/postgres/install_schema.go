@@ -273,9 +273,12 @@ func RenderRoleGrants(namespace Namespace) (string, error) {
 		{table: "budget_policies", privileges: "SELECT"},
 		{table: "budget_windows", privileges: "SELECT"},
 		{table: "budget_redis_generations", privileges: "SELECT, INSERT, UPDATE"},
-		{table: "budget_journal_events", privileges: "INSERT"},
-		{table: "budget_buckets", privileges: "SELECT, INSERT, UPDATE"},
-		{table: "operation_budget_reservations", privileges: "SELECT, INSERT, UPDATE"},
+		// Append statements contain no SELECT. PostgreSQL nevertheless requires
+		// column SELECT privileges for RETURNING and values referenced by an
+		// ON CONFLICT/UPDATE expression, so grant only those dependencies.
+		{table: "budget_journal_events", privileges: "SELECT (journal_id, event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind, reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd, actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at), INSERT, UPDATE (event_id)"},
+		{table: "budget_buckets", privileges: "SELECT (reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE"},
+		{table: "operation_budget_reservations", privileges: "SELECT (operation_id, window_id, state, reserved_cost_usd, reservation_revision), INSERT, UPDATE"},
 		{table: "price_catalogs", privileges: "SELECT"},
 		{table: "price_entries", privileges: "SELECT"},
 		{table: "provider_status_events", privileges: "SELECT, INSERT"},

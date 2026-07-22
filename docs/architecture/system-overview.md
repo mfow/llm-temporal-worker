@@ -152,6 +152,16 @@ cold-bootstrap reader is a separate recovery interface available only after
 the fleet/Redis-loss fence. Pricing, policy matching, estimation, and window
 semantics remain reusable packages outside the stores.
 
+The first Phase B foundation slice keeps that split explicit in code. The
+`budget` package owns validated `ReservationEvent` and `CompletionEvent`
+records, `storage/postgres.BudgetJournal` exposes write-only append methods,
+and `storage/redis.BudgetGenerationPort`/`BudgetEventPort` expose generation
+adoption and broadcast Stream boundaries. These ports do not compose the
+runtime yet: Redis acceptance, the PostgreSQL append, and provider dispatch
+remain a deliberately sequenced Task 19 change. The Redis event port is
+coordination-only; every authorization still goes through the atomic Redis
+Function.
+
 ## Configuration snapshots
 
 Configuration is parsed, defaulted, validated, and compiled into one immutable
