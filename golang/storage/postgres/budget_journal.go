@@ -171,7 +171,7 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 			return nil
 		}
 		state, basis, finalizedAt := completionProjection(input)
-		tag, err := tx.Exec(ctx, reservationCompletionSQL(reservationTable),
+		tag, err := tx.Exec(ctx, reservationCompletionSQL(reservationTable, input.kind),
 			operationID, windowID, state, actual, string(input.costStatus), unknownReason, journalCharge(input), basis, input.revision, result.JournalID, finalizedAt)
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("update budget reservation projection: %w", err))
@@ -221,11 +221,15 @@ func reservationAppendSQL(reservationTable string) string {
 		" VALUES ($1,$2,$3,'reserved',$4,'pending',0,'reserved',$5,$6,$7) ON CONFLICT (operation_id, window_id) DO NOTHING"
 }
 
-func reservationCompletionSQL(reservationTable string) string {
+func reservationCompletionSQL(reservationTable string, kind budget.JournalEventKind) string {
+	allowedStates := "'reserved'"
+	if kind == budget.JournalResolveUnknownExact {
+		allowedStates = "'reserved', 'retained_ambiguous'"
+	}
 	return "UPDATE " + reservationTable + " SET state=$3, actual_cost_usd=$4, actual_cost_status=$5," +
 		" actual_cost_unknown_reason_code=$6, budget_charge_usd=CASE WHEN $7 IS NULL THEN reserved_cost_usd ELSE $7 END, budget_charge_basis=$8," +
 		" reservation_revision=$9, last_journal_id=$10, finalized_at=$11" +
-		" WHERE operation_id=$1 AND window_id=$2"
+		" WHERE operation_id=$1 AND window_id=$2 AND reservation_revision < $9 AND state IN (" + allowedStates + ")"
 }
 
 func parseJournalUUIDs(input journalInput) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, error) {

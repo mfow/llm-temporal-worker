@@ -66,11 +66,24 @@ func TestBudgetJournalAppendSQLIsWriteOnly(t *testing.T) {
 		"journal append":         journalAppendSQL(`"llm_worker"."budget_journal_events"`),
 		"bucket projection":      budgetBucketUpsertSQL(`"llm_worker"."budget_buckets"`),
 		"reservation projection": reservationAppendSQL(`"llm_worker"."operation_budget_reservations"`),
-		"completion projection":  reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`),
+		"completion projection":  reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`, budget.JournalFinalizeExact),
 	} {
 		if got := classifyBudgetJournalSQL(query); got != budgetJournalSQLWriteOnly {
 			t.Fatalf("%s classification = %s, want %s: %s", name, got, budgetJournalSQLWriteOnly, query)
 		}
+	}
+}
+
+func TestBudgetCompletionProjectionGuardsStateAndRevision(t *testing.T) {
+	query := reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`, budget.JournalFinalizeExact)
+	for _, required := range []string{"reservation_revision < $9", "state IN ('reserved')"} {
+		if !strings.Contains(query, required) {
+			t.Fatalf("completion update missing %q: %s", required, query)
+		}
+	}
+	resolve := reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`, budget.JournalResolveUnknownExact)
+	if !strings.Contains(resolve, "'retained_ambiguous'") {
+		t.Fatalf("unknown-cost resolution does not allow retained ambiguous state: %s", resolve)
 	}
 }
 

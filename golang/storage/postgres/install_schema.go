@@ -277,7 +277,7 @@ func RenderRoleGrants(namespace Namespace) (string, error) {
 		// column SELECT privileges for RETURNING and values referenced by an
 		// ON CONFLICT/UPDATE expression, so grant only those dependencies.
 		{table: "budget_journal_events", privileges: "SELECT (journal_id, event_id, operation_id, window_id, reservation_revision), INSERT, UPDATE (event_id)"},
-		{table: "budget_buckets", privileges: "SELECT (reserved_cost_usd, accounted_cost_usd), INSERT, UPDATE"},
+		{table: "budget_buckets", privileges: "SELECT (reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE"},
 		{table: "operation_budget_reservations", privileges: "SELECT (operation_id, window_id, reserved_cost_usd), INSERT, UPDATE"},
 		{table: "price_catalogs", privileges: "SELECT"},
 		{table: "price_entries", privileges: "SELECT"},

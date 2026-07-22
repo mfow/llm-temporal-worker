@@ -128,6 +128,9 @@ func (event CompletionEvent) Validate() error {
 	if event.UnknownReasonCode != "" && !safeReasonCode(event.UnknownReasonCode) {
 		return fmt.Errorf("unknown cost reason code is unsafe")
 	}
+	if event.CostStatus != CostUnknown && event.UnknownReasonCode != "" {
+		return fmt.Errorf("unknown cost reason is only valid for unknown cost")
+	}
 	if err := validateKindDeltas(event); err != nil {
 		return err
 	}
@@ -187,8 +190,8 @@ func validateKindDeltas(event CompletionEvent) error {
 			return fmt.Errorf("retain_ambiguous must not change accounting")
 		}
 	case JournalResolveUnknownExact:
-		if event.CostStatus != CostExact || event.ActualCostUSD == nil || zero(*event.ActualCostUSD) {
-			return fmt.Errorf("resolve_unknown_exact requires a positive exact cost")
+		if event.CostStatus != CostExact || event.ActualCostUSD == nil {
+			return fmt.Errorf("resolve_unknown_exact requires an exact cost")
 		}
 		if zero(event.ReservedDecreaseUSD) == zero(event.AccountedDecreaseUSD) || event.AccountedIncreaseUSD.Cmp(*event.ActualCostUSD) != 0 {
 			return fmt.Errorf("resolve_unknown_exact deltas are inconsistent")

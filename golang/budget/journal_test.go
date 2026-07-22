@@ -62,6 +62,28 @@ func TestCompletionEventSupportsExactReleaseAndAmbiguousRetention(t *testing.T) 
 	if err := retain.Validate(); err != nil {
 		t.Fatalf("valid retention rejected: %v", err)
 	}
+	resolveZero := retain
+	resolveZero.Kind = JournalResolveUnknownExact
+	resolveZero.ReservedDecreaseUSD = pricing.MustUSD("1")
+	resolveZero.AccountedIncreaseUSD = pricing.MustUSD("0")
+	resolveZero.ActualCostUSD = ptrUSD(pricing.MustUSD("0"))
+	resolveZero.CostStatus = CostExact
+	resolveZero.UnknownReasonCode = ""
+	if err := resolveZero.Validate(); err != nil {
+		t.Fatalf("valid zero-cost resolution rejected: %v", err)
+	}
+}
+
+func TestCompletionEventRejectsUnknownReasonForKnownCost(t *testing.T) {
+	event := CompletionEvent{
+		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
+		BucketStart: time.Unix(1, 0), OccurredAt: time.Unix(2, 0), Kind: JournalFinalizeExact,
+		ReservedDecreaseUSD: pricing.MustUSD("1"), AccountedIncreaseUSD: pricing.MustUSD("1"),
+		ActualCostUSD: ptrUSD(pricing.MustUSD("1")), CostStatus: CostExact, UnknownReasonCode: "provider_timeout",
+	}
+	if err := event.Validate(); err == nil {
+		t.Fatal("known-cost completion accepted an unknown reason code")
+	}
 }
 
 func ptrUSD(value pricing.USD) *pricing.USD { return &value }

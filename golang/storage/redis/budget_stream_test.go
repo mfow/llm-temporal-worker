@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,50 @@ func TestMemoryBudgetEventPortBroadcastsFromCursor(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ID != second || rows[0].Event.Kind != BudgetEventRelease {
 		t.Fatalf("read after cursor = %#v", rows)
+	}
+}
+
+func TestMemoryBudgetEventPortAcceptsCompoundRedisCursor(t *testing.T) {
+	port := &MemoryBudgetEventPort{}
+	event := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh, GenerationID: BudgetGenerationID("generation"), Revision: 1, OccurredAt: time.Unix(1, 0)}
+	if _, err := port.Append(context.Background(), event); err != nil {
+		t.Fatalf("append first event: %v", err)
+	}
+	if _, err := port.Append(context.Background(), event); err != nil {
+		t.Fatalf("append second event: %v", err)
+	}
+	records, err := port.Read(context.Background(), "1-1", 10)
+	if err != nil {
+		t.Fatalf("compound cursor: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "2-0" {
+		t.Fatalf("compound cursor records = %#v, want second event", records)
+	}
+}
+
+func TestMemoryBudgetGenerationPortPublishesAndValidatesPointer(t *testing.T) {
+	port := new(MemoryBudgetGenerationPort)
+	manifest := testBudgetManifest(t)
+	pointer, err := port.PublishGeneration(context.Background(), manifest)
+	if err != nil {
+		t.Fatalf("publish generation: %v", err)
+	}
+	active, err := port.ActiveGeneration(context.Background())
+	if err != nil || active != pointer {
+		t.Fatalf("active generation = %#v, %v; want %#v", active, err, pointer)
+	}
+	loaded, err := port.LoadManifest(context.Background(), pointer)
+	if err != nil || loaded.GenerationID != manifest.GenerationID {
+		t.Fatalf("load manifest = %#v, %v", loaded, err)
+	}
+	pointer.ManifestDigest = strings.Repeat("0", 64)
+	if _, err := port.LoadManifest(context.Background(), pointer); err == nil {
+		t.Fatal("tampered pointer accepted")
+	}
+	mutated := manifest
+	mutated.IncarnationID = BudgetIncarnationID("incarnation-2")
+	if _, err := port.PublishGeneration(context.Background(), mutated); !errors.Is(err, ErrBudgetGenerationConflict) {
+		t.Fatalf("mutable generation accepted: %v", err)
 	}
 }
 

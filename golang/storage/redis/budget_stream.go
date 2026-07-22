@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +28,8 @@ const (
 	BudgetEventGenerationSwitch BudgetStreamEventKind = "generation_switch"
 	BudgetEventDenial           BudgetStreamEventKind = "denial"
 )
+
+var ErrBudgetGenerationConflict = errors.New("budget generation is immutable")
 
 const (
 	BudgetActiveGenerationSuffix = "budget:active-generation"
@@ -147,6 +151,71 @@ func (keys BudgetKeySpace) ManifestKey(generation BudgetGenerationID) string {
 	return keys.space.admissionPrefix() + "budget:g:" + keys.space.digest("budget-generation", string(generation)) + ":manifest"
 }
 
+// MemoryBudgetGenerationPort is a deterministic contract implementation used
+// by unit tests and offline readiness checks. A production implementation must
+// publish the manifest and pointer atomically in Redis; this implementation
+// preserves the same validate-before-publish and pointer-provenance rules.
+type MemoryBudgetGenerationPort struct {
+	mu        sync.RWMutex
+	active    ActiveBudgetGeneration
+	manifests map[BudgetGenerationID]BudgetManifest
+}
+
+var _ BudgetGenerationPort = (*MemoryBudgetGenerationPort)(nil)
+
+func (port *MemoryBudgetGenerationPort) ActiveGeneration(ctx context.Context) (ActiveBudgetGeneration, error) {
+	if err := ctx.Err(); err != nil {
+		return ActiveBudgetGeneration{}, err
+	}
+	port.mu.RLock()
+	defer port.mu.RUnlock()
+	if port.active.GenerationID == "" {
+		return ActiveBudgetGeneration{}, ErrBudgetManifestInvalid
+	}
+	return port.active, nil
+}
+
+func (port *MemoryBudgetGenerationPort) LoadManifest(ctx context.Context, pointer ActiveBudgetGeneration) (BudgetManifest, error) {
+	if err := ctx.Err(); err != nil {
+		return BudgetManifest{}, err
+	}
+	port.mu.RLock()
+	defer port.mu.RUnlock()
+	manifest, ok := port.manifests[pointer.GenerationID]
+	if !ok {
+		return BudgetManifest{}, ErrBudgetManifestInvalid
+	}
+	if err := pointer.ValidateAgainst(manifest); err != nil {
+		return BudgetManifest{}, err
+	}
+	return manifest, nil
+}
+
+func (port *MemoryBudgetGenerationPort) PublishGeneration(ctx context.Context, manifest BudgetManifest) (ActiveBudgetGeneration, error) {
+	if err := ctx.Err(); err != nil {
+		return ActiveBudgetGeneration{}, err
+	}
+	pointer, err := manifest.Pointer()
+	if err != nil {
+		return ActiveBudgetGeneration{}, err
+	}
+	port.mu.Lock()
+	defer port.mu.Unlock()
+	if port.manifests == nil {
+		port.manifests = make(map[BudgetGenerationID]BudgetManifest)
+	}
+	if existing, ok := port.manifests[manifest.GenerationID]; ok {
+		existingDigest, digestErr := existing.ManifestDigestHex()
+		if digestErr != nil || existingDigest != pointer.ManifestDigest {
+			return ActiveBudgetGeneration{}, ErrBudgetGenerationConflict
+		}
+		return pointer, nil
+	}
+	port.manifests[manifest.GenerationID] = manifest
+	port.active = pointer
+	return pointer, nil
+}
+
 // MemoryBudgetEventPort is a deterministic contract implementation for unit
 // tests. Production uses a Redis Stream adapter; keeping this implementation in
 // the same package lets conformance tests exercise the port without a server.
@@ -177,26 +246,26 @@ func (port *MemoryBudgetEventPort) Read(ctx context.Context, cursor string, limi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if cursor != "" && !redisStreamIDPattern.MatchString(cursor) {
-		return nil, fmt.Errorf("invalid Redis Stream cursor")
+	var afterMajor, afterMinor int64
+	if cursor != "" {
+		var err error
+		afterMajor, afterMinor, err = parseRedisStreamID(cursor)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if limit <= 0 || limit > 10_000 {
 		return nil, fmt.Errorf("stream read limit must be between 1 and 10000")
 	}
 	port.mu.Lock()
 	defer port.mu.Unlock()
-	var after int64
-	if cursor != "" {
-		_, err := fmt.Sscanf(cursor, "%d-0", &after)
-		if err != nil {
-			return nil, fmt.Errorf("invalid Redis Stream cursor")
-		}
-	}
 	result := make([]BudgetStreamRecord, 0, limit)
 	for _, record := range port.records {
-		var sequence int64
-		_, _ = fmt.Sscanf(record.ID, "%d-0", &sequence)
-		if sequence <= after {
+		major, minor, err := parseRedisStreamID(record.ID)
+		if err != nil {
+			return nil, err
+		}
+		if major < afterMajor || (major == afterMajor && minor <= afterMinor) {
 			continue
 		}
 		result = append(result, record)
@@ -205,4 +274,20 @@ func (port *MemoryBudgetEventPort) Read(ctx context.Context, cursor string, limi
 		}
 	}
 	return result, nil
+}
+
+func parseRedisStreamID(value string) (int64, int64, error) {
+	if !redisStreamIDPattern.MatchString(value) {
+		return 0, 0, fmt.Errorf("invalid Redis Stream cursor")
+	}
+	parts := strings.SplitN(value, "-", 2)
+	major, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid Redis Stream cursor")
+	}
+	minor, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid Redis Stream cursor")
+	}
+	return major, minor, nil
 }
