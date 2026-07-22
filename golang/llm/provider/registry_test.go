@@ -14,12 +14,16 @@ import (
 type registryFixtureParams struct{}
 
 type registryFixtureAdapter struct {
-	family provider.Family
+	family          provider.Family
+	capabilityCalls *int
 }
 
 func (adapter *registryFixtureAdapter) Name() string { return "fixture/adapter" }
 
 func (adapter *registryFixtureAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
+	if adapter.capabilityCalls != nil {
+		*adapter.capabilityCalls++
+	}
 	return registryFixtureCapabilities(), nil
 }
 
@@ -146,6 +150,7 @@ func TestRegistryRejectsInvalidContractsWithoutFactorySideEffects(t *testing.T) 
 			value.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: provider.CapabilityNative}
 		}, want: "streaming"},
 		{name: "missing tier", edit: func(value *provider.Registration) { delete(value.ServiceTiers, llm.ServiceClassPriority) }, want: "priority"},
+		{name: "non-canonical tier", edit: func(value *provider.Registration) { value.ServiceTiers[llm.ServiceClassStandard] = " default " }, want: "canonical"},
 		{name: "probe mismatch", edit: func(value *provider.Registration) { value.SDKParameterCheck = func(any) bool { return false } }, want: "SDK parameter"},
 		{name: "missing probe", edit: func(value *provider.Registration) { value.CompileProbe = nil }, want: "compile probe"},
 		{name: "missing factory", edit: func(value *provider.Registration) { value.ClientFactory = nil }, want: "client factory"},
@@ -170,7 +175,7 @@ func TestRegistryRejectsInvalidContractsWithoutFactorySideEffects(t *testing.T) 
 			if strings.Contains(err.Error(), "secret api key") {
 				t.Fatal("factory error leaked through registry diagnostics")
 			}
-			if test.name == "invalid family" || test.name == "invalid profile ID" || test.name == "typed nil adapter" || test.name == "missing feature" || test.name == "capability drift" || test.name == "unknown feature" || test.name == "streaming advertised" || test.name == "missing tier" || test.name == "probe mismatch" || test.name == "missing probe" || test.name == "missing factory" {
+			if test.name == "invalid family" || test.name == "invalid profile ID" || test.name == "typed nil adapter" || test.name == "missing feature" || test.name == "capability drift" || test.name == "unknown feature" || test.name == "streaming advertised" || test.name == "missing tier" || test.name == "non-canonical tier" || test.name == "probe mismatch" || test.name == "missing probe" || test.name == "missing factory" {
 				if factoryCalls != 0 {
 					t.Fatalf("factory calls = %d for pre-construction validation", factoryCalls)
 				}
@@ -181,11 +186,29 @@ func TestRegistryRejectsInvalidContractsWithoutFactorySideEffects(t *testing.T) 
 
 func TestRegistryRejectsDuplicateFamilyAndProfile(t *testing.T) {
 	registration := registryFixtureRegistration()
+	capabilityCalls := 0
+	probeCalls := 0
+	factoryCalls := 0
+	registration.Adapter = &registryFixtureAdapter{family: provider.FamilyOpenAIChat, capabilityCalls: &capabilityCalls}
+	registration.CompileProbe = func(ctx context.Context, adapter provider.Adapter) (provider.Call, error) {
+		probeCalls++
+		return adapter.Compile(ctx, provider.CompileInput{})
+	}
+	registration.ClientFactory = func() (any, error) {
+		factoryCalls++
+		return struct{}{}, nil
+	}
 	registry, err := provider.NewRegistry(registration)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if capabilityCalls != 1 || probeCalls != 1 || factoryCalls != 1 {
+		t.Fatalf("initial registration side effects = capabilities %d, probe %d, factory %d; want one each", capabilityCalls, probeCalls, factoryCalls)
+	}
 	if err := registry.Register(registration); err == nil {
 		t.Fatal("duplicate registration succeeded")
+	}
+	if capabilityCalls != 1 || probeCalls != 1 || factoryCalls != 1 {
+		t.Fatalf("duplicate registration triggered side effects = capabilities %d, probe %d, factory %d; want unchanged at one each", capabilityCalls, probeCalls, factoryCalls)
 	}
 }

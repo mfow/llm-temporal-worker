@@ -73,12 +73,15 @@ func (registry *Registry) Register(registration Registration) error {
 	if registry.entries == nil {
 		registry.entries = make(map[registryKey]Registration)
 	}
-	if err := validateRegistration(registration); err != nil {
+	if err := validateRegistryKey(registration.Family, registration.ProfileID); err != nil {
 		return err
 	}
 	key := registryKey{family: registration.Family, profileID: registration.ProfileID}
 	if _, exists := registry.entries[key]; exists {
 		return fmt.Errorf("provider registry profile %q for family %q is already registered", registration.ProfileID, registration.Family)
+	}
+	if err := validateRegistration(registration); err != nil {
+		return err
 	}
 	// The registration owns copies of maps so mutable configuration supplied by
 	// a caller cannot change the contract after validation.
@@ -136,11 +139,8 @@ func (registry *Registry) Registrations() []Registration {
 }
 
 func validateRegistration(registration Registration) error {
-	if !registration.Family.Valid() {
-		return fmt.Errorf("provider registry family %q is invalid", registration.Family)
-	}
-	if !registryProfileIDPattern.MatchString(registration.ProfileID) {
-		return fmt.Errorf("provider registry profile ID must be lowercase hyphenated identifier")
+	if err := validateRegistryKey(registration.Family, registration.ProfileID); err != nil {
+		return err
 	}
 	if isNilAdapter(registration.Adapter) {
 		return fmt.Errorf("provider registry profile %q has no concrete adapter", registration.ProfileID)
@@ -195,6 +195,16 @@ func validateRegistration(registration Registration) error {
 	return nil
 }
 
+func validateRegistryKey(family Family, profileID string) error {
+	if !family.Valid() {
+		return fmt.Errorf("provider registry family %q is invalid", family)
+	}
+	if !registryProfileIDPattern.MatchString(profileID) {
+		return fmt.Errorf("provider registry profile ID must be lowercase hyphenated identifier")
+	}
+	return nil
+}
+
 func validateCapabilities(set CapabilitySet) (CapabilitySet, error) {
 	if strings.TrimSpace(set.Version) == "" {
 		return CapabilitySet{}, fmt.Errorf("capability version is required")
@@ -229,8 +239,12 @@ func validateServiceTiers(tiers map[llm.ServiceClass]string) error {
 		return fmt.Errorf("service tier mappings are required")
 	}
 	for _, class := range []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority} {
-		if _, ok := tiers[class]; !ok {
+		value, ok := tiers[class]
+		if !ok {
 			return fmt.Errorf("service class %q is not declared", class)
+		}
+		if value != "" && strings.TrimSpace(value) != value {
+			return fmt.Errorf("service class %q has non-canonical provider tier", class)
 		}
 	}
 	for class := range tiers {
