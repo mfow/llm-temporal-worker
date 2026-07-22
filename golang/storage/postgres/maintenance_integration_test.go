@@ -129,11 +129,11 @@ func TestMaintenanceRetentionPreservesCurrentProviderState(t *testing.T) {
 		t.Fatalf("persist old status event: applied=%v err=%v", applied, err)
 	}
 	latestObservation := statusBase
-	latestObservation.ObservedAt = now.Add(-30 * time.Minute)
+	latestObservation.ObservedAt = now.Add(-90 * time.Minute)
 	// The current projection may still reference an expired event. Retention
 	// must preserve it until the projection advances, so the foreign key remains
 	// valid even when the event is past its expiry cutoff.
-	latestObservation.ExpiresAt = now.Add(-30 * time.Minute)
+	latestObservation.ExpiresAt = now.Add(-70 * time.Minute)
 	latestObservation.EvidenceDigest = sha256.Sum256([]byte("maintenance-retention-latest"))
 	latestEvent, err := control.NewStatusEvent(latestObservation)
 	if err != nil {
