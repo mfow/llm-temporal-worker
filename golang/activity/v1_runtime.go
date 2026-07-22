@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -195,7 +196,7 @@ func (activities *Activities) runV1(ctx context.Context, dispatch func(context.C
 	rawErr = dispatch(dispatchContext)
 	keepaliveErr := keepalive.stop()
 	keepalive = nil
-	if ctxErr := ctx.Err(); ctxErr != nil {
+	if ctxErr := ctx.Err(); ctxErr != nil && !preferV1DispatchError(rawErr, ctxErr) {
 		return ToTemporalError(ctxErr)
 	}
 	if keepaliveErr != nil {
@@ -204,7 +205,23 @@ func (activities *Activities) runV1(ctx context.Context, dispatch func(context.C
 	if rawErr != nil {
 		return ToTemporalError(rawErr)
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ToTemporalError(ctxErr)
+	}
 	return nil
+}
+
+// preferV1DispatchError retains the sanitized state-load deadline produced by
+// checkpoint materialization. The Activity context normally wins over a
+// runtime error, matching the legacy one-shot lifecycle; this narrow exception
+// prevents a mapped state-load deadline from being replaced by an untyped
+// context error before ToTemporalError can preserve its retry disposition.
+func preferV1DispatchError(rawErr, ctxErr error) bool {
+	if rawErr == nil || !errors.Is(ctxErr, context.DeadlineExceeded) {
+		return false
+	}
+	var providerErr *provider.Error
+	return errors.As(rawErr, &providerErr) && providerErr.Code == provider.CodeDeadlineExceeded && providerErr.Phase == provider.PhaseStateLoad
 }
 
 func (activities *Activities) generateV1Temporal(ctx context.Context, request llm.GenerateRequestV1) (*llm.GenerateResponseV1, error) {
