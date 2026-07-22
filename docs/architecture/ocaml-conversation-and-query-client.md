@@ -462,8 +462,11 @@ knowledge available to the caller. Values built from `root` or returned by
 variant validation. `of_checkpoint` deliberately starts with an unknown
 settings hint because a handle alone must not materialize server state inside a
 Workflow; after import, the Go worker remains authoritative for inherited
-validation. The value contains no network client, mutable reference, or
-process-global state:
+validation. Compaction of such an imported value therefore keeps the settings
+patch omitted; the facade never turns its local default hint into a destructive
+tool/output clear. Callers that need to restore known application settings
+must provide those fields explicitly on the subsequent Generate. The value
+contains no network client, mutable reference, or process-global state:
 
 ~~~ocaml
 module Conversation : sig

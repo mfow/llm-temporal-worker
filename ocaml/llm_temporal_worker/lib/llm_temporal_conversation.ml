@@ -85,6 +85,10 @@ type t = {
   context : request_context;
   model : Model_selector.t option;
   settings : Settings.t;
+  (* A checkpoint handle does not carry the caller's effective settings.  Keep
+     that distinction explicit so compaction cannot accidentally turn the
+     local default hint into a destructive [Set []]/[Clear] patch. *)
+  settings_known : bool;
   checkpoint : Checkpoint.t option;
   restore_after_compact : bool;
 }
@@ -106,11 +110,12 @@ let root ~context ~model ?service_class ?(settings = Settings.default) () =
     | None -> settings
     | Some service_class -> { settings with Settings.service_class }
   in
-  { context; model = Some model; settings; checkpoint = None; restore_after_compact = false }
+  { context; model = Some model; settings; settings_known = true;
+    checkpoint = None; restore_after_compact = false }
 
 let of_checkpoint ~context ~checkpoint =
-  { context; model = None; settings = Settings.default; checkpoint = Some checkpoint;
-    restore_after_compact = false }
+  { context; model = None; settings = Settings.default; settings_known = false;
+    checkpoint = Some checkpoint; restore_after_compact = false }
 
 let context conversation = conversation.context
 let model conversation = conversation.model
@@ -150,11 +155,13 @@ let initial_patch conversation : settings_patch =
     extensions = Set settings.extensions }
 
 let restore_patch conversation : settings_patch =
-  let settings = conversation.settings in
-  { Settings.Patch.keep with
-    tools = Set settings.tools;
-    tool_policy = Set settings.tool_policy;
-    output = (match settings.output with None -> Clear | Some value -> Set value) }
+  if not conversation.settings_known then Settings.Patch.keep
+  else
+    let settings = conversation.settings in
+    { Settings.Patch.keep with
+      tools = Set settings.tools;
+      tool_policy = Set settings.tool_policy;
+      output = (match settings.output with None -> Clear | Some value -> Set value) }
 
 let apply_patch (settings : Settings.t) (patch : settings_patch) =
   let value_or ~cleared current = function Keep -> current | Set value -> value | Clear -> cleared in

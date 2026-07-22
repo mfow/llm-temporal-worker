@@ -114,6 +114,35 @@ let () =
       ~operation_key:(operation_key "compact-invalid") cleared.conversation with
    | Error _ -> ()
    | Ok _ -> failwith "compact accepted a nonzero cache variant");
+
+  (* Importing a checkpoint deliberately leaves effective settings unknown.
+     Compaction must not materialize [Settings.default] as a destructive
+     restore patch (which would clear tools/output inherited by the worker). *)
+  let imported = Conversation.of_checkpoint ~context ~checkpoint:(checkpoint "external") in
+  let imported_request = Conversation.to_request
+      ~operation_key:(operation_key "imported") ~append:[] imported
+  in
+  (match imported_request.parent, imported_request.settings_patch with
+   | Some _, { model = Keep; service_class = Keep; service_class_fallbacks = Keep;
+               portability = Keep; instructions = Keep; tools = Keep;
+               tool_policy = Keep; output = Keep; temperature = Keep;
+               reasoning_effort = Keep; reasoning_summary = Keep;
+               compaction_policy = Keep; extensions = Keep } -> ()
+   | _ -> failwith "checkpoint import materialized unknown settings");
+  let _, imported_compacted = expect_ok (Conversation.compact_with
+      ~task_queue:(Temporal_task_queue.of_string "compact-queue") ~dispatch:compact_dispatch
+      ~operation_key:(operation_key "imported-compact") imported) in
+  let imported_after = Conversation.to_request
+      ~operation_key:(operation_key "imported-after") ~append:[] imported_compacted
+  in
+  (match imported_after.settings_patch with
+   | { model = Keep; service_class = Keep; service_class_fallbacks = Keep;
+       portability = Keep; instructions = Keep; tools = Keep;
+       tool_policy = Keep; output = Keep; temperature = Keep;
+       reasoning_effort = Keep; reasoning_summary = Keep;
+       compaction_policy = Keep; extensions = Keep } -> ()
+   | _ -> failwith "compaction restored unknown checkpoint settings");
+
   let _, compacted = expect_ok (Conversation.compact_with
       ~task_queue:(Temporal_task_queue.of_string "compact-queue") ~dispatch:compact_dispatch
       ~operation_key:(operation_key "compact") cleared.conversation) in
