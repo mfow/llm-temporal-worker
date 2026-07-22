@@ -222,16 +222,20 @@ func TestMaterializingV1RuntimeMapsScopeResolverFailure(t *testing.T) {
 }
 
 func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
+	events := []string{}
 	parent := llm.CheckpointHandle("parent")
 	request := validGenerateV1Request()
 	request.Parent = &parent
 	wrapper := &MaterializingV1Runtime{
-		Runtime:      &materializingRuntimeProbe{events: new([]string)},
-		Materializer: &materializingMaterializerProbe{events: new([]string), err: fmt.Errorf("load checkpoint: %w", context.Canceled)},
+		Runtime:      &materializingRuntimeProbe{events: &events},
+		Materializer: &materializingMaterializerProbe{events: &events, err: fmt.Errorf("load checkpoint: %w", context.Canceled)},
 		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
 	}
 	if _, err := (&Activities{V1Runtime: wrapper}).GenerateV1(context.Background(), request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("GenerateV1 error = %v, want context.Canceled", err)
+	}
+	if got, want := events, []string{"materialize:scope-id:parent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %v, want materialization without runtime dispatch", got)
 	}
 }
 
