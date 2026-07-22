@@ -13,6 +13,13 @@ Deployments must supply all three security/observability seams:
 - a `control.AuditFunc` that records the completed query before the Activity
   returns.
 
+`control.CursorCodec` also validates the typed request itself whenever a token
+is signed or decoded. Direct storage adapters therefore cannot mint a cursor
+for an unsafe tenant/project/actor scope, an invalid page size, or a filter
+whose kind does not match the query kind. The Activity still performs the
+same validation at its wire boundary; the duplicate check is intentional so
+the reusable cursor seam remains fail-closed when called independently.
+
 The production factory accepts these choices through
 `ProductionFactoryOptions.QueryServiceBuilder`. It does not invent keys,
 authorization, or an audit repository. A PostgreSQL closer may expose the
