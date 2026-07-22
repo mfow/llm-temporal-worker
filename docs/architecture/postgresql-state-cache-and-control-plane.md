@@ -1617,6 +1617,21 @@ never interpreted as free, as “not applicable,” or as inheriting another rat
 the usage-formula compiler must normalize included/non-applicable billing rules
 before an entry can be exact.
 
+The Go `storage/postgres.PricingCatalogRepository` is the durable publication
+boundary for these tables. It revalidates the compiled USD digest, writes the
+catalog header and all entries in one synchronous transaction, and retires a
+previous active snapshot only as part of publishing the replacement. Replaying
+the same version with the same source and compiled digests is idempotent; a
+digest mismatch is rejected. Runtime roles retain read-only access, while the
+maintenance role owns publication. This keeps an interrupted reload from
+leaving a catalog header without its complete entry set.
+
+Because the current schema does not materialize optional source prose or a
+separate entry-version column, the repository rejects entries that would lose
+those digest inputs. Future-dated publication records a retirement timestamp
+while leaving the predecessor active for `LoadActive` until the replacement is
+effective.
+
 Only an **exact** catalog entry can produce a catalog-derived actual cost or a
 monetary-budget reservation. A partial/unknown entry may still support a route
 allowed by the explicit unpriced policy. If that provider later returns a
