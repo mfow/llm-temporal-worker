@@ -135,53 +135,33 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 			return result, fmt.Errorf("encode actual cost: %w", err)
 		}
 	}
+	unknownReason := nullableReason(input.unknownReason)
 	now := input.occurredAt
 	if repository.Now != nil {
 		now = repository.Now()
 	}
 	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
-		var journalID int64
-		insertErr := tx.QueryRow(ctx, "INSERT INTO "+journalTable+
-			" (event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind,"+
-			" reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd,"+
-			" actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at)"+
-			" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)"+
-			" ON CONFLICT (operation_id, window_id, reservation_revision) DO NOTHING RETURNING journal_id",
+		var inserted bool
+		insertErr := tx.QueryRow(ctx, journalAppendSQL(journalTable),
 			eventID, generationID, operationID, windowID, input.bucketStart.UTC(), input.revision, string(input.kind),
-			reservedIncrease, reservedDecrease, accountedIncrease, accountedDecrease, actual, string(input.costStatus), input.unknownReason, input.occurredAt.UTC()).Scan(&journalID)
+			reservedIncrease, reservedDecrease, accountedIncrease, accountedDecrease, actual, string(input.costStatus), unknownReason, input.occurredAt.UTC()).Scan(&result.JournalID, &result.EventID, &inserted)
 		if errors.Is(insertErr, pgx.ErrNoRows) {
-			var existingID int64
-			var existingEvent uuid.UUID
-			if err := tx.QueryRow(ctx, "SELECT journal_id, event_id FROM "+journalTable+
-				" WHERE operation_id = $1 AND window_id = $2 AND reservation_revision = $3",
-				operationID, windowID, input.revision).Scan(&existingID, &existingEvent); err != nil {
-				return redactPostgresError(fmt.Errorf("resolve budget journal idempotency: %w", err))
-			}
-			if existingEvent != eventID {
-				return ErrBudgetJournalConflict
-			}
-			result = JournalRecord{JournalID: existingID, EventID: existingEvent, Existing: true}
-			return nil
+			return ErrBudgetJournalConflict
 		}
 		if insertErr != nil {
 			return redactPostgresError(fmt.Errorf("append budget journal event: %w", insertErr))
 		}
-		result = JournalRecord{JournalID: journalID, EventID: eventID}
-		if _, err := tx.Exec(ctx, "INSERT INTO "+bucketTable+
-			" (window_id, bucket_start, reserved_cost_usd, accounted_cost_usd, last_journal_id)"+
-			" VALUES ($1,$2,$3,$4,$5) ON CONFLICT (window_id, bucket_start) DO UPDATE SET"+
-			" reserved_cost_usd = "+bucketTable+".reserved_cost_usd + EXCLUDED.reserved_cost_usd - $6,"+
-			" accounted_cost_usd = "+bucketTable+".accounted_cost_usd + EXCLUDED.accounted_cost_usd - $7,"+
-			" last_journal_id = EXCLUDED.last_journal_id, updated_at = clock_timestamp()",
-			windowID, input.bucketStart.UTC(), reservedIncrease, accountedIncrease, journalID, reservedDecrease, accountedDecrease); err != nil {
+		result.Existing = !inserted
+		if result.Existing {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, budgetBucketUpsertSQL(bucketTable),
+			windowID, input.bucketStart.UTC(), reservedIncrease, accountedIncrease, result.JournalID, reservedDecrease, accountedDecrease); err != nil {
 			return redactPostgresError(fmt.Errorf("update budget bucket projection: %w", err))
 		}
 		if input.reserve {
-			tag, err := tx.Exec(ctx, "INSERT INTO "+reservationTable+
-				" (operation_id, window_id, bucket_start, state, reserved_cost_usd, actual_cost_status,"+
-				" budget_charge_usd, budget_charge_basis, reservation_revision, last_journal_id, created_at)"+
-				" VALUES ($1,$2,$3,'reserved',$4,'pending',0,'reserved',$5,$6,$7) ON CONFLICT (operation_id, window_id) DO NOTHING",
-				operationID, windowID, input.bucketStart.UTC(), reservedIncrease, input.revision, journalID, now.UTC())
+			tag, err := tx.Exec(ctx, reservationAppendSQL(reservationTable),
+				operationID, windowID, input.bucketStart.UTC(), reservedIncrease, input.revision, result.JournalID, now.UTC())
 			if err != nil {
 				return redactPostgresError(fmt.Errorf("insert budget reservation projection: %w", err))
 			}
@@ -191,10 +171,8 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 			return nil
 		}
 		state, basis, finalizedAt := completionProjection(input)
-		tag, err := tx.Exec(ctx, "UPDATE "+reservationTable+" SET state=$3, actual_cost_usd=$4, actual_cost_status=$5,"+
-			" actual_cost_unknown_reason_code=$6, budget_charge_usd=CASE WHEN $7 IS NULL THEN reserved_cost_usd ELSE $7 END, budget_charge_basis=$8,"+
-			" reservation_revision=$9, last_journal_id=$10, finalized_at=$11"+
-			" WHERE operation_id=$1 AND window_id=$2", operationID, windowID, state, actual, string(input.costStatus), input.unknownReason, journalCharge(input), basis, input.revision, journalID, finalizedAt)
+		tag, err := tx.Exec(ctx, reservationCompletionSQL(reservationTable),
+			operationID, windowID, state, actual, string(input.costStatus), unknownReason, journalCharge(input), basis, input.revision, result.JournalID, finalizedAt)
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("update budget reservation projection: %w", err))
 		}
@@ -207,6 +185,47 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 		return JournalRecord{}, err
 	}
 	return result, nil
+}
+
+// journalAppendSQL is deliberately one write statement. A retry may update a
+// row only when both unique identities identify that same event; its returned
+// system-column flag distinguishes that harmless idempotency update from a new
+// append. A conflict that does not return a row is a mismatched event identity.
+func journalAppendSQL(journalTable string) string {
+	return "INSERT INTO " + journalTable +
+		" (event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind," +
+		" reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd," +
+		" actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at)" +
+		" VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)" +
+		" ON CONFLICT DO UPDATE SET event_id = " + journalTable + ".event_id" +
+		" WHERE " + journalTable + ".event_id = EXCLUDED.event_id" +
+		" AND " + journalTable + ".operation_id = EXCLUDED.operation_id" +
+		" AND " + journalTable + ".window_id = EXCLUDED.window_id" +
+		" AND " + journalTable + ".reservation_revision = EXCLUDED.reservation_revision" +
+		" RETURNING journal_id, event_id, (xmax = 0) AS inserted"
+}
+
+func budgetBucketUpsertSQL(bucketTable string) string {
+	return "INSERT INTO " + bucketTable +
+		" (window_id, bucket_start, reserved_cost_usd, accounted_cost_usd, last_journal_id)" +
+		" VALUES ($1,$2,$3,$4,$5) ON CONFLICT (window_id, bucket_start) DO UPDATE SET" +
+		" reserved_cost_usd = " + bucketTable + ".reserved_cost_usd + EXCLUDED.reserved_cost_usd - $6," +
+		" accounted_cost_usd = " + bucketTable + ".accounted_cost_usd + EXCLUDED.accounted_cost_usd - $7," +
+		" last_journal_id = GREATEST(" + bucketTable + ".last_journal_id, EXCLUDED.last_journal_id), updated_at = clock_timestamp()"
+}
+
+func reservationAppendSQL(reservationTable string) string {
+	return "INSERT INTO " + reservationTable +
+		" (operation_id, window_id, bucket_start, state, reserved_cost_usd, actual_cost_status," +
+		" budget_charge_usd, budget_charge_basis, reservation_revision, last_journal_id, created_at)" +
+		" VALUES ($1,$2,$3,'reserved',$4,'pending',0,'reserved',$5,$6,$7) ON CONFLICT (operation_id, window_id) DO NOTHING"
+}
+
+func reservationCompletionSQL(reservationTable string) string {
+	return "UPDATE " + reservationTable + " SET state=$3, actual_cost_usd=$4, actual_cost_status=$5," +
+		" actual_cost_unknown_reason_code=$6, budget_charge_usd=CASE WHEN $7 IS NULL THEN reserved_cost_usd ELSE $7 END, budget_charge_basis=$8," +
+		" reservation_revision=$9, last_journal_id=$10, finalized_at=$11" +
+		" WHERE operation_id=$1 AND window_id=$2"
 }
 
 func parseJournalUUIDs(input journalInput) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, error) {
@@ -253,5 +272,12 @@ func journalCharge(input journalInput) any {
 		return "0.000000000000000000"
 	}
 	value, _ := EncodeUSD(*input.actual)
+	return value
+}
+
+func nullableReason(value string) any {
+	if value == "" {
+		return nil
+	}
 	return value
 }

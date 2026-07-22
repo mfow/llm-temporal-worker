@@ -60,3 +60,50 @@ func TestBudgetJournalOnlyRendersValidatedRelations(t *testing.T) {
 		}
 	}
 }
+
+func TestBudgetJournalAppendSQLIsWriteOnly(t *testing.T) {
+	for name, query := range map[string]string{
+		"journal append":         journalAppendSQL(`"llm_worker"."budget_journal_events"`),
+		"bucket projection":      budgetBucketUpsertSQL(`"llm_worker"."budget_buckets"`),
+		"reservation projection": reservationAppendSQL(`"llm_worker"."operation_budget_reservations"`),
+		"completion projection":  reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`),
+	} {
+		if got := classifyBudgetJournalSQL(query); got != budgetJournalSQLWriteOnly {
+			t.Fatalf("%s classification = %s, want %s: %s", name, got, budgetJournalSQLWriteOnly, query)
+		}
+	}
+}
+
+func TestBudgetBucketProjectionKeepsNewestJournalID(t *testing.T) {
+	query := budgetBucketUpsertSQL(`"llm_worker"."budget_buckets"`)
+	if !strings.Contains(query, "last_journal_id = GREATEST(") {
+		t.Fatalf("bucket upsert does not retain the greatest journal ID: %s", query)
+	}
+}
+
+func TestNullableBudgetJournalReason(t *testing.T) {
+	if got := nullableReason(""); got != nil {
+		t.Fatalf("empty reason = %#v, want nil", got)
+	}
+	if got := nullableReason("provider_timeout"); got != "provider_timeout" {
+		t.Fatalf("non-empty reason = %#v", got)
+	}
+}
+
+type budgetJournalSQLClass string
+
+const (
+	budgetJournalSQLRead      budgetJournalSQLClass = "read"
+	budgetJournalSQLWriteOnly budgetJournalSQLClass = "write-only"
+)
+
+func classifyBudgetJournalSQL(query string) budgetJournalSQLClass {
+	for _, token := range strings.FieldsFunc(strings.ToUpper(query), func(r rune) bool {
+		return r < 'A' || r > 'Z'
+	}) {
+		if token == "SELECT" {
+			return budgetJournalSQLRead
+		}
+	}
+	return budgetJournalSQLWriteOnly
+}
