@@ -195,14 +195,14 @@ func (activities *Activities) runV1(ctx context.Context, dispatch func(context.C
 	rawErr = dispatch(dispatchContext)
 	keepaliveErr := keepalive.stop()
 	keepalive = nil
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ToTemporalError(ctxErr)
-	}
 	if keepaliveErr != nil {
 		return ToTemporalError(heartbeatKeepaliveFailure(keepaliveErr))
 	}
 	if rawErr != nil {
 		return ToTemporalError(rawErr)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ToTemporalError(ctxErr)
 	}
 	return nil
 }

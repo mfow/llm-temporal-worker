@@ -7,10 +7,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	"go.temporal.io/sdk/temporal"
 )
 
 type materializingRuntimeProbe struct {
@@ -51,6 +53,13 @@ type materializingMaterializerProbe struct {
 	err       error
 	gotScope  string
 	gotHandle string
+}
+
+type deadlineMaterializerProbe struct{}
+
+func (*deadlineMaterializerProbe) MaterializeHandle(ctx context.Context, _ string, _ string, _ state.MaterializeLimits) (state.MaterializedState, error) {
+	<-ctx.Done()
+	return state.MaterializedState{}, fmt.Errorf("load checkpoint: %w", ctx.Err())
 }
 
 func (probe *materializingMaterializerProbe) MaterializeHandle(_ context.Context, scopeID, handle string, _ state.MaterializeLimits) (state.MaterializedState, error) {
@@ -234,6 +243,34 @@ func TestMapMaterializationDeadlineRetainsRetryableStateLoad(t *testing.T) {
 	}
 	if providerErr.Code != provider.CodeDeadlineExceeded || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetrySameOperation {
 		t.Fatalf("mapped error = %#v, want retryable state-load deadline", providerErr)
+	}
+}
+
+func TestMaterializingV1RuntimeDeadlineUsesRetryableTemporalError(t *testing.T) {
+	parent := llm.CheckpointHandle("parent")
+	request := validGenerateV1Request()
+	request.Parent = &parent
+	wrapper := &MaterializingV1Runtime{
+		Runtime:      &materializingRuntimeProbe{events: new([]string)},
+		Materializer: &deadlineMaterializerProbe{},
+		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := (&Activities{V1Runtime: wrapper}).GenerateV1(ctx, request)
+	var application *temporal.ApplicationError
+	if !errors.As(err, &application) {
+		t.Fatalf("GenerateV1 error = %T %v, want Temporal application error", err, err)
+	}
+	if application.Type() != ErrorTypeProviderTransient || application.NonRetryable() {
+		t.Fatalf("application error type=%q non_retryable=%v, want retryable provider transient", application.Type(), application.NonRetryable())
+	}
+	var details SafeErrorDetails
+	if err := application.Details(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details.Code != string(provider.CodeDeadlineExceeded) || details.Phase != string(provider.PhaseStateLoad) {
+		t.Fatalf("safe details = %#v, want state-load deadline", details)
 	}
 }
 
