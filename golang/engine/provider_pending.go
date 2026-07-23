@@ -82,7 +82,7 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 			}
 			return provider.Result{}, err
 		}
-		if err := result.Validate(); err != nil {
+		if err := result.ValidateForCall(call); err != nil {
 			mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "provider polling response is invalid")
 			mapped.Cause = err
 			return provider.Result{}, mapped

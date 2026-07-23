@@ -196,6 +196,26 @@ func TestPollProviderOperationRejectsChangedTerminalIdentity(t *testing.T) {
 	}
 }
 
+func TestPollProviderOperationRejectsCompletedResponseForAnotherOperation(t *testing.T) {
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{
+		State:               provider.ResumableCompleted,
+		ProviderOperationID: "provider-op",
+		Dispatch:            provider.DispatchAccepted,
+		Result: provider.Result{Response: llm.Response{
+			OperationKey: "different-operation",
+			Status:       llm.ResponseStatusCompleted,
+		}},
+	}}}
+	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "requested-operation"}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
+	if err == nil {
+		t.Fatal("completed response for another operation was accepted")
+	}
+	mapped, ok := err.(*provider.Error)
+	if !ok || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous {
+		t.Fatalf("error = %#v, want ambiguous invalid provider response", err)
+	}
+}
+
 func TestPollProviderOperationPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
