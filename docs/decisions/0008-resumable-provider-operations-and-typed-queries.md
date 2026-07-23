@@ -79,6 +79,12 @@ ID, honors provider delay guidance subject to a worker cap, and reports retryabl
 poll limits without submitting again. It emits heartbeat progress containing
 only phase/count fields; provider IDs remain durable state.
 
+The shared provider contract-test package also validates recorded submit/poll
+sequences without making network calls. It proves the common invariants (a
+pending submit has one provider operation identity, polls do not change it, and
+terminal outcomes stop the sequence) while leaving provider-specific status,
+delay, and idempotency-lookup semantics to the adapter's documented fixtures.
+
 The production Activity path connects the optional contract to durable
 operation repositories. A `Submit` result in `provider_pending` is persisted
 before polling, and a retry loads the encrypted identifier and calls `Poll`
