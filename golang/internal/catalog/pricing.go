@@ -10,10 +10,9 @@ import (
 )
 
 type pricingDocument struct {
-	Version  string             `yaml:"version"`
-	ID       string             `yaml:"id"`
-	Currency string             `yaml:"currency"`
-	Entries  []pricingEntryFile `yaml:"entries"`
+	Version string             `yaml:"version"`
+	ID      string             `yaml:"id"`
+	Entries []pricingEntryFile `yaml:"entries"`
 }
 
 type pricingEntryFile struct {
@@ -72,9 +71,6 @@ func compilePricing(document pricingDocument) (PricingCatalog, error) {
 	}
 	if err := validateIdentifier(id, "id"); err != nil {
 		return PricingCatalog{}, err
-	}
-	if strings.TrimSpace(document.Currency) != "USD" {
-		return PricingCatalog{}, fmt.Errorf("currency must be USD")
 	}
 	if len(document.Entries) == 0 {
 		return PricingCatalog{}, fmt.Errorf("entries must not be empty")

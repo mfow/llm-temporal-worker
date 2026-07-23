@@ -98,7 +98,6 @@ profiles:
 func TestLoadPricingCompilesExactDecimalEntries(t *testing.T) {
 	ref := writeCatalog(t, `version: llmtw-prices/v1
 id: catalog-2026-07-13
-currency: USD
 entries:
   - provider: openai
     endpoint_id: openai-production
@@ -145,7 +144,7 @@ entries:
     input_per_million: "1.250000"
     output_per_million: "10.000000"
 `)
-	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "currency must be USD") {
+	if _, err := LoadPricing(ref); err == nil || !strings.Contains(strings.ToLower(err.Error()), "currency") {
 		t.Fatalf("LoadPricing() error = %v, want a non-USD rejection", err)
 	}
 }
@@ -153,7 +152,6 @@ entries:
 func TestLoadPricingPreservesOmittedComponentsAsUnknown(t *testing.T) {
 	ref := writeCatalog(t, `version: llmtw-prices/v1
 id: catalog-partial
-currency: USD
 entries:
   - provider: openai
     endpoint_id: openai-production
@@ -215,7 +213,6 @@ entries:
 			name: "unknown price field",
 			body: `version: v1
 id: prices
-currency: USD
 entries:
   - provider: p
     endpoint_id: e
@@ -279,7 +276,6 @@ profiles:
 `)
 	priceRef := writeCatalog(t, `version: v1
 id: prices
-currency: USD
 entries:
   - provider: mock
     endpoint_id: endpoint

@@ -52,9 +52,11 @@ transform. Family aliases used by config (`azure_openai_responses` and
 ## Price documents
 
 Price documents contain a version, immutable `id`, and USD-denominated entries.
-The source document must declare `currency: USD`; this provenance assertion is
-validated at load time and is not propagated into runtime or response contracts.
-The canonical entry identity is provider, endpoint ID, endpoint family, region,
+USD is the only supported denomination in this release and is encoded by the
+field names and `pricing.CompileUSD`; a generic `currency` field, caller-owned
+rate, or foreign-currency amount is not accepted. Strict YAML decoding rejects
+an attempted `currency` field instead of silently treating it as USD. The
+canonical entry identity is provider, endpoint ID, endpoint family, region,
 model, provider tier, and effective start time. Prices are quoted decimal
 strings and are compiled by `pricing.CompileUSD`; floating-point values are
 not accepted. The local fixture's `endpoint` and `service_class` aliases are
@@ -64,7 +66,6 @@ accepted, but `service_class` is still exactly one of `economy`, `standard`, or
 ```yaml
 version: llmtw-prices/v1
 id: catalog-2026-07-13
-currency: USD
 entries:
   - provider: openai
     endpoint_id: openai-production
@@ -84,10 +85,14 @@ family. It also rejects duplicate profile IDs and duplicate price-catalog IDs
 across files. Model-specific price selection remains a routing concern.
 
 All decimal price properties are known by contract to be USD. A non-USD source
-is rejected; there is no FX adapter or rate schema. Neither configuration nor
-downstream Go/JSON/OCaml records carry a currency discriminator. This is a
-pre-release replacement, so old integer-microUSD and generic-currency response
-fields are rejected rather than dual-read or converted.
+is rejected at the strict catalog boundary; there is no FX adapter, rate
+schema, or caller-supplied conversion. Neither configuration nor downstream
+Go/JSON/OCaml records carry a currency discriminator. This is a pre-release
+replacement, so old integer-microUSD and generic-currency response fields are
+rejected rather than dual-read or converted. A future concrete non-USD provider
+requires a superseding ADR defining worker-owned rate retrieval, exact
+conversion, staleness, failure, and audit behavior; that provider will still
+persist and report only USD after the ADR is implemented.
 
 An omitted component is not a zero-dollar quote. The loader retains the
 component as `unknown` on the compiled pricing entry (the zero value remains

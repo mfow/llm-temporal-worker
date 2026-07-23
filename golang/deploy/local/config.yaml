@@ -119,7 +119,7 @@ capabilities:
 pricing:
   catalogs:
     - file: /etc/llmtw/prices.yaml
-      sha256: 988450a7b97c8d6e5829841da71e14e96593fe779608b5c9ffaa0d08e838a69d
+      sha256: aff38b31219810e9acc50d6b790a7b570e74fd84b2716a72c75435a7f9faecda
   require_price_when_budgeted: true
 
 budgets:
