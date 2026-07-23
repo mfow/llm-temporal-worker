@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/maintenance"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 func maintenanceIntegrationRepository(t *testing.T) (MaintenanceRepository, context.Context, func()) {
@@ -284,5 +286,83 @@ func TestMaintenanceRetentionPrunesQueryAuditInBoundedBatches(t *testing.T) {
 	}
 	if freshRemaining != 1 {
 		t.Fatal("unexpired query execution was removed")
+	}
+}
+
+func TestMaintenanceRetentionPreservesCacheUsedByActiveOperation(t *testing.T) {
+	fixture := newResponseCacheFixture(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	key := testCacheKey()
+	key.ScopeID = fixture.scope.ID
+	fill := CacheFillRequest{Key: key, OperationID: fixture.originID, Lease: time.Minute}
+	if acquired, err := fixture.repository.BeginFill(fixture.ctx, fill); err != nil || acquired.Status != CacheFillAcquired {
+		t.Fatalf("begin cache fill=%#v err=%v", acquired, err)
+	}
+	entry, err := fixture.repository.Publish(fixture.ctx, CachePublishRequest{
+		Fill:                   fill,
+		CanonicalRequestJSON:   []byte(`{"model":"maintenance-retention"}`),
+		SemanticProfileVersion: "maintenance-retention",
+		CacheEpoch:             "maintenance-retention",
+		OriginOperationID:      fixture.originID,
+		OriginCheckpointID:     fixture.checkpointID,
+		OriginProvider:         "fixture",
+		OriginEndpointID:       "endpoint-fixture",
+		OriginResolvedModel:    "model-fixture",
+		Response:               []byte(`{"output":"cached"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The producer is terminal, while the consumer remains active. The
+	// operation's cache_entry_id is intentionally not populated by Lookup;
+	// response_cache_uses is the authoritative use ledger for this path.
+	operations, err := fixture.operations.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET state='canceled', retention_expires_at=$2 WHERE operation_id=$1", operationUUID(fixture.originID), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	consumerID := "cache-retention-active-consumer-" + uuid.NewString()
+	if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
+		ID: consumerID, ScopeKey: "cache-integration-tenant/cache-integration-project",
+		RequestDigest: admission.Digest([]byte(consumerID)), ReservationUSD: pricing.MustUSD("0"),
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"maintenance-retention"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if hit, err := fixture.repository.Lookup(fixture.ctx, CacheLookupRequest{Key: key, OperationID: consumerID, MaxAge: time.Hour}); err != nil || !hit.Hit {
+		t.Fatalf("active consumer cache hit=%#v err=%v", hit, err)
+	}
+	entries, err := fixture.operations.Namespace.Render("response_cache_entries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-2 * time.Hour)
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+entries+" SET created_at=$2, completed_at=$2, last_used_at=$2 WHERE cache_entry_id=$1", entry.ID, old); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := (MaintenanceRepository{Pool: fixture.operations.Pool, Namespace: fixture.operations.Namespace}).PruneExpiredCache(fixture.ctx, now, now.Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Examined != 0 || result.Tombstoned != 0 {
+		t.Fatalf("active cache use was pruned: result=%+v", result)
+	}
+
+	// Once the consumer is terminal, the same old entry is eligible. This
+	// second pass proves that the new fence is specific to active uses rather
+	// than disabling cache retention altogether.
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET state='canceled', retention_expires_at=$2 WHERE operation_id=$1", operationUUID(consumerID), old); err != nil {
+		t.Fatal(err)
+	}
+	result, err = (MaintenanceRepository{Pool: fixture.operations.Pool, Namespace: fixture.operations.Namespace}).PruneExpiredCache(fixture.ctx, now, now.Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Examined != 1 || result.Tombstoned != 1 {
+		t.Fatalf("terminal cache use did not become eligible: result=%+v", result)
 	}
 }

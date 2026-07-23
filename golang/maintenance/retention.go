@@ -43,7 +43,11 @@ type RetentionRecord struct {
 	Active                bool
 	HasRetainedDescendant bool
 	HasActiveFill         bool
-	HasBlobReference      bool
+	// HasActiveUse is true when a cache-use ledger row points at a
+	// non-terminal operation. Cache maintenance must keep the entry usable
+	// until that operation leaves retry/poll state.
+	HasActiveUse     bool
+	HasBlobReference bool
 }
 
 // RetentionPolicy bounds one maintenance pass.  Every non-zero cutoff is an
@@ -84,7 +88,7 @@ func (policy RetentionPolicy) Validate() error {
 // SQL adapters must repeat the same predicates in their locked query rather
 // than relying on a previously returned RetentionRecord.
 func (record RetentionRecord) Eligible(policy RetentionPolicy) bool {
-	if record.ID == "" || record.Active || record.HasRetainedDescendant || record.HasActiveFill {
+	if record.ID == "" || record.Active || record.HasRetainedDescendant || record.HasActiveFill || record.HasActiveUse {
 		return false
 	}
 	var cutoff time.Time
