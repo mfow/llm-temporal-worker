@@ -34,7 +34,16 @@ func TestStatusEventRequiresEvidenceForCreditIncident(t *testing.T) {
 	if _, err := NewStatusEvent(value); err == nil {
 		t.Fatal("exhausted credit without provider evidence was accepted")
 	}
+	value.ProviderCode = "provider_specific_free_text"
+	if _, err := NewStatusEvent(value); err == nil {
+		t.Fatal("exhausted credit with undocumented provider evidence was accepted")
+	}
+	value.ProviderCode = "insufficient_quota"
+	if _, err := NewStatusEvent(value); err != nil {
+		t.Fatalf("documented provider evidence rejected: %v", err)
+	}
 	value.Source, value.SafeErrorCode = SourceOperator, "credit_exhausted"
+	value.ProviderCode = ""
 	if _, err := NewStatusEvent(value); err != nil {
 		t.Fatalf("operator evidence rejected: %v", err)
 	}

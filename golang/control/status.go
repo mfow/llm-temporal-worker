@@ -127,8 +127,10 @@ func validateStatusObservation(observation StatusObservation) error {
 	if !observation.Source.valid() || !observation.Availability.valid() || !observation.Credit.valid() || !observation.Billing.valid() {
 		return errors.New("status observation contains an unknown enum")
 	}
-	if (observation.Credit == CreditExhausted || observation.Billing == BillingIssue) && observation.ProviderCode == "" && observation.Source != SourceOperator {
-		return errors.New("exhausted credit or billing issue requires provider evidence or an operator event")
+	if (observation.Credit == CreditExhausted || observation.Billing == BillingIssue) && observation.Source != SourceOperator {
+		if !documentedCreditProviderCode(observation.ProviderCode) {
+			return errors.New("exhausted credit or billing issue requires a documented provider code or an operator event")
+		}
 	}
 	if observation.Source == SourceOperator && (observation.Credit == CreditExhausted || observation.Billing == BillingIssue) && observation.SafeErrorCode == "" && observation.ProviderCode == "" {
 		return errors.New("operator credit or billing incident requires a safe evidence code")
@@ -145,6 +147,21 @@ func validateStatusObservation(observation StatusObservation) error {
 		}
 	}
 	return nil
+}
+
+// documentedCreditProviderCode is deliberately kept closed.  A provider
+// response must be mapped to a code whose semantics have been reviewed before
+// it can establish a durable credit/billing incident; an arbitrary safe
+// string is not sufficient evidence.  Keep this list in sync with
+// ClassifyCredit, which is the provider-neutral classifier used by adapters.
+func documentedCreditProviderCode(code string) bool {
+	switch code {
+	case "insufficient_quota", "billing_hard_limit", "payment_required",
+		"quota_low", "billing_warning", "quota_restored", "billing_restored":
+		return true
+	default:
+		return false
+	}
 }
 
 func digestStatusObservation(observation StatusObservation) [32]byte {
