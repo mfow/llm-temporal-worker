@@ -586,8 +586,9 @@ inspect the worker keyspace or verify the active-generation manifest,
 coverage, or enabled Stream's structural health; the storage validator and
 recovery runbook cover those records until an authoritative read-only readiness
 contract is added. It also checks a bounded PostgreSQL read-only transaction,
-the configured physical namespace/schema contract, every relation and index
-declared by that contract, and UTC session state. Runtime role grants remain
+the configured physical namespace/schema contract, every relation and both
+explicit and constraint-backed indexes declared by that contract, and UTC
+session state. Runtime role grants remain
 deployment-owned and are exercised by the worker's normal least-privilege
 operations. It checks
 the configured S3 bucket with bucket metadata only; it never reads or writes a

@@ -109,6 +109,9 @@ func verifyReadOnlySchema(ctx context.Context, pool *pgxpool.Pool, namespace Nam
 	if err := verifyIndexes(ctx, tx, namespace, indexes); err != nil {
 		return err
 	}
+	if err := verifyConstraintIndexes(ctx, tx, namespace, tables, migrationConstraintIndexCount(migration)); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit PostgreSQL readiness transaction: %w", err)
 	}
@@ -159,8 +162,19 @@ func migrationObjectNames(migration string, namespace Namespace) (tables, indexe
 	return tables, indexes
 }
 
+// migrationConstraintIndexCount counts the PRIMARY KEY and UNIQUE
+// constraints that PostgreSQL backs with indexes. Explicit CREATE UNIQUE
+// INDEX statements are already included in migrationObjectNames and are not
+// counted here, so the two checks remain independent.
+func migrationConstraintIndexCount(migration string) int {
+	count := strings.Count(migration, "PRIMARY KEY") + strings.Count(migration, "UNIQUE")
+	count -= strings.Count(migration, "CREATE UNIQUE INDEX")
+	return count
+}
+
 type readinessQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
 func verifyTables(ctx context.Context, queryer readinessQueryer, namespace Namespace, expected []string) error {
@@ -220,6 +234,26 @@ WHERE schemaname = $1 AND indexname = ANY($2::text[])`, namespace.Schema, expect
 		if _, ok := found[name]; !ok {
 			return fmt.Errorf("PostgreSQL worker index %q is missing", name)
 		}
+	}
+	return nil
+}
+
+func verifyConstraintIndexes(ctx context.Context, queryer readinessQueryer, namespace Namespace, tables []string, expected int) error {
+	if expected <= 0 {
+		return fmt.Errorf("PostgreSQL migration has no constraint-backed indexes")
+	}
+	var found int
+	if err := queryer.QueryRow(ctx, `SELECT count(*)
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+JOIN pg_index i ON i.indexrelid = c.conindid
+WHERE n.nspname = $1 AND t.relname = ANY($2::text[])
+  AND c.contype IN ('p', 'u') AND c.convalidated AND i.indisvalid`, namespace.Schema, tables).Scan(&found); err != nil {
+		return fmt.Errorf("verify PostgreSQL constraint-backed indexes: %w", err)
+	}
+	if found < expected {
+		return fmt.Errorf("PostgreSQL constraint-backed indexes are incomplete: found %d, want at least %d", found, expected)
 	}
 	return nil
 }

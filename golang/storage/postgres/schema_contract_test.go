@@ -128,6 +128,13 @@ func TestMigrationObjectNamesCoverTablesAndIndexes(t *testing.T) {
 	if len(indexes) != 71 {
 		t.Fatalf("migration index count = %d, want 71", len(indexes))
 	}
+	if got := migrationConstraintIndexCount(migration); got != 46 {
+		t.Fatalf("constraint-backed index count = %d, want 46", got)
+	}
+	withoutUnique := strings.Replace(migration, "UNIQUE (tenant_hmac, project_hmac)", "", 1)
+	if got := migrationConstraintIndexCount(withoutUnique); got != 45 {
+		t.Fatalf("dropping one unique constraint changed expected count to %d, want 45", got)
+	}
 	for _, name := range []string{
 		"tenant_schema_contract", "tenant_operations", "tenant_query_executions",
 	} {
