@@ -16,17 +16,18 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		{ID: "cache-child", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasRetainedDescendant: true},
 		{ID: "cache-fill", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasActiveFill: true},
 		{ID: "operation-old", Kind: ResourceOperation, ExpiresAt: now.Add(-time.Hour)},
+		{ID: "query-old", Kind: ResourceQueryExecution, ExpiresAt: now.Add(-time.Hour)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := store.Prune(context.Background(), RetentionPolicy{
-		Now: now, Limit: 10, CacheUnusedBefore: now.Add(-24 * time.Hour), OperationExpiresBefore: now,
+		Now: now, Limit: 10, CacheUnusedBefore: now.Add(-24 * time.Hour), OperationExpiresBefore: now, QueryExecutionExpiresBefore: now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Examined != 2 || result.Tombstoned != 1 || result.Deleted != 1 || result.Skipped != 0 {
+	if result.Examined != 3 || result.Tombstoned != 1 || result.Deleted != 2 || result.Skipped != 0 {
 		t.Fatalf("unexpected retention result: %+v", result)
 	}
 	records := store.Snapshot()

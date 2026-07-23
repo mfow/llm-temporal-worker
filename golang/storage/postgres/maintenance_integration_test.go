@@ -216,3 +216,73 @@ func TestMaintenanceRetentionPreservesCurrentProviderState(t *testing.T) {
 		t.Fatalf("inventory snapshot/model counts = %d/%d, want 2/2", snapshotCount, modelCount)
 	}
 }
+
+func TestMaintenanceRetentionPrunesQueryAuditInBoundedBatches(t *testing.T) {
+	repository, ctx, cleanup := maintenanceIntegrationRepository(t)
+	defer cleanup()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	keys := Keyring{Active: "maintenance-query-v1", Keys: map[string][]byte{"maintenance-query-v1": []byte("01234567890123456789012345678901")}}
+	scopeKeys := ScopeKeyring{ActiveVersion: "maintenance-scope-v1", Keys: map[string][]byte{"maintenance-scope-v1": []byte("abcdefghijklmnopqrstuvwxyz123456")}}
+	queries := DefaultQueryExecutionRepository(repository.Pool, repository.Namespace, keys, DefaultScopeRepository(repository.Pool, repository.Namespace, scopeKeys))
+	queries.Now = func() time.Time { return now }
+
+	oldIDs := make([]uuid.UUID, 0, 2)
+	for _, key := range []string{"old-a", "old-b"} {
+		request := validQueryExecutionRequest(now)
+		request.Tenant = "maintenance-query-" + key
+		request.OperationKey = key
+		request.StartedAt = now.Add(-3 * time.Hour)
+		request.CompletedAt = now.Add(-2 * time.Hour)
+		request.RetentionExpiresAt = now.Add(-time.Hour)
+		record, err := queries.Record(ctx, request)
+		if err != nil {
+			t.Fatalf("record expired query execution %q: %v", key, err)
+		}
+		oldIDs = append(oldIDs, record.ID)
+	}
+	fresh := validQueryExecutionRequest(now)
+	fresh.Tenant = "maintenance-query-fresh"
+	fresh.OperationKey = "fresh"
+	fresh.CompletedAt = now.Add(-time.Minute)
+	fresh.StartedAt = now.Add(-2 * time.Minute)
+	fresh.RetentionExpiresAt = now.Add(time.Hour)
+	freshRecord, err := queries.Record(ctx, fresh)
+	if err != nil {
+		t.Fatalf("record fresh query execution: %v", err)
+	}
+
+	cutoff := now.Add(-10 * time.Minute)
+	first, err := repository.PruneExpiredQueryExecutions(ctx, now, cutoff, 1)
+	if err != nil {
+		t.Fatalf("first query execution retention pass: %v", err)
+	}
+	if first.Examined != 1 || first.Deleted != 1 {
+		t.Fatalf("first query execution retention result = %+v", first)
+	}
+	second, err := repository.PruneExpiredQueryExecutions(ctx, now, cutoff, 10)
+	if err != nil {
+		t.Fatalf("second query execution retention pass: %v", err)
+	}
+	if second.Examined != 1 || second.Deleted != 1 {
+		t.Fatalf("second query execution retention result = %+v", second)
+	}
+
+	executions, err := repository.Namespace.Render("query_executions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining int
+	if err := repository.Pool.QueryRow(ctx, "SELECT count(*) FROM "+executions+" WHERE query_execution_id = ANY($1::uuid[])", oldIDs).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expired query executions remaining = %d", remaining)
+	}
+	var freshRemaining int
+	if err := repository.Pool.QueryRow(ctx, "SELECT count(*) FROM "+executions+" WHERE query_execution_id = $1", freshRecord.ID).Scan(&freshRemaining); err != nil {
+		t.Fatal(err)
+	}
+	if freshRemaining != 1 {
+		t.Fatal("unexpired query execution was removed")
+	}
+}

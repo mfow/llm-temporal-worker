@@ -25,6 +25,10 @@ const (
 	ResourceOperation  ResourceKind = "operation"
 	ResourceBudget     ResourceKind = "budget"
 	ResourceCheckpoint ResourceKind = "checkpoint"
+	// ResourceQueryExecution identifies the bounded control-query audit ledger.
+	// Query executions have no durable children, so their expiry can be
+	// reclaimed independently from inference operations.
+	ResourceQueryExecution ResourceKind = "query_execution"
 )
 
 // RetentionRecord is the small set of facts a backend must recheck inside its
@@ -45,14 +49,15 @@ type RetentionRecord struct {
 // RetentionPolicy bounds one maintenance pass.  Every non-zero cutoff is an
 // independent policy.  A zero cutoff means that resource kind is not touched.
 type RetentionPolicy struct {
-	Now                     time.Time
-	Limit                   int
-	CacheUnusedBefore       time.Time
-	StatusExpiresBefore     time.Time
-	InventoryExpiresBefore  time.Time
-	OperationExpiresBefore  time.Time
-	BudgetExpiresBefore     time.Time
-	CheckpointExpiresBefore time.Time
+	Now                         time.Time
+	Limit                       int
+	CacheUnusedBefore           time.Time
+	StatusExpiresBefore         time.Time
+	InventoryExpiresBefore      time.Time
+	OperationExpiresBefore      time.Time
+	BudgetExpiresBefore         time.Time
+	CheckpointExpiresBefore     time.Time
+	QueryExecutionExpiresBefore time.Time
 }
 
 func (policy RetentionPolicy) Validate() error {
@@ -66,6 +71,7 @@ func (policy RetentionPolicy) Validate() error {
 		"cache": policy.CacheUnusedBefore, "status": policy.StatusExpiresBefore,
 		"inventory": policy.InventoryExpiresBefore, "operation": policy.OperationExpiresBefore,
 		"budget": policy.BudgetExpiresBefore, "checkpoint": policy.CheckpointExpiresBefore,
+		"query_execution": policy.QueryExecutionExpiresBefore,
 	} {
 		if !cutoff.IsZero() && cutoff.After(policy.Now) {
 			return fmt.Errorf("retention %s cutoff must not be after policy time", name)
@@ -106,6 +112,8 @@ func (record RetentionRecord) Eligible(policy RetentionPolicy) bool {
 			cutoff = policy.BudgetExpiresBefore
 		case ResourceCheckpoint:
 			cutoff = policy.CheckpointExpiresBefore
+		case ResourceQueryExecution:
+			cutoff = policy.QueryExecutionExpiresBefore
 		default:
 			return false
 		}
