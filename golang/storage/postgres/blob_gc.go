@@ -17,6 +17,7 @@ import (
 
 var (
 	ErrBlobDeletionNotClaimed = errors.New("blob deletion was not claimed")
+	ErrBlobDeletionReferences = errors.New("blob deletion has retained references")
 	ErrBlobNotWritable        = errors.New("blob is not accepting writes")
 )
 
@@ -252,13 +253,14 @@ func (repository MaintenanceRepository) FinalizeBlobDeletion(ctx context.Context
 	if blobID == uuid.Nil {
 		return errors.New("blob id is required")
 	}
-	blobs, err := repository.Namespace.Render("blobs")
+	tables, err := repository.blobGCTables()
 	if err != nil {
 		return err
 	}
+	refs := blobReferenceFreeSQL("$2", tables["operations"], tables["conversation_checkpoints"], tables["checkpoint_provider_state"], tables["response_cache_entries"], tables["response_cache_uses"], tables["response_cache_fills"])
 	return WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
 		var state string
-		err := tx.QueryRow(ctx, "SELECT deletion_state FROM "+blobs+" WHERE blob_id = $1 FOR UPDATE", blobID).Scan(&state)
+		err := tx.QueryRow(ctx, "SELECT deletion_state FROM "+tables["blobs"]+" WHERE blob_id = $1 FOR UPDATE", blobID).Scan(&state)
 		if errors.Is(err, pgx.ErrNoRows) || state == "deleted" {
 			return nil
 		}
@@ -268,7 +270,14 @@ func (repository MaintenanceRepository) FinalizeBlobDeletion(ctx context.Context
 		if state != "deleting" {
 			return fmt.Errorf("%w: state is %q", ErrBlobDeletionNotClaimed, state)
 		}
-		if _, err := tx.Exec(ctx, "UPDATE "+blobs+" SET deletion_state = 'deleted' WHERE blob_id = $1 AND deletion_state = 'deleting'", blobID); err != nil {
+		var free bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM "+tables["blobs"]+" b WHERE b.blob_id = $1 AND "+refs+")", blobID, time.Now().UTC()).Scan(&free); err != nil {
+			return redactPostgresError(fmt.Errorf("recheck blob references before finalizing deletion: %w", err))
+		}
+		if !free {
+			return ErrBlobDeletionReferences
+		}
+		if _, err := tx.Exec(ctx, "UPDATE "+tables["blobs"]+" SET deletion_state = 'deleted' WHERE blob_id = $1 AND deletion_state = 'deleting'", blobID); err != nil {
 			return redactPostgresError(fmt.Errorf("finalize blob deletion: %w", err))
 		}
 		return nil
