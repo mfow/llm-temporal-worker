@@ -280,6 +280,134 @@ func TestResponseCacheHundredWayConcurrentFillAcquisition(t *testing.T) {
 	}
 }
 
+func TestResponseCacheHundredWayMissHasOneFillAndOneUsePerOperation(t *testing.T) {
+	fixture := newResponseCacheFixture(t)
+	key := testCacheKey()
+	key.ScopeID = fixture.scope.ID
+	key.SemanticFingerprintHMAC = sha256.Sum256([]byte("cache-hundred-way-miss-" + uuid.NewString()))
+
+	// Every caller has a distinct durable operation, but all callers ask for
+	// the same cache identity. This is the production miss race: exactly one
+	// caller may perform the provider work while the others wait for the
+	// resulting entry rather than starting duplicate fills.
+	const callers = 100
+	operationIDs := make([]string, callers)
+	operationIDs[0] = fixture.originID
+	for i := 1; i < callers; i++ {
+		operationIDs[i] = fmt.Sprintf("cache-hundred-way-%03d-%s", i, uuid.NewString())
+		if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
+			ID:              operationIDs[i],
+			ScopeKey:        "cache-integration-tenant/cache-integration-project",
+			RequestDigest:   admission.Digest([]byte(operationIDs[i])),
+			ReservationUSD:  pricing.MustUSD("0"),
+			ExpiresAt:       time.Now().UTC().Add(time.Hour),
+			RequestManifest: []byte(`{"model":"fixture"}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ownerID := fixture.originID
+	ownerFill := CacheFillRequest{Key: key, OperationID: ownerID, Lease: time.Minute}
+	if result, err := fixture.repository.BeginFill(fixture.ctx, ownerFill); err != nil || result.Status != CacheFillAcquired {
+		t.Fatalf("owner fill=%#v err=%v", result, err)
+	}
+	// Keep the owner deterministic so the checkpoint and cache entry retain the
+	// same origin operation. The companion hundred-way acquisition test above
+	// proves the conflict-safe race that elects the owner.
+	start := make(chan struct{})
+	results := make(chan error, callers-1)
+	var group sync.WaitGroup
+	group.Add(callers - 1)
+	for _, operationID := range operationIDs[1:] {
+		go func(operationID string) {
+			defer group.Done()
+			<-start
+			result, err := fixture.repository.BeginFill(fixture.ctx, CacheFillRequest{Key: key, OperationID: operationID, Lease: time.Minute})
+			if err == nil && result.Status != CacheFillBusy {
+				err = fmt.Errorf("concurrent fill result=%#v", result)
+			}
+			results <- err
+		}(operationID)
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := fixture.repository.Publish(fixture.ctx, CachePublishRequest{
+		Fill:                   ownerFill,
+		CanonicalRequestJSON:   []byte(`{"model":"fixture"}`),
+		SemanticProfileVersion: "profile-v1",
+		CacheEpoch:             "epoch-v1",
+		OriginOperationID:      ownerID,
+		OriginCheckpointID:     fixture.checkpointID,
+		OriginProvider:         "fixture",
+		OriginEndpointID:       "endpoint-fixture",
+		OriginResolvedModel:    "model-fixture",
+		Response:               []byte(`{"output":"cached"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// All non-owner callers now replay the exact response. Their uses are
+	// recorded independently, while the owner use inserted by Publish remains
+	// the only use for the fill owner.
+	start = make(chan struct{})
+	errs := make(chan error, callers-1)
+	group = sync.WaitGroup{}
+	group.Add(callers - 1)
+	for _, operationID := range operationIDs {
+		if operationID == ownerID {
+			continue
+		}
+		go func(operationID string) {
+			defer group.Done()
+			<-start
+			hit, err := fixture.repository.Lookup(fixture.ctx, CacheLookupRequest{Key: key, OperationID: operationID, MaxAge: time.Hour})
+			if err == nil && (!hit.Hit || string(hit.Response) != `{"output":"cached"}`) {
+				err = fmt.Errorf("cache lookup hit=%#v", hit)
+			}
+			errs <- err
+		}(operationID)
+	}
+	close(start)
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	entries, err := fixture.operations.Namespace.Render("response_cache_entries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var useCount int
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT use_count FROM "+entries+" WHERE semantic_fingerprint_hmac=$1", key.SemanticFingerprintHMAC[:]).Scan(&useCount); err != nil {
+		t.Fatal(err)
+	}
+	if useCount != callers {
+		t.Fatalf("hundred-way cache use_count=%d, want %d", useCount, callers)
+	}
+	uses, err := fixture.operations.Namespace.Render("response_cache_uses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var useRows int
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT count(*) FROM "+uses+" WHERE cache_entry_id=(SELECT cache_entry_id FROM "+entries+" WHERE semantic_fingerprint_hmac=$1)", key.SemanticFingerprintHMAC[:]).Scan(&useRows); err != nil {
+		t.Fatal(err)
+	}
+	if useRows != callers {
+		t.Fatalf("hundred-way cache use rows=%d, want %d", useRows, callers)
+	}
+}
+
 func TestResponseCacheFillLeaseBusyAndTakeover(t *testing.T) {
 	fixture := newResponseCacheFixture(t)
 	key := testCacheKey()
