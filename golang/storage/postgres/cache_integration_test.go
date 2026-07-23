@@ -307,37 +307,49 @@ func TestResponseCacheHundredWayMissHasOneFillAndOneUsePerOperation(t *testing.T
 		}
 	}
 
-	ownerID := fixture.originID
-	ownerFill := CacheFillRequest{Key: key, OperationID: ownerID, Lease: time.Minute}
-	if result, err := fixture.repository.BeginFill(fixture.ctx, ownerFill); err != nil || result.Status != CacheFillAcquired {
-		t.Fatalf("owner fill=%#v err=%v", result, err)
-	}
-	// Keep the owner deterministic so the checkpoint and cache entry retain the
-	// same origin operation. The companion hundred-way acquisition test above
-	// proves the conflict-safe race that elects the owner.
+	// Start every fill request together. PostgreSQL's conflict-safe insert and
+	// row lock must elect exactly one owner while all other operations observe
+	// the active lease as busy.
 	start := make(chan struct{})
-	results := make(chan error, callers-1)
+	type fillOutcome struct {
+		operationID string
+		result      CacheFillResult
+		err         error
+	}
+	results := make(chan fillOutcome, callers)
 	var group sync.WaitGroup
-	group.Add(callers - 1)
-	for _, operationID := range operationIDs[1:] {
+	group.Add(callers)
+	for _, operationID := range operationIDs {
 		go func(operationID string) {
 			defer group.Done()
 			<-start
 			result, err := fixture.repository.BeginFill(fixture.ctx, CacheFillRequest{Key: key, OperationID: operationID, Lease: time.Minute})
-			if err == nil && result.Status != CacheFillBusy {
-				err = fmt.Errorf("concurrent fill result=%#v", result)
-			}
-			results <- err
+			results <- fillOutcome{operationID: operationID, result: result, err: err}
 		}(operationID)
 	}
 	close(start)
 	group.Wait()
 	close(results)
-	for err := range results {
-		if err != nil {
-			t.Fatal(err)
+	acquired, busy := 0, 0
+	ownerID := ""
+	for outcome := range results {
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		switch outcome.result.Status {
+		case CacheFillAcquired:
+			acquired++
+			ownerID = outcome.operationID
+		case CacheFillBusy:
+			busy++
+		default:
+			t.Fatalf("unexpected concurrent fill result=%#v", outcome.result)
 		}
 	}
+	if acquired != 1 || busy != callers-1 {
+		t.Fatalf("hundred-way miss fill outcomes acquired=%d busy=%d, want one acquired and %d busy", acquired, busy, callers-1)
+	}
+	ownerFill := CacheFillRequest{Key: key, OperationID: ownerID, Lease: time.Minute}
 
 	if _, err := fixture.repository.Publish(fixture.ctx, CachePublishRequest{
 		Fill:                   ownerFill,
