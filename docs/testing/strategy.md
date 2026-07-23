@@ -211,6 +211,16 @@ separate from the live backup/restore and concurrent database proofs in the
 forkable conversation-state plan; passing this test does not claim those
 production recovery gates are complete.
 
+The same seam has a bounded scale regression in
+`state.TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks`. It publishes
+10,000 bounded turns, takes a materialized snapshot every 50 turns, forks one
+immutable parent into three concurrent children, and rebuilds a replacement
+graph from the published rows before replaying every branch. The snapshots are
+the storage-neutral artifact used by the compaction path; the test deliberately
+does not claim that PostgreSQL/blob backup restore, Temporal crash-boundary
+injection, or Redis generation rebuild has been exercised. Those remain
+integration gates in the production implementation plan.
+
 ### Adapter contract tests
 
 Every adapter package runs the same suite:
