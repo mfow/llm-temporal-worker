@@ -60,6 +60,42 @@ let generate_v1_activity = Temporal.Activity.remote ~name:"llm.generate.v1" ~inp
 let compact_v1_activity = Temporal.Activity.remote ~name:"llm.compact.v1" ~input:compact_v1_request_codec ~output:compact_v1_response_codec
 let query_v1_activity = Temporal.Activity.remote ~name:"llm.query.v1" ~input:query_v1_request_codec ~output:query_v1_response_codec
 
+(* The low-level v1 helpers intentionally keep the wire records visible.  A
+   caller that needs the Conversation or Query invariants should use those
+   facades instead; these functions are useful for protocol tests and for
+   workflows that already own the exact request records. *)
+let task_queue_string = Option.map Temporal_task_queue.to_string
+
+let start_generate ?task_queue request =
+  Temporal.Activity.start
+    ?task_queue:(task_queue_string task_queue)
+    ~retry_policy:activity_retry_policy generate_v1_activity request
+
+let invoke_generate ?task_queue request =
+  Temporal.Activity.execute
+    ?task_queue:(task_queue_string task_queue)
+    ~retry_policy:activity_retry_policy generate_v1_activity request
+
+let start_compact_v1 ?task_queue request =
+  Temporal.Activity.start
+    ?task_queue:(task_queue_string task_queue)
+    ~retry_policy:activity_retry_policy compact_v1_activity request
+
+let invoke_compact_v1 ?task_queue request =
+  Temporal.Activity.execute
+    ?task_queue:(task_queue_string task_queue)
+    ~retry_policy:activity_retry_policy compact_v1_activity request
+
+let start_query_v1 ?task_queue envelope =
+  Temporal.Activity.start
+    ?task_queue:(task_queue_string task_queue)
+    ~retry_policy:activity_retry_policy query_v1_activity envelope
+
+let invoke_query_v1 ?task_queue envelope =
+  Temporal.Activity.execute
+    ?task_queue:(task_queue_string task_queue)
+    ~retry_policy:activity_retry_policy query_v1_activity envelope
+
 let invoke_generate_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Activity.t -> generate_request -> (generate_response, Temporal.Error.t) result) input =
   dispatch ?task_queue generate_v1_activity input
 let invoke_compact_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (compact_request, compaction_response) Temporal.Activity.t -> compact_request -> (compaction_response, Temporal.Error.t) result) input =
