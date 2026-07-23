@@ -187,6 +187,15 @@ Activity using the fixed one-attempt retry policy. These low-level helpers do
 not materialize inherited conversation state or reinterpret query result tags;
 use `Conversation` and `Query` when those invariants are needed.
 
+`Conversation.of_checkpoint` intentionally treats the checkpoint's effective
+settings as unknown: a handle does not materialize worker state in Workflow
+code. If such an imported conversation is compacted, the wrapper leaves the
+post-compaction settings patch as `Keep` rather than turning its local defaults
+into an implicit `Set []`/`Clear` patch. Callers that know the desired tools or
+output configuration should provide them explicitly on the next Generate;
+those explicitly supplied fields are then restored after a later compaction,
+while still-unknown fields remain inherited by the worker.
+
 ## Typed query facade
 
 `Llm_temporal.Query` adds a closed GADT over the five query Activities. Each
