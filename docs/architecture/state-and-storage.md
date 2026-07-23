@@ -150,9 +150,11 @@ its provider, endpoint, family, media type, and non-empty opaque bytes; its
 
 `CreateRoot` issues a handle at depth zero. `PutChild` requires the child to
 use the same tenant, the parent handle as `ParentID`, and exactly the parent
-depth plus one. A non-empty operation key makes the child write idempotent;
-the same operation returns the existing child handle, while a conflicting
-child is rejected. Reads verify the handle signature, tenant binding, digest,
+depth plus one. A non-empty operation key makes the child write idempotent
+within the tenant and parent-handle scope; the same operation returns the
+existing child handle, while a conflicting child is rejected. The same key
+may be reused independently on another branch. Reads verify the handle
+signature, tenant binding, digest,
 and expiry before returning the cloned record. Redis additionally bounds the
 encoded record by its configured continuation byte limit and expires it using
 the record's `ExpiresAt` value.

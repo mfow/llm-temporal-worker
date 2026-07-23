@@ -14,6 +14,15 @@ type continuationRecord struct {
 	value  state.Continuation
 }
 
+// continuationOperationKey is the identity of one child write. Operation
+// keys are caller-provided and are only idempotent within a tenant's parent
+// branch; the same key may be used independently by another branch.
+type continuationOperationKey struct {
+	tenant    string
+	parent    state.Handle
+	operation string
+}
+
 // ContinuationStore is a bounded, immutable in-process continuation store.
 // It is suitable for tests and explicitly single-process development only.
 type ContinuationStore struct {
@@ -22,7 +31,7 @@ type ContinuationStore struct {
 	clock    func() time.Time
 	maxDepth int
 	records  map[state.Handle]continuationRecord
-	byOp     map[string]state.Handle
+	byOp     map[continuationOperationKey]state.Handle
 }
 
 type ContinuationOptions struct {
@@ -41,7 +50,7 @@ func NewContinuationStore(options ContinuationOptions) (*ContinuationStore, erro
 	if options.MaxDepth <= 0 {
 		options.MaxDepth = 64
 	}
-	return &ContinuationStore{keyring: options.Keyring, clock: options.Clock, maxDepth: options.MaxDepth, records: make(map[state.Handle]continuationRecord), byOp: make(map[string]state.Handle)}, nil
+	return &ContinuationStore{keyring: options.Keyring, clock: options.Clock, maxDepth: options.MaxDepth, records: make(map[state.Handle]continuationRecord), byOp: make(map[continuationOperationKey]state.Handle)}, nil
 }
 
 func (store *ContinuationStore) CreateRoot(ctx context.Context, continuation state.Continuation) (state.Handle, error) {
@@ -115,8 +124,9 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 		return "", fmt.Errorf("continuation depth exceeds limit")
 	}
 	if request.OperationKey != "" {
+		operationKey := continuationOperationKey{tenant: parent.Tenant, parent: request.Parent, operation: request.OperationKey}
 		store.mu.RLock()
-		handle, exists := store.byOp[request.OperationKey]
+		handle, exists := store.byOp[operationKey]
 		store.mu.RUnlock()
 		if exists {
 			return handle, nil
@@ -131,8 +141,9 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 		return "", err
 	}
 	if request.OperationKey != "" {
+		operationKey := continuationOperationKey{tenant: child.Tenant, parent: request.Parent, operation: request.OperationKey}
 		store.mu.Lock()
-		store.byOp[request.OperationKey] = state.Handle(handle)
+		store.byOp[operationKey] = state.Handle(handle)
 		store.mu.Unlock()
 	}
 	return state.Handle(handle), nil

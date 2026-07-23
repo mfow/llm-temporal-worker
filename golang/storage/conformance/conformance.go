@@ -325,6 +325,28 @@ func testContinuations(t *testing.T, factory StoreFactory) {
 	if err != nil || replay != childHandle {
 		t.Fatalf("child replay = %q, %v; want %q", replay, err, childHandle)
 	}
+	otherRoot := continuation(t, now)
+	otherRoot.Tenant = "tenant-b"
+	otherRootHandle, err := stores.Continuations.CreateRoot(ctx, otherRoot)
+	if err != nil {
+		t.Fatalf("create second continuation root: %v", err)
+	}
+	otherChild := otherRoot.Clone()
+	otherChild.ParentID = otherRootHandle.String()
+	otherChild.Depth = otherRoot.Depth + 1
+	otherChild.LastOperationID = "child-operation"
+	otherChild.Transcript = append(otherChild.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "other child"}}})
+	_, otherChild.TranscriptDigest, err = state.CanonicalTranscript(otherChild.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherChildHandle, err := stores.Continuations.PutChild(ctx, state.PutChildRequest{Parent: otherRootHandle, Child: otherChild, OperationKey: "child-operation"})
+	if err != nil {
+		t.Fatalf("put second child: %v", err)
+	}
+	if otherChildHandle == childHandle {
+		t.Fatalf("operation key was shared across tenant/parent scope: %q", childHandle)
+	}
 	parent, err := stores.Continuations.Get(ctx, rootHandle)
 	if err != nil || len(parent.Transcript) != 1 || parent.TranscriptDigest != rootDigest {
 		t.Fatalf("child mutated parent = %#v, %v", parent, err)
