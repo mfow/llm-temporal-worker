@@ -86,9 +86,9 @@ type t = {
   model : Model_selector.t option;
   settings : Settings.t;
   (* A checkpoint handle does not carry the caller's effective settings.  Keep
-     that distinction explicit so compaction cannot accidentally turn the
-     local default hint into a destructive [Set []]/[Clear] patch. *)
-  settings_known : bool;
+     only fields explicitly known to this facade for post-compaction restore;
+     an imported handle therefore starts with [Keep] for every field. *)
+  restore_patch : settings_patch;
   checkpoint : Checkpoint.t option;
   restore_after_compact : bool;
 }
@@ -110,11 +110,18 @@ let root ~context ~model ?service_class ?(settings = Settings.default) () =
     | None -> settings
     | Some service_class -> { settings with Settings.service_class }
   in
-  { context; model = Some model; settings; settings_known = true;
+  let restore_patch =
+    { Settings.Patch.keep with
+      tools = Set settings.tools;
+      tool_policy = Set settings.tool_policy;
+      output = (match settings.output with None -> Clear | Some value -> Set value) }
+  in
+  { context; model = Some model; settings; restore_patch;
     checkpoint = None; restore_after_compact = false }
 
 let of_checkpoint ~context ~checkpoint =
-  { context; model = None; settings = Settings.default; settings_known = false;
+  { context; model = None; settings = Settings.default;
+    restore_patch = Settings.Patch.keep;
     checkpoint = Some checkpoint; restore_after_compact = false }
 
 let context conversation = conversation.context
@@ -155,13 +162,21 @@ let initial_patch conversation : settings_patch =
     extensions = Set settings.extensions }
 
 let restore_patch conversation : settings_patch =
-  if not conversation.settings_known then Settings.Patch.keep
-  else
-    let settings = conversation.settings in
-    { Settings.Patch.keep with
-      tools = Set settings.tools;
-      tool_policy = Set settings.tool_policy;
-      output = (match settings.output with None -> Clear | Some value -> Set value) }
+  conversation.restore_patch
+
+let restore_patch_override (base : settings_patch) (override : settings_patch) : settings_patch =
+  let choose_value ~cleared left right =
+    match right with
+    | Keep -> left
+    | Set value -> Set value
+    | Clear -> Set cleared
+  in
+  let choose_output left right = match right with Keep -> left | _ -> right in
+  { base with
+    tools = choose_value ~cleared:[] base.tools override.tools;
+    tool_policy = choose_value ~cleared:{ choice = Auto; parallel = false }
+        base.tool_policy override.tool_policy;
+    output = choose_output base.output override.output }
 
 let apply_patch (settings : Settings.t) (patch : settings_patch) =
   let value_or ~cleared current = function Keep -> current | Set value -> value | Clear -> cleared in
@@ -193,6 +208,7 @@ let child conversation (patch : settings_patch) checkpoint =
   { conversation with
     model = (match patch.model with Keep -> conversation.model | Set value -> Some value | Clear -> None);
     settings = apply_patch conversation.settings patch;
+    restore_patch = restore_patch_override conversation.restore_patch patch;
     checkpoint = Some checkpoint;
     restore_after_compact = false }
 

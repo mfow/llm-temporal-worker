@@ -465,8 +465,10 @@ Workflow; after import, the Go worker remains authoritative for inherited
 validation. Compaction of such an imported value therefore keeps the settings
 patch omitted; the facade never turns its local default hint into a destructive
 tool/output clear. Callers that need to restore known application settings
-must provide those fields explicitly on the subsequent Generate. The value
-contains no network client, mutable reference, or process-global state:
+must provide those fields explicitly on the subsequent Generate; those fields
+are then restored after compaction while still-unknown fields remain inherited
+by the worker. The value contains no network client, mutable reference, or
+process-global state:
 
 ~~~ocaml
 module Conversation : sig
