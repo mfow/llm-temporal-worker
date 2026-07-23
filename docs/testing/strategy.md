@@ -108,6 +108,16 @@ inside an otherwise write-shaped statement. This proves the PostgreSQL journal's
 write-only boundary at execution time; it does not claim that Redis admission,
 worker composition, or the future zero-read query gates are implemented.
 
+The PostgreSQL response-cache integration suite also includes
+`TestResponseCacheHundredWayMissHasOneFillAndOneUsePerOperation`. It starts
+100 durable operations against one cache identity at the same time and
+requires exactly one fill lease, then publishes one encrypted response and
+replays it from the other 99 operations concurrently. The durable entry must
+end with exactly 100 uses (the publish owner's use plus one use per replay),
+which proves fill de-duplication and per-operation use accounting under a
+real database race. This is a bounded cache proof; it does not claim the
+separate three-way checkpoint-fork or backup/restore gates in Task 21.
+
 The staged Redis/PostgreSQL/conversation work has an unimplemented
 [production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
 whose phase/status authority is centralized in
