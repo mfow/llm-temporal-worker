@@ -38,7 +38,11 @@ and credentials are never part of the event.
 
 Credit classification is conservative. A generic HTTP 429 is a rate/capacity
 signal and does not establish exhausted credit. Exhausted/billing incidents
-require a documented provider code/field or an authorized operator event.
+require one of the reviewed provider codes (`insufficient_quota`,
+`billing_hard_limit`, `payment_required`, `quota_low`, `billing_warning`,
+`quota_restored`, or `billing_restored`) or an authorized operator event.
+Arbitrary provider text, even when printable and bounded, is not incident
+evidence.
 `RouteStatus.Apply` keeps a confirmed incident sticky across ordinary
 inference and startup observations. A provider management response, matching
 configuration epoch, or operator event may explicitly clear it. Changing the

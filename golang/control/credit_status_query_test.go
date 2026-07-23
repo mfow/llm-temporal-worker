@@ -19,6 +19,12 @@ func TestNewCreditStatusMapsSafeProviderEvidence(t *testing.T) {
 	}
 }
 
+func TestNewCreditStatusRejectsUndocumentedIncidentEvidence(t *testing.T) {
+	if _, err := NewCreditStatus("openai", "primary", CreditExhausted, BillingIssue, time.Unix(10, 0), SourceInference, "", "provider_specific_free_text"); err == nil {
+		t.Fatal("undocumented provider evidence was accepted")
+	}
+}
+
 func TestNewCreditStatusMapsOperatorAndUnknownEvidence(t *testing.T) {
 	operator, err := NewCreditStatus("provider", "operator-endpoint", CreditLow, BillingUnknown, time.Time{}, SourceOperator, "credit_low", "")
 	if err != nil {

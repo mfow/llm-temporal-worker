@@ -60,6 +60,9 @@ func NewCreditStatus(provider, endpoint string, credit CreditState, billing Bill
 	if !source.valid() {
 		return CreditStatus{}, fmt.Errorf("credit status evidence source %q is invalid", source)
 	}
+	if (credit == CreditExhausted || billing == BillingIssue) && source != SourceOperator && !documentedCreditProviderCode(providerCode) {
+		return CreditStatus{}, errors.New("exhausted credit or billing issue requires a documented provider code or an operator event")
+	}
 	result := CreditStatus{
 		Provider: provider, EndpointID: endpoint, Credit: credit, Billing: billing,
 		ConfirmedAt: confirmedAt.UTC(), EvidenceSource: CreditEvidenceUnknown,
