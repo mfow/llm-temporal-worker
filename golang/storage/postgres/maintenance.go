@@ -81,6 +81,10 @@ func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, n
 	if err != nil {
 		return result, err
 	}
+	usesTable, err := repository.Namespace.Render("response_cache_uses")
+	if err != nil {
+		return result, err
+	}
 	checkpointsTable, err := repository.Namespace.Render("conversation_checkpoints")
 	if err != nil {
 		return result, err
@@ -102,6 +106,9 @@ func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, n
 			" WHERE f.cache_entry_id = c.cache_entry_id AND f.state = 'filling' AND f.lease_expires_at > $2)" +
 			" AND NOT EXISTS (SELECT 1 FROM " + operationsTable + " o" +
 			" WHERE o.cache_entry_id = c.cache_entry_id AND o.state NOT IN ('completed', 'definite_failed', 'canceled'))" +
+			" AND NOT EXISTS (SELECT 1 FROM " + usesTable + " u" +
+			" JOIN " + operationsTable + " o ON o.operation_id = u.operation_id" +
+			" WHERE u.cache_entry_id = c.cache_entry_id AND o.state NOT IN ('completed', 'definite_failed', 'canceled'))" +
 			" AND NOT EXISTS (SELECT 1 FROM " + checkpointsTable + " cp" +
 			" WHERE cp.origin_cache_entry_id = c.cache_entry_id AND cp.expires_at > $2)" +
 			" ORDER BY c.last_used_at, c.cache_entry_id LIMIT $3 FOR UPDATE SKIP LOCKED" +

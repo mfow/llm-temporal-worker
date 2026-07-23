@@ -12,9 +12,10 @@ for checkpoints, provider state, and control history.
 `RetentionStore`. Every pass has an explicit UTC `Now` and a batch `Limit`
 (maximum 10,000). A cache row is eligible only when its `last_used_at` is
 older than the cache cutoff and it is ready, inactive, has no retained
-descendant, and has no active fill. Other resource kinds use their own expiry
-horizon. The in-memory adapter rechecks these facts while holding its lock;
-PostgreSQL adapters must repeat them in the locked SQL statement.
+descendant, has no active fill, and has no non-terminal operation recorded in
+`response_cache_uses`. Other resource kinds use their own expiry horizon. The
+in-memory adapter rechecks these facts while holding its lock; PostgreSQL
+adapters must repeat them in the locked SQL statement.
 
 Cache rows are tombstoned rather than immediately deleted. This preserves the
 dedupe boundary and lets the transaction enqueue an external blob deletion.
