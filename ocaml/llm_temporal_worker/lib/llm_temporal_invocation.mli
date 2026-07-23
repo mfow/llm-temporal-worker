@@ -30,6 +30,37 @@ val generate_v1_activity : (generate_request, generate_response) Temporal.Activi
 val compact_v1_activity : (compact_request, compaction_response) Temporal.Activity.t
 val query_v1_activity : (query_envelope, query_response) Temporal.Activity.t
 
+(** Workflow-native low-level v1 Activity access.  These helpers schedule the
+    exact wire records and apply the one-attempt policy used by the provider
+    worker.  Prefer [Conversation] and [Query] for validation and typed
+    result matching. *)
+val start_generate :
+  ?task_queue:Temporal_task_queue.t ->
+  generate_request ->
+  (generate_response, Temporal.Error.t) Temporal.Future.t
+
+val invoke_generate :
+  ?task_queue:Temporal_task_queue.t ->
+  generate_request -> (generate_response, Temporal.Error.t) result
+
+val start_compact_v1 :
+  ?task_queue:Temporal_task_queue.t ->
+  compact_request ->
+  (compaction_response, Temporal.Error.t) Temporal.Future.t
+
+val invoke_compact_v1 :
+  ?task_queue:Temporal_task_queue.t ->
+  compact_request -> (compaction_response, Temporal.Error.t) result
+
+val start_query_v1 :
+  ?task_queue:Temporal_task_queue.t ->
+  query_envelope ->
+  (query_response, Temporal.Error.t) Temporal.Future.t
+
+val invoke_query_v1 :
+  ?task_queue:Temporal_task_queue.t ->
+  query_envelope -> (query_response, Temporal.Error.t) result
+
 val invoke_generate_once :
   ?task_queue:Temporal_task_queue.t ->
   dispatch:(?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Activity.t -> generate_request -> (generate_response, Temporal.Error.t) result) ->

@@ -16,5 +16,9 @@
  (libraries llm_temporal temporal-sdk yojson ptime))
 
 (test
+ (name test_activity)
+ (libraries llm_temporal temporal-sdk yojson))
+
+(test
  (name test_generate)
  (libraries llm_temporal temporal-sdk yojson))

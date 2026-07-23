@@ -178,6 +178,15 @@ schedule any Activity outside the exact `llm.generate.v1` and
 and typed Query v1 records and Yojson codecs; those low-level records remain
 separate from the ergonomic facade.
 
+Advanced workflow code that already owns exact wire records can use the three
+descriptors directly through `Llm_temporal.start_generate`,
+`Llm_temporal.start_compact_v1`, and `Llm_temporal.start_query_v1`. Each returns
+a workflow-owned `Temporal.Future.t`; the corresponding `invoke_generate`,
+`invoke_compact_v1`, and `invoke_query_v1` helpers schedule and await one
+Activity using the fixed one-attempt retry policy. These low-level helpers do
+not materialize inherited conversation state or reinterpret query result tags;
+use `Conversation` and `Query` when those invariants are needed.
+
 ## Typed query facade
 
 `Llm_temporal.Query` adds a closed GADT over the five query Activities. Each
