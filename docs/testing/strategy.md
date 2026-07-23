@@ -98,6 +98,16 @@ through `make postgres-integration`, so local runs without
 `LLMTW_POSTGRES_ADDR` remain a deterministic skip while CI executes the real
 PostgreSQL plan.
 
+The same integration package includes `TestBudgetJournalIntegrationHasNoBudgetReads`.
+It attaches a `pgx.QueryTracer` to the real journal append/finalize pool and
+classifies every statement that names a budget relation. The allowlist accepts
+only `INSERT` and `UPDATE`, so a budget-table `SELECT` or an unknown statement
+shape fails closed. The tracer binds the active namespace's rendered relation
+names, and also rejects budget relations used as nested `FROM` or `JOIN` sources
+inside an otherwise write-shaped statement. This proves the PostgreSQL journal's
+write-only boundary at execution time; it does not claim that Redis admission,
+worker composition, or the future zero-read query gates are implemented.
+
 The staged Redis/PostgreSQL/conversation work has an unimplemented
 [production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
 whose phase/status authority is centralized in
