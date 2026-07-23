@@ -147,7 +147,7 @@ func (engine *Engine) persistContinuation(ctx context.Context, request llm.Reque
 		}
 		providerStates = append(providerStates, state.OpaqueStateRef{Provider: value.Provider, EndpointID: candidate.EndpointID, AccountRegion: candidate.Pinning.AccountRegion, Family: value.EndpointFamily, ModelLineage: candidate.ModelLineage, Media: value.MediaType, Data: append([]byte(nil), value.Opaque...), Required: true})
 	}
-	child := state.Continuation{Tenant: request.Context.Tenant, ParentID: "", Transcript: transcript, TranscriptDigest: digest, TranscriptComplete: true, ProviderState: providerStates, Pinning: candidate.Pinning, LastOperationID: operationID, CapabilityVersion: candidate.CapabilityVersion, PriceVersion: candidate.PriceVersion, CreatedAt: now, ExpiresAt: now.Add(ttl), Depth: 0}
+	child := state.Continuation{Tenant: request.Context.Tenant, ParentID: "", Transcript: transcript, TranscriptDigest: digest, TranscriptComplete: true, ProviderState: providerStates, Affinities: carryProviderCacheAffinity(parent, candidate, response.Usage, now), Pinning: candidate.Pinning, LastOperationID: operationID, CapabilityVersion: candidate.CapabilityVersion, PriceVersion: candidate.PriceVersion, CreatedAt: now, ExpiresAt: now.Add(ttl), Depth: 0}
 	var handle state.Handle
 	if parent != nil {
 		child.ParentID = parent.ID
@@ -175,6 +175,34 @@ func (engine *Engine) persistContinuation(ctx context.Context, request llm.Reque
 }
 
 func timePtr(value time.Time) *time.Time { return &value }
+
+// carryProviderCacheAffinity preserves only immutable observations that were
+// already established by an earlier checkpoint. A response can refresh token
+// usage for an exact matching route, but it cannot create a new provider cache
+// identity: provider cache epochs and HMAC key material are not available at
+// this engine boundary. This keeps affinity a safe preference and avoids
+// claiming cache reuse from an unverified provider response.
+func carryProviderCacheAffinity(parent *state.Continuation, candidate routing.Candidate, usage llm.Usage, now time.Time) state.ProviderCacheAffinitySet {
+	if parent == nil || len(parent.Affinities) == 0 {
+		return nil
+	}
+	result := parent.Affinities.Clone()
+	if usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
+		return result
+	}
+	for index := range result {
+		affinity := &result[index]
+		if affinity.Provider != candidate.Provider || affinity.RouteID != candidate.RouteID || affinity.EndpointID != candidate.EndpointID ||
+			affinity.EndpointAccountHMAC != candidate.EndpointAccountHMAC || affinity.Region != candidate.Region ||
+			affinity.EndpointFamily != candidate.Family || affinity.ModelLineage != candidate.ModelLineage || affinity.RouteModelRevision != candidate.ModelRevision {
+			continue
+		}
+		affinity.ObservedCacheReadTokens = usage.CacheReadTokens
+		affinity.ObservedCacheWriteTokens = usage.CacheWriteTokens
+		affinity.LastSuccessAt = now
+	}
+	return result
+}
 
 func (engine *Engine) finalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(parent)

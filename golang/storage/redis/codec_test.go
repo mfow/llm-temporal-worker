@@ -108,6 +108,13 @@ func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
 			Data:          []byte("provider-state"),
 			Required:      true,
 		}},
+		Affinities: state.ProviderCacheAffinitySet{{
+			Rank: 0, Provider: "openai", RouteID: "responses-us-east", EndpointID: "responses-us-east",
+			EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", EndpointFamily: "responses",
+			ModelLineage: "gpt-5", RouteModelRevision: "gpt-5-2026-01", ProviderCacheKeyHMAC: [32]byte{2},
+			HasProviderCacheKey: true, CacheEpoch: "epoch-1", ObservedCacheReadTokens: 3,
+			ObservedCacheWriteTokens: 1, LastSuccessAt: now.Add(-time.Minute),
+		}},
 		Pinning: state.Pinning{
 			Provider:      "openai",
 			EndpointID:    "responses-us-east",

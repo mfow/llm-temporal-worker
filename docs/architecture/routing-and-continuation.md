@@ -86,6 +86,15 @@ identity while still producing independent operations and responses. Cache
 read/write token observations remain separate from worker exact-response cache
 accounting.
 
+The one-shot engine carries the immutable affinity set from a loaded
+continuation into the planner and persists it on the next child. A matching
+route refreshes its normalized cache-read/write observations after a successful
+provider response; unrelated routes are left unchanged. The engine does not
+invent a cache key or epoch for a root response because those values require a
+provider-verified identity, so an observation is eligible for preference only
+after that identity has already been persisted. This keeps affinity a safe
+preference without making provider usage claims that the adapter did not make.
+
 ## Candidate identity
 
 A candidate identity includes:
