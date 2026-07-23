@@ -53,6 +53,9 @@ func TestSpendSummaryQueryUnionsLedgersAndUsesHalfOpenBounds(t *testing.T) {
 			t.Fatalf("spend summary query missing %q: %s", expected, query)
 		}
 	}
+	if strings.Contains(query, "COALESCE(SUM(actual_cost_usd)") {
+		t.Fatalf("spend summary query coalesces a NULL cost aggregate to zero: %s", query)
+	}
 }
 
 func TestSpendSummaryQueryGlobalBucketHasNoGrouping(t *testing.T) {
