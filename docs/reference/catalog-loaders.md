@@ -55,11 +55,13 @@ Price documents contain a version, immutable `id`, and USD-denominated entries.
 USD is the only supported denomination in this release and is encoded by the
 field names and `pricing.CompileUSD`; a generic `currency` field, caller-owned
 rate, or foreign-currency amount is not accepted. Strict YAML decoding rejects
-an attempted `currency` field instead of silently treating it as USD. The
-canonical entry identity is provider, endpoint ID, endpoint family, region,
-model, provider tier, and effective start time. Prices are quoted decimal
-strings and are compiled by `pricing.CompileUSD`; floating-point values are
-not accepted. The local fixture's `endpoint` and `service_class` aliases are
+an attempted `currency` field instead of silently treating it as USD. Because
+USD is implicit, `currency: USD` is rejected just like any other currency
+value; omit the field. The canonical entry identity is provider, endpoint ID,
+endpoint family, region, model, provider tier, and effective start time.
+Prices are quoted decimal strings and are compiled by `pricing.CompileUSD`;
+floating-point values are not accepted. The local fixture's `endpoint` and
+`service_class` aliases are
 accepted, but `service_class` is still exactly one of `economy`, `standard`, or
 `priority`. There is no `provider_default` class.
 
