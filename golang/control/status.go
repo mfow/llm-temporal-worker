@@ -214,13 +214,18 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	if !status.ConfigDigestIsZero() && status.RouteID != event.RouteID {
 		return false
 	}
+	// Configuration digests are the immutable boundary for a projection.  A
+	// newer config epoch may reset sticky incidents, but it must never allow an
+	// event from a different configuration snapshot to overwrite this route's
+	// in-memory state.  Check the digest before resetting for an epoch change;
+	// otherwise the reset would clear the guard and accept the foreign event.
+	if !status.ConfigDigestIsZero() && status.ConfigDigest != event.ConfigDigest {
+		return false
+	}
 	if status.ConfigEpoch != "" && status.ConfigEpoch != event.ConfigEpoch {
 		// A new epoch starts a fresh projection. It must not inherit an old
 		// provider incident, but the new event itself may establish one.
 		*status = RouteStatus{}
-	}
-	if !status.ConfigDigestIsZero() && status.ConfigDigest != event.ConfigDigest {
-		return false
 	}
 	if status.RouteID != "" && status.EndpointID != event.EndpointID {
 		return false
