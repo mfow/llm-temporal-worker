@@ -30,6 +30,7 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	operationBlob := put("operation")
 	checkpointBlob := put("checkpoint")
 	providerBlob := put("provider")
+	staleFinalizeBlob := put("stale-finalize")
 	cacheBlob := put("cache")
 	cacheStateBlob := put("cache-state")
 
@@ -85,6 +86,11 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 		t.Fatal(err)
 	} else if tag.RowsAffected() != 1 {
 		t.Fatalf("provider-state blob reference insert affected %d rows", tag.RowsAffected())
+	}
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "INSERT INTO "+providerState+" (checkpoint_id, ordinal, provider, endpoint_id, endpoint_account_hmac, region, endpoint_family, model_lineage, state_kind, state_blob_id, state_digest, required, immutable_fork_safe, expires_at) VALUES ($1,1,'fixture','endpoint', $2,'region','family','lineage','opaque',$3,$4,true,true,$5)", fixture.checkpointID, accountDigest[:], staleFinalizeBlob.BlobID, staleFinalizeBlob.Digest[:], now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if tag.RowsAffected() != 1 {
+		t.Fatalf("stale-finalize provider reference insert affected %d rows", tag.RowsAffected())
 	}
 
 	// Publish a normal cache entry, then move its response to a blob. This uses
@@ -148,6 +154,16 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	}
 	if result.Eligible < 1 {
 		t.Fatalf("eligible result=%#v, expected the unreferenced blob", result)
+	}
+	blobsTable, err := fixture.operations.Namespace.Render("blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+blobsTable+" SET deletion_state='deleting' WHERE blob_id=$1", staleFinalizeBlob.BlobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenance.FinalizeBlobDeletion(fixture.ctx, staleFinalizeBlob.BlobID); !errors.Is(err, ErrBlobDeletionReferences) {
+		t.Fatalf("finalize with active reference error=%v, want ErrBlobDeletionReferences", err)
 	}
 	for name, id := range map[string]uuid.UUID{"operation": operationBlob.BlobID, "checkpoint": checkpointBlob.BlobID, "provider": providerBlob.BlobID, "cache": cacheBlob.BlobID} {
 		claims, err := maintenance.ClaimBlobDeletion(fixture.ctx, now, []uuid.UUID{id}, 1)

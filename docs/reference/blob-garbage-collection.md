@@ -35,7 +35,9 @@ skip rows locked by another maintenance worker.
 `FinalizeBlobDeletion` is idempotent: an already deleted or missing metadata
 row succeeds. Consequently an object-store `not found` response can be
 acknowledged without retrying forever. A row in `retained` or `eligible` cannot
-be finalized without first acquiring the `deleting` fence.
+be finalized without first acquiring the `deleting` fence. Finalization then
+rechecks active references while holding that fence and fails closed if a stale
+or privileged deletion state still has a live reference.
 
 This slice is the PostgreSQL metadata contract only. It does not wire a
 `BlobResultStore` or runtime engine to an object-store client; the maintenance
