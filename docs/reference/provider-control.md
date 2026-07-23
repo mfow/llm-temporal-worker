@@ -43,7 +43,9 @@ require a documented provider code/field or an authorized operator event.
 inference and startup observations. A provider management response, matching
 configuration epoch, or operator event may explicitly clear it. Changing the
 configuration epoch starts a fresh projection; it does not inherit the old
-incident.
+incident. The projection is also bound to its immutable configuration digest:
+an event from another snapshot is rejected even when it advertises a newer
+epoch.
 
 For bounded reads that need to rebuild this domain projection, see the
 [status replay reference](status-replay.md). Replay follows persisted

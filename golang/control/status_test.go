@@ -144,3 +144,31 @@ func TestRouteStatusRejectsStaleEvent(t *testing.T) {
 		t.Fatal("stale event applied")
 	}
 }
+
+func TestRouteStatusRejectsForeignConfigAfterEpochChange(t *testing.T) {
+	base := time.Unix(300, 0)
+	status := RouteStatus{}
+	first, err := NewStatusEvent(observation(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Apply(first) {
+		t.Fatal("first event rejected")
+	}
+
+	foreign := observation(base.Add(time.Second))
+	foreign.ConfigDigest = digest(9)
+	foreign.ConfigEpoch = "epoch-2"
+	foreign.RouteID = first.RouteID
+	foreign.EndpointID = first.EndpointID
+	foreignEvent, err := NewStatusEvent(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Apply(foreignEvent) {
+		t.Fatal("event from a different configuration digest was applied")
+	}
+	if status.ConfigDigest != first.ConfigDigest || status.ConfigEpoch != first.ConfigEpoch || status.LastEventDigest != first.EventDigest {
+		t.Fatalf("foreign event changed projection: %#v", status)
+	}
+}
