@@ -120,7 +120,7 @@ func (repository SpendSummaryRepository) ListSpendSummary(ctx context.Context, o
 	result.StartTime, result.EndTime = options.StartTime, options.EndTime
 	for rows.Next() {
 		var operationKind, provider, model *string
-		var knownCost string
+		var knownCost *string
 		var exactCount, unknownCount int64
 		if err := rows.Scan(&operationKind, &provider, &model, &knownCost, &exactCount, &unknownCount); err != nil {
 			return control.SpendSummaryResult{}, redactPostgresError(fmt.Errorf("scan spend summary: %w", err))
@@ -132,7 +132,17 @@ func (repository SpendSummaryRepository) ListSpendSummary(ctx context.Context, o
 		if exactCount == 0 && unknownCount == 0 && len(options.GroupBy) > 0 {
 			continue
 		}
-		usd, err := pricing.ParseUSD(knownCost)
+		// SUM over an empty exact-cost set is NULL. Keep that distinction at
+		// the SQL boundary instead of coalescing it to zero: an unknown-only
+		// bucket must remain visibly unknown, while a global empty interval can
+		// still be represented as an exact zero in the typed result.
+		knownCostText := "0"
+		if knownCost != nil {
+			knownCostText = *knownCost
+		} else if exactCount != 0 {
+			return control.SpendSummaryResult{}, errors.New("PostgreSQL spend summary exact count has no aggregate cost")
+		}
+		usd, err := pricing.ParseUSD(knownCostText)
 		if err != nil {
 			return control.SpendSummaryResult{}, fmt.Errorf("PostgreSQL spend summary amount is invalid: %w", err)
 		}
@@ -205,5 +215,5 @@ func spendSummaryQuery(operations, attempts, executions string, groupBy []contro
 	return "WITH cost_rows AS (" +
 		"SELECT o.operation_kind, NULLIF(final_attempt.provider, 'unknown') AS provider, NULLIF(final_attempt.resolved_model, 'unknown') AS model, o.actual_cost_usd, o.cost_status, o.completed_at FROM " + operations + " o LEFT JOIN LATERAL (SELECT provider, resolved_model FROM " + attempts + " WHERE operation_id = o.operation_id ORDER BY attempt_number DESC LIMIT 1) final_attempt ON TRUE WHERE o.scope_id = $1 AND o.state = 'completed' AND o.completed_at >= $2 AND o.completed_at < $3 " +
 		"UNION ALL SELECT 'query'::text, NULL::text, NULL::text, actual_cost_usd, cost_status, completed_at FROM " + executions + " WHERE scope_id = $1 AND completed_at >= $2 AND completed_at < $3" +
-		") SELECT " + strings.Join(selectColumns, ", ") + ", COALESCE(SUM(actual_cost_usd) FILTER (WHERE cost_status = 'exact'), 0)::text, COUNT(*) FILTER (WHERE cost_status = 'exact'), COUNT(*) FILTER (WHERE cost_status = 'unknown') FROM cost_rows WHERE ($4::text[] IS NULL OR operation_kind = ANY($4::text[]))" + groupSQL + orderSQL
+		") SELECT " + strings.Join(selectColumns, ", ") + ", SUM(actual_cost_usd) FILTER (WHERE cost_status = 'exact')::text, COUNT(*) FILTER (WHERE cost_status = 'exact'), COUNT(*) FILTER (WHERE cost_status = 'unknown') FROM cost_rows WHERE ($4::text[] IS NULL OR operation_kind = ANY($4::text[]))" + groupSQL + orderSQL
 }

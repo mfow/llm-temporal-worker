@@ -48,6 +48,9 @@ func TestSpendSummaryExecutionIntegration(t *testing.T) {
 	unknown.OperationKey = "spend-unknown-" + operationID
 	unknown.CostStatus, unknown.CostMethod, unknown.ActualCostUSD = "unknown", "", nil
 	unknown.CostUnknownReasonCode = "provider_charge_unavailable"
+	unknown.StartedAt = now.Add(time.Second)
+	unknown.CompletedAt = now.Add(time.Second)
+	unknown.RetentionExpiresAt = unknown.CompletedAt.Add(time.Hour)
 	unknown.RequestFingerprint = sha256.Sum256(unknown.RequestJSON)
 	if _, err := queryRepository.Record(ctx, unknown); err != nil {
 		t.Fatal(err)
@@ -67,6 +70,16 @@ func TestSpendSummaryExecutionIntegration(t *testing.T) {
 	}
 	if grouped.Buckets[1].Group == nil || grouped.Buckets[1].Group.OperationKind == nil || *grouped.Buckets[1].Group.OperationKind != control.OperationQuery || grouped.Buckets[1].KnownActualCostUSD != "0.050000000000000000" || grouped.Buckets[1].UnknownOperationCount != 1 || grouped.Buckets[1].Completeness != "partial" {
 		t.Fatalf("query bucket = %#v", grouped.Buckets[1])
+	}
+	unknownOnly, err := repository.ListSpendSummary(ctx, SpendSummaryListOptions{
+		ScopeID: scope.ID, StartTime: now.Add(500 * time.Millisecond), EndTime: now.Add(2 * time.Second),
+		OperationKinds: []control.OperationKind{control.OperationQuery},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unknownOnly.Buckets) != 1 || unknownOnly.Buckets[0].KnownActualCostUSD != "0.000000000000000000" || unknownOnly.Buckets[0].ExactOperationCount != 0 || unknownOnly.Buckets[0].UnknownOperationCount != 1 || unknownOnly.Buckets[0].Completeness != "partial" {
+		t.Fatalf("unknown-only exact/unknown bucket = %#v", unknownOnly.Buckets)
 	}
 	byRoute, err := repository.ListSpendSummary(ctx, SpendSummaryListOptions{ScopeID: scope.ID, StartTime: now.Add(-time.Minute), EndTime: now.Add(time.Minute), GroupBy: []control.SpendDimension{control.SpendByProvider, control.SpendByModel}})
 	if err != nil {
