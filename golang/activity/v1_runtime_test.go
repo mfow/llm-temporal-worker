@@ -244,5 +244,52 @@ func TestV1ActivityRedactsRuntimeError(t *testing.T) {
 	}
 }
 
+func TestV1ActivityRedactsRuntimeErrorAcrossEveryActivity(t *testing.T) {
+	secret := "provider-response-secret"
+	cases := []struct {
+		name  string
+		call  func(*Activities) error
+		calls func(*v1RuntimeStub) int
+	}{
+		{
+			name: "generate",
+			call: func(activities *Activities) error {
+				_, err := activities.GenerateV1(context.Background(), validGenerateV1Request())
+				return err
+			},
+			calls: func(runtime *v1RuntimeStub) int { return runtime.generateCalls },
+		},
+		{
+			name: "compact",
+			call: func(activities *Activities) error {
+				_, err := activities.CompactV1(context.Background(), validCompactV1Request())
+				return err
+			},
+			calls: func(runtime *v1RuntimeStub) int { return runtime.compactCalls },
+		},
+		{
+			name: "query",
+			call: func(activities *Activities) error {
+				_, err := activities.QueryV1(context.Background(), validQueryV1Request())
+				return err
+			},
+			calls: func(runtime *v1RuntimeStub) int { return runtime.queryCalls },
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &v1RuntimeStub{err: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryAfter, secret)}
+			err := test.call(&Activities{V1Runtime: runtime})
+			if err == nil || strings.Contains(err.Error(), secret) {
+				t.Fatalf("error = %v, must redact runtime error details", err)
+			}
+			if got := test.calls(runtime); got != 1 {
+				t.Fatalf("runtime calls = %d, want one dispatch", got)
+			}
+		})
+	}
+}
+
 func pointer(value llm.CheckpointHandle) *llm.CheckpointHandle { return &value }
 func stringPointer(value string) *string                       { return &value }

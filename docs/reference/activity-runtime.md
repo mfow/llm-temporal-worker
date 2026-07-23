@@ -13,6 +13,9 @@ application payload limit before calling the injected `activity.V1Runtime`.
 Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.
+The Activity boundary tests exercise that redaction contract independently for
+Generate, Compact, and Query so a new entry point cannot accidentally expose a
+provider or storage detail through its Temporal error.
 
 The v1 wire schemas are closed tagged records. Generate responses may carry
 only `generation` or `cache_replay` checkpoints; Compact policies contain only
