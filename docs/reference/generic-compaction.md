@@ -46,6 +46,13 @@ not retrigger by itself. Deadline and clock interpretation remain engine
 responsibilities, so the trigger API accepts the durable
 `ContinuationExpired` result rather than reading wall-clock time.
 
+The trigger contract is covered by property-style tests: every projected
+counter boundary is checked, zero provider limits remain disabled, and raising
+tokens, items, lineage, bytes, reserved reasoning, or continuation age cannot
+turn an already-required compaction back into a non-compaction decision. These
+tests keep the exported decision boundary deterministic while engine wiring is
+added in a later phase.
+
 The compaction request is therefore an isolated internal call, not a replacement
 for the caller's Generate settings. A subsequent Generate must materialize the
 new checkpoint and compile from the parent settings again, changing only its
