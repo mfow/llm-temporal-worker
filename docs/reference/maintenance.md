@@ -23,15 +23,20 @@ under an active fill are skipped. A batch never loads the active budget working
 set into a worker process.
 
 The policy contract includes status, inventory, operation, budget, and
-checkpoint horizons so adapters can add table-specific retention safely. The
-PostgreSQL adapter exposes bounded status-history and inventory-snapshot
-cleanup in addition to the cache tombstone path. Status cleanup preserves
-every event referenced by `provider_route_status.last_event_id`. Inventory
+checkpoint horizons so adapters can add table-specific retention safely. It
+also includes a query-execution horizon for the immutable control-query audit
+ledger. The PostgreSQL adapter exposes bounded status-history,
+inventory-snapshot, and query-execution cleanup in addition to the cache
+tombstone path. Query executions have no durable children, so their expiry
+index can be reclaimed directly without touching inference operations or
+budget history. Status cleanup preserves every event referenced by
+`provider_route_status.last_event_id`. Inventory
 cleanup deletes child model rows in the same transaction and preserves the
 latest snapshot for each configuration/provider/endpoint/account epoch, even when that
 snapshot has expired. Both passes use `FOR UPDATE SKIP LOCKED` and bounded
 expiry indexes (`provider_status_expiry_idx` and
-`provider_inventory_expiry_idx`); the inventory latest-row check uses the
+`provider_inventory_expiry_idx`); query cleanup uses
+`query_executions_retention_idx`; the inventory latest-row check uses the
 account-epoch ordering rather than an unlocked pre-scan. Operation, checkpoint,
 and budget rows remain disabled
 until their restrictive foreign keys and audit/rebuild obligations can be

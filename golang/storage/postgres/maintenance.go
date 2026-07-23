@@ -275,6 +275,61 @@ func (repository MaintenanceRepository) PruneExpiredInventory(ctx context.Contex
 	return result, nil
 }
 
+// PruneExpiredQueryExecutions removes a bounded batch of completed control
+// query audit rows. Query executions are immutable and have no foreign-key
+// dependants, so the maintenance role can delete them in place after locking
+// the indexed expiry candidates. The short transaction keeps the SKIP LOCKED
+// claim and delete atomic while allowing other maintenance workers to make
+// progress on the remainder of the ledger.
+func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
+	var result maintenance.RetentionResult
+	if err := repository.validate(); err != nil {
+		return result, err
+	}
+	if err := validateBatch(now, limit); err != nil {
+		return result, err
+	}
+	if expiresBefore.IsZero() || expiresBefore.After(now) {
+		return result, errors.New("query execution expiry cutoff must not be after maintenance time")
+	}
+	executionsTable, err := repository.Namespace.Render("query_executions")
+	if err != nil {
+		return result, err
+	}
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "SELECT query_execution_id FROM "+executionsTable+" WHERE retention_expires_at < $1 ORDER BY retention_expires_at, query_execution_id LIMIT $2 FOR UPDATE SKIP LOCKED", expiresBefore, limit)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("claim expired query executions: %w", err))
+		}
+		defer rows.Close()
+		var ids []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan expired query execution: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			return redactPostgresError(fmt.Errorf("iterate expired query executions: %w", err))
+		}
+		rows.Close()
+		result.Examined = len(ids)
+		if len(ids) == 0 {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+executionsTable+" WHERE query_execution_id = ANY($1::uuid[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired query executions: %w", err))
+		}
+		result.Deleted = len(ids)
+		return nil
+	})
+	if err != nil {
+		return maintenance.RetentionResult{}, err
+	}
+	return result, nil
+}
+
 // PublishOutbox inserts idempotent safe intent. Duplicate event_kind/dedupe
 // pairs are successful no-ops, so a retry cannot enqueue duplicate deletion.
 func (repository MaintenanceRepository) PublishOutbox(ctx context.Context, event maintenance.Event) error {
