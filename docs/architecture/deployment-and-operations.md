@@ -105,8 +105,10 @@ only verifies and calls it.
 The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. PostgreSQL must complete a
 bounded read-only transaction, match the configured database/schema/prefix and
-schema-contract marker, expose all required indexes, use UTC, and grant exactly
-the runtime capabilities. S3 readiness uses `HeadBucket`
+schema-contract marker, expose all required relations plus explicit and
+constraint-backed indexes, and use UTC.
+Runtime role grants remain deployment-owned and are exercised by normal
+least-privilege operations. S3 readiness uses `HeadBucket`
 against the configured bucket only, never a tenant key. A failed state check
 keeps liveness `200`, sets readiness `503`, and pauses Temporal polling;
 periodic checks resume polling only after every dependency has recovered. The

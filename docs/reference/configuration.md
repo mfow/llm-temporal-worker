@@ -585,9 +585,12 @@ Readiness checks Redis with `PING`, `TIME`, the configured persistence and
 inspect the worker keyspace or verify the active-generation manifest,
 coverage, or enabled Stream's structural health; the storage validator and
 recovery runbook cover those records until an authoritative read-only readiness
-contract is added. It also checks a bounded PostgreSQL transaction, physical
-namespace/schema contract/index identities,
-UTC, and runtime grants. It checks
+contract is added. It also checks a bounded PostgreSQL read-only transaction,
+the configured physical namespace/schema contract, every relation and both
+explicit and constraint-backed indexes declared by that contract, and UTC
+session state. Runtime role grants remain
+deployment-owned and are exercised by the worker's normal least-privilege
+operations. It checks
 the configured S3 bucket with bucket metadata only; it never reads or writes a
 tenant object. Provider endpoints are intentionally excluded because one route
 can be unavailable while another eligible route remains.
