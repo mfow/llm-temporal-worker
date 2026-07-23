@@ -37,7 +37,7 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 					mapped.Cause = recoveryErr
 					return provider.Result{}, mapped, false
 				}
-				if validationErr := recovered.Validate(); validationErr != nil {
+				if validationErr := recovered.ValidateForCall(call); validationErr != nil {
 					invalid := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider idempotency recovery response is invalid")
 					invalid.Cause = validationErr
 					return provider.Result{}, invalid, false
@@ -47,7 +47,7 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 		}
 		return provider.Result{}, err, false
 	}
-	if err := outcome.Validate(); err != nil {
+	if err := outcome.ValidateForCall(call); err != nil {
 		mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "resumable provider response is invalid")
 		mapped.Cause = err
 		return provider.Result{}, mapped, false

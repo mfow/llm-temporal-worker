@@ -88,3 +88,15 @@ func TestResumableStateIsClosed(t *testing.T) {
 		t.Fatal("unknown provider state was accepted")
 	}
 }
+
+func TestResumableResultValidationBindsCompletedResponseToCall(t *testing.T) {
+	result := provider.ResumableResult{
+		State:    provider.ResumableCompleted,
+		Dispatch: provider.DispatchAccepted,
+		Result:   provider.Result{Response: llm.Response{OperationKey: "other-operation", Status: llm.ResponseStatusCompleted}},
+	}
+	err := result.ValidateForCall(provider.Call{OperationKey: "requested-operation"})
+	if err == nil || !strings.Contains(err.Error(), "does not match call") {
+		t.Fatalf("ValidateForCall() = %v, want operation-key mismatch", err)
+	}
+}

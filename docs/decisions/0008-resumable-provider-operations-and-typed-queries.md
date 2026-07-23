@@ -98,6 +98,11 @@ ledger finalization path. A not-found, invalid, failed lookup, or adapter
 without this extension remains ambiguous; automatic resubmission is never
 inferred.
 
+Every completed resumable result is also bound to the compiled call's semantic
+operation key before polling or finalization. A provider response for a
+different operation is rejected as an invalid provider response; the engine
+never relies on finalization to overwrite that identity after the fact.
+
 ## Rejected alternatives
 
 - Storing a poll ID only in a Temporal heartbeat is insufficient because

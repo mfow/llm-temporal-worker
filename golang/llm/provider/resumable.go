@@ -40,6 +40,22 @@ type ResumableResult struct {
 	Dispatch            DispatchCertainty
 }
 
+// ValidateForCall applies the closed resumable-result checks and binds a
+// terminal response to the compiled operation that requested it. Providers
+// must not be able to complete one operation with a response lifted for a
+// different operation key. A blank call key is accepted for low-level polling
+// helpers that do not carry the semantic request; production engine calls
+// always include the normalized operation key.
+func (result ResumableResult) ValidateForCall(call Call) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	if result.State == ResumableCompleted && call.OperationKey != "" && result.Result.Response.OperationKey != call.OperationKey {
+		return errors.New("completed result operation key does not match call")
+	}
+	return nil
+}
+
 // Validate enforces the state-specific fields before an engine can persist or
 // act on a provider result. A malformed provider response is treated as a
 // protocol failure, never as a safe rejection that permits resubmission.
