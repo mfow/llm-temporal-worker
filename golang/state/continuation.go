@@ -59,13 +59,17 @@ type Continuation struct {
 	TranscriptDigest   [32]byte
 	TranscriptComplete bool
 	ProviderState      []OpaqueStateRef
-	Pinning            Pinning
-	LastOperationID    string
-	CapabilityVersion  string
-	PriceVersion       string
-	CreatedAt          time.Time
-	ExpiresAt          time.Time
-	Depth              int
+	// Affinities carries immutable provider prompt-cache observations from the
+	// parent checkpoint. They are routing preferences only; route eligibility
+	// is still evaluated against the current catalog and request.
+	Affinities        ProviderCacheAffinitySet
+	Pinning           Pinning
+	LastOperationID   string
+	CapabilityVersion string
+	PriceVersion      string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	Depth             int
 }
 
 func (continuation Continuation) Clone() Continuation {
@@ -75,6 +79,7 @@ func (continuation Continuation) Clone() Continuation {
 	for index, state := range providerState {
 		continuation.ProviderState[index] = state.clone()
 	}
+	continuation.Affinities = continuation.Affinities.Clone()
 	return continuation
 }
 
@@ -151,6 +156,9 @@ func (continuation Continuation) Validate(now time.Time) error {
 			}
 		}
 	}
+	if err := continuation.Affinities.Validate(now); err != nil {
+		return fmt.Errorf("provider cache affinities: %w", err)
+	}
 	return nil
 }
 
@@ -173,6 +181,10 @@ type Constraints struct {
 	RequiresOpaqueState bool
 	TranscriptComplete  bool
 	Portability         llm.PortabilityMode
+	// Affinities are copied from immutable continuation state and converted to
+	// planner preferences by the engine. Keeping this state-level type avoids
+	// making persistence depend on the routing package.
+	Affinities ProviderCacheAffinitySet
 }
 
 func (continuation Continuation) Constraints(mode llm.PortabilityMode) Constraints {
@@ -197,6 +209,7 @@ func (continuation Continuation) Constraints(mode llm.PortabilityMode) Constrain
 		RequiresOpaqueState: requires,
 		TranscriptComplete:  continuation.TranscriptComplete,
 		Portability:         mode,
+		Affinities:          continuation.Affinities.Clone(),
 	}
 }
 

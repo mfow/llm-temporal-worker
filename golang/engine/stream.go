@@ -236,7 +236,27 @@ func (engine *Engine) cancelPreparedStream(ctx context.Context, setup streamSetu
 
 // routingInput keeps Stream and Generate on the exact same planning input.
 func routingInput(request llm.Request, snapshot Snapshot, constraints state.Constraints, now time.Time) routing.Input {
-	return routing.Input{Request: request, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health, Now: now}
+	input := routing.Input{Request: request, Catalog: snapshot.Routes, Continuation: constraints, Health: snapshot.Health, Now: now}
+	if len(constraints.Affinities) == 0 {
+		return input
+	}
+	preferences := routing.AffinityPreferences{}
+	for _, affinity := range constraints.Affinities {
+		if affinity.HardPinned {
+			// A checkpoint can carry at most one hard pin. Affinity validation
+			// rejects duplicate/ambiguous records before this conversion.
+			value := affinity
+			if preferences.HardPin == nil {
+				preferences.HardPin = &value
+				continue
+			}
+			// Keep the duplicate in the soft set so routing validation fails
+			// closed rather than silently selecting one hard pin.
+		}
+		preferences.Soft = append(preferences.Soft, affinity)
+	}
+	input.Affinity = &preferences
+	return input
 }
 
 func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation, emitter *streamEmitter) error {

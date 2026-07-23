@@ -42,7 +42,18 @@ type ProviderCacheAffinitySet []ProviderCacheAffinity
 // Clone returns a defensive copy suitable for passing across a persistence
 // boundary.
 func (set ProviderCacheAffinitySet) Clone() ProviderCacheAffinitySet {
-	return append(ProviderCacheAffinitySet(nil), set...)
+	if set == nil {
+		return nil
+	}
+	result := make(ProviderCacheAffinitySet, len(set))
+	copy(result, set)
+	for index := range result {
+		if set[index].ExpiresAt != nil {
+			expires := *set[index].ExpiresAt
+			result[index].ExpiresAt = &expires
+		}
+	}
+	return result
 }
 
 // Validate checks the persistence invariants shared by PostgreSQL and the

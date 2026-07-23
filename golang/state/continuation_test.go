@@ -125,7 +125,8 @@ func TestCanonicalTranscriptIsStableAndRejectsInvalidItems(t *testing.T) {
 }
 
 func TestContinuationCloneCopiesMutableFields(t *testing.T) {
-	original := Continuation{Transcript: testTranscript(), ProviderState: []OpaqueStateRef{{Data: []byte{1, 2, 3}}}}
+	expires := time.Unix(300, 0)
+	original := Continuation{Transcript: testTranscript(), ProviderState: []OpaqueStateRef{{Data: []byte{1, 2, 3}}}, Affinities: ProviderCacheAffinitySet{{Rank: 0, Provider: "openai", RouteID: "route", EndpointID: "endpoint", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", EndpointFamily: "responses", ModelLineage: "lineage", RouteModelRevision: "revision", CacheEpoch: "epoch", LastSuccessAt: time.Unix(100, 0), ExpiresAt: &expires}}}
 	clone := original.Clone()
 
 	original.Transcript[0] = llm.Message{Actor: llm.ActorModel}
@@ -138,6 +139,11 @@ func TestContinuationCloneCopiesMutableFields(t *testing.T) {
 	}
 	if clone.ProviderState == nil || len(clone.ProviderState) != 1 {
 		t.Fatalf("clone provider state = %#v", clone.ProviderState)
+	}
+	original.Affinities[0].ExpiresAt = &expires
+	*original.Affinities[0].ExpiresAt = time.Unix(400, 0)
+	if clone.Affinities[0].ExpiresAt == nil || !clone.Affinities[0].ExpiresAt.Equal(time.Unix(300, 0)) {
+		t.Fatalf("clone affinity expiry was aliased: %#v", clone.Affinities[0].ExpiresAt)
 	}
 }
 
@@ -177,10 +183,12 @@ func TestContinuationValidateEnforcesIntegrityAndLifetime(t *testing.T) {
 }
 
 func TestContinuationConstraintsExposeRoutingFacts(t *testing.T) {
+	affinity := ProviderCacheAffinity{Rank: 0, Provider: "openai", RouteID: "route", EndpointID: "prod", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", EndpointFamily: "responses", ModelLineage: "claude", RouteModelRevision: "revision", CacheEpoch: "epoch", LastSuccessAt: time.Unix(100, 0)}
 	continuation := Continuation{
 		ID: "continuation-1", Tenant: "tenant-a", Pinning: Pinning{Provider: "anthropic", EndpointID: "prod", AccountRegion: "us-east-1", Family: "messages", ModelLineage: "claude"},
 		TranscriptComplete: true,
 		ProviderState:      []OpaqueStateRef{{Required: false}},
+		Affinities:         ProviderCacheAffinitySet{affinity},
 	}
 	constraints := continuation.Constraints(llm.PortabilityBestEffort)
 	if !constraints.Present || constraints.Tenant != continuation.Tenant || constraints.RequiresOpaqueState || !constraints.TranscriptComplete || constraints.Portability != llm.PortabilityBestEffort {
@@ -188,6 +196,13 @@ func TestContinuationConstraintsExposeRoutingFacts(t *testing.T) {
 	}
 	if constraints.Provider != continuation.Pinning.Provider || constraints.EndpointID != continuation.Pinning.EndpointID || constraints.AccountRegion != continuation.Pinning.AccountRegion || constraints.Family != continuation.Pinning.Family || constraints.ModelLineage != continuation.Pinning.ModelLineage {
 		t.Fatalf("Constraints() lost pinning: %#v", constraints)
+	}
+	if len(constraints.Affinities) != 1 || constraints.Affinities[0].RouteID != "route" {
+		t.Fatalf("Constraints() lost provider cache affinity: %#v", constraints.Affinities)
+	}
+	constraints.Affinities[0].RouteID = "mutated"
+	if continuation.Affinities[0].RouteID != "route" {
+		t.Fatal("Constraints() returned aliased provider cache affinity")
 	}
 
 	if got := (Continuation{Tenant: "tenant-a"}).Constraints(llm.PortabilityStrict); got.Present || got.RequiresOpaqueState || got.TranscriptComplete || got.Portability != llm.PortabilityStrict {
