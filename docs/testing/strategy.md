@@ -118,6 +118,17 @@ which proves fill de-duplication and per-operation use accounting under a
 real database race. This is a bounded cache proof; it does not claim the
 separate three-way checkpoint-fork or backup/restore gates in Task 21.
 
+`TestCheckpointRepositoryRestoresForksThroughPostgresAndBlobs` closes the
+corresponding bounded checkpoint read-side gap. It publishes one root and
+three immutable child branches through the real PostgreSQL repository, writes
+the versioned payloads to an immutable file-backed blob store, then constructs
+fresh PostgreSQL and blob-store clients before materializing every branch. It
+uses the scope-bound encrypted-locator and verified-byte read path, and checks
+that every restored branch retains its own prompt/response while sharing the
+immutable parent. It proves persistent repository/blob restart recovery; it
+does not claim a PostgreSQL backup procedure, a Temporal crash boundary, or
+end-to-end Generate/Compact runtime composition.
+
 The staged Redis/PostgreSQL/conversation work has an unimplemented
 [production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
 whose phase/status authority is centralized in
@@ -213,7 +224,7 @@ production recovery gates are complete.
 
 The same seam has a bounded scale regression in
 `state.TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks`. It publishes
-10,000 bounded turns, takes a materialized snapshot every 50 turns, forks one
+10,000 bounded turns, takes a materialized snapshot every 500 turns, forks one
 immutable parent into three concurrent children, and rebuilds a replacement
 graph from the published rows before replaying every branch. The snapshots are
 the storage-neutral artifact used by the compaction path; the test deliberately
