@@ -444,15 +444,40 @@ func cloneItems(values []llm.Item) []llm.Item {
 	if values == nil {
 		return nil
 	}
-	data, err := json.Marshal(values)
-	if err != nil {
-		return append([]llm.Item(nil), values...)
-	}
-	result, err := llm.DecodeItems(data)
-	if err != nil {
-		return append([]llm.Item(nil), values...)
+	result := make([]llm.Item, len(values))
+	for index, item := range values {
+		result[index] = cloneItem(item)
 	}
 	return result
+}
+
+// cloneItem performs a structural copy of the closed llm.Item union. The
+// previous JSON round trip was needlessly expensive for large immutable
+// snapshots (and made the race-detector lineage proof exceed its CI budget).
+// Keep this copy local to the state package so callers still receive fully
+// detached slices and maps without paying serialization and decoding costs.
+func cloneItem(item llm.Item) llm.Item {
+	switch value := item.(type) {
+	case llm.Message:
+		value.Content = cloneParts(value.Content)
+		return value
+	case llm.ToolCall:
+		value.Arguments = append(json.RawMessage(nil), value.Arguments...)
+		return value
+	case llm.ToolResult:
+		value.Content = cloneParts(value.Content)
+		return value
+	case llm.ProviderState:
+		value.Opaque = append([]byte(nil), value.Opaque...)
+		return value
+	case llm.Reference:
+		value.Metadata = cloneRawMap(value.Metadata)
+		return value
+	default:
+		// Item is a sealed interface in llm. Keep a defensive shallow copy for
+		// any future implementation until its mutable fields are added here.
+		return item
+	}
 }
 
 func canonicalItems(values []llm.Item) ([]byte, error) {
