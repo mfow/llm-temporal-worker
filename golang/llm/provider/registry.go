@@ -117,6 +117,21 @@ func (registry *Registry) Adapter(family Family, profileID string) (Adapter, err
 	return registration.Adapter, nil
 }
 
+// ModelLister resolves the optional provider management capability for an
+// explicit adapter profile. A missing capability is reported as unsupported;
+// the registry never probes a provider or synthesizes an inventory page.
+func (registry *Registry) ModelLister(family Family, profileID string) (ModelLister, error) {
+	adapter, err := registry.Adapter(family, profileID)
+	if err != nil {
+		return nil, err
+	}
+	lister, ok := adapter.(ModelLister)
+	if !ok {
+		return nil, fmt.Errorf("provider adapter profile %q for family %q does not support model inventory", profileID, family)
+	}
+	return lister, nil
+}
+
 // Registrations returns a stable family/profile-sorted snapshot for inventory
 // and startup diagnostics. It never includes a constructed SDK client.
 func (registry *Registry) Registrations() []Registration {

@@ -18,6 +18,15 @@ type registryFixtureAdapter struct {
 	capabilityCalls *int
 }
 
+type registryFixtureModelLister struct{ registryFixtureAdapter }
+
+func (*registryFixtureModelLister) ListModels(_ context.Context, query provider.ModelListQuery) (provider.ModelListPage, error) {
+	if err := query.Validate(); err != nil {
+		return provider.ModelListPage{}, err
+	}
+	return provider.ModelListPage{Complete: true, Models: []provider.Model{{ProviderModelID: "fixture-model", Lifecycle: provider.ModelAvailable}}}, nil
+}
+
 func (adapter *registryFixtureAdapter) Name() string { return "fixture/adapter" }
 
 func (adapter *registryFixtureAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
@@ -111,6 +120,34 @@ func TestRegistryValidatesAndResolvesExplicitProfile(t *testing.T) {
 	again, ok := registry.Lookup(provider.FamilyOpenAIChat, "fixture-chat")
 	if !ok || again.ServiceTiers[llm.ServiceClassStandard] != "default" || again.Capabilities.Features[provider.FeatureText].State != provider.CapabilityNative {
 		t.Fatal("registry lookup exposed mutable contract maps")
+	}
+}
+
+func TestRegistryResolvesOptionalModelListerWithoutMakingItMandatory(t *testing.T) {
+	registration := registryFixtureRegistration()
+	registration.Adapter = &registryFixtureModelLister{registryFixtureAdapter{family: provider.FamilyOpenAIChat}}
+	registry, err := provider.NewRegistry(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lister, err := registry.ModelLister(provider.FamilyOpenAIChat, "fixture-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := lister.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "fixture-endpoint", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := page.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.NewRegistry(registryFixtureRegistration()); err != nil {
+		// A one-shot adapter remains a valid registration even without the
+		// optional model-management capability.
+		t.Fatal(err)
+	}
+	if _, err := registry.ModelLister(provider.FamilyOpenAIChat, "missing"); err == nil {
+		t.Fatal("missing model-lister profile resolved successfully")
 	}
 }
 
