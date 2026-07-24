@@ -170,6 +170,19 @@ func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *test
 	}
 }
 
+func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
+	root := repositoryRoot(t)
+	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-candidate.schema.json", "urn:llmtw:slo-evidence-candidate:v1")
+	candidate := validSLOEvidenceCandidate()
+	if err := validateSLOEvidenceJSONSchema(schema, candidate); err != nil {
+		t.Fatalf("candidate schema rejects recorder input: %v", err)
+	}
+	candidate["content_sha256"] = strings.Repeat("c", 64)
+	if err := validateSLOEvidenceJSONSchema(schema, candidate); err == nil {
+		t.Fatal("candidate schema accepts recorder-owned persisted fields")
+	}
+}
+
 func validSLOEvidenceCandidate() map[string]any {
 	return map[string]any{
 		"measured_at":          "2026-07-24T00:00:00Z",
@@ -208,8 +221,12 @@ func runSLOEvidence(root string, arguments ...string) ([]byte, error) {
 }
 
 func compileSLOEvidenceJSONSchema(t *testing.T, root string) *jsonschema.Schema {
+	return compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence.schema.json", "urn:llmtw:slo-evidence:v1")
+}
+
+func compileSLOEvidenceJSONSchemaFile(t *testing.T, root, filename, resourceURL string) *jsonschema.Schema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "docs", "release", "slo-evidence.schema.json"))
+	data, err := os.ReadFile(filepath.Join(root, "docs", "release", filename))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +235,6 @@ func compileSLOEvidenceJSONSchema(t *testing.T, root string) *jsonschema.Schema 
 		t.Fatalf("decode SLO evidence schema: %v", err)
 	}
 	compiler := jsonschema.NewCompiler()
-	const resourceURL = "urn:llmtw:slo-evidence:v1"
 	if err := compiler.AddResource(resourceURL, document); err != nil {
 		t.Fatalf("add SLO evidence schema: %v", err)
 	}

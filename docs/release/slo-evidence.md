@@ -2,7 +2,7 @@
 
 This contract records an operator-collected pass measurement for the two v1 objectives: admission-and-compilation p99 and the worker-caused error rate. It is deliberately separate from the release catalog: recording a measurement does not bind it to a release, authorize publication, or stand in for protected live-provider evidence.
 
-The candidate input accepts only the typed measurement fields defined by [`slo-evidence.schema.json`](slo-evidence.schema.json). It never accepts provider credentials, prompts, model responses, endpoint addresses, IP addresses, or raw metric/benchmark output. The operator must collect and redact those sources before creating the candidate input.
+The candidate input accepts only the typed measurement fields defined by [`slo-evidence-candidate.schema.json`](slo-evidence-candidate.schema.json). That candidate schema is deliberately distinct from the persisted [`slo-evidence.schema.json`](slo-evidence.schema.json), which adds the recorder-owned `schema_version`, `kind`, `status`, `redacted`, and `content_sha256` fields. The candidate never accepts provider credentials, prompts, model responses, endpoint addresses, IP addresses, or raw metric/benchmark output. The operator must collect and redact those sources before creating the candidate input.
 
 Record a new, redacted pass measurement in a previously unused path:
 
