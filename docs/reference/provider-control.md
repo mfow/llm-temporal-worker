@@ -73,6 +73,23 @@ refresh preserves the last valid snapshot for stale reads while returning the
 refresh error, allowing query callers to report stale provenance instead of
 silently presenting a fabricated current result.
 
+### Provider model-list capability
+
+Provider adapters may opt into the neutral `provider.ModelLister` extension.
+`ListModels` accepts a bounded `ModelListQuery` and returns a validated,
+sorted `ModelListPage` with explicit completion and an opaque continuation
+cursor. The page model contains only bounded IDs, lifecycle values, capability
+digests, and safe string metadata; raw provider bodies and credentials never
+cross the adapter boundary. An adapter that does not implement `ModelLister`
+is explicitly unsupported for management refresh. The registry does not probe
+providers or infer an inventory from inference calls, and discovered models
+never become configured routes automatically.
+
+This is an integration seam, not a claim that every provider supports model
+listing. A deployment must supply a provider-specific management implementation
+and persist its page through `InventoryRepository`; until then the existing
+`configured_only` or `unsupported` inventory sources remain the honest result.
+
 ## Persistence hand-off
 
 `ProviderStatusRepository.PersistStatusEvent` consumes a validated
