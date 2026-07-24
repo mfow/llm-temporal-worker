@@ -80,6 +80,11 @@ Both CI workflows run `make redis-benchmark-compile`, which compiles the
 build-tagged code with tests and benchmarks disabled; it has no Redis address,
 operator gate, provider call, or Docker dependency.
 
+Use the [redacted SLO evidence contract](../release/slo-evidence.md) to retain a
+passing admission-and-compilation measurement. It accepts only the typed,
+redacted measurement summary and verifies the memory and same-region Redis
+thresholds; it does not execute a benchmark or make a release claim.
+
 ## PostgreSQL query-plan checks
 
 The PostgreSQL integration suite includes

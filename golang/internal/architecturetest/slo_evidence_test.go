@@ -1,0 +1,258 @@
+package architecturetest
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+)
+
+const sloEvidenceSourceRevision = "0123456789abcdef0123456789abcdef01234567"
+
+func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testing.T) {
+	root := repositoryRoot(t)
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "candidate.json")
+	evidencePath := filepath.Join(directory, "slo-measurement.json")
+	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
+
+	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
+	if err != nil {
+		t.Fatalf("record SLO evidence: %v\n%s", err, output)
+	}
+	const prefix = "slo evidence recorded sha256="
+	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), prefix)
+	if digest == strings.TrimSpace(string(output)) || len(digest) != 64 {
+		t.Fatalf("record output = %q, want digest", output)
+	}
+
+	raw, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode SLO evidence: %v", err)
+	}
+	wantKeys := map[string]bool{
+		"schema_version": true, "kind": true, "status": true, "measured_at": true,
+		"source_revision": true, "deployment_id_sha256": true, "region": true,
+		"admission_compilation": true, "worker_error_rate": true, "redacted": true, "content_sha256": true,
+	}
+	if len(record) != len(wantKeys) {
+		t.Fatalf("record keys = %#v, want only %#v", record, wantKeys)
+	}
+	for key := range wantKeys {
+		if _, ok := record[key]; !ok {
+			t.Fatalf("record does not contain %q: %#v", key, record)
+		}
+	}
+	for _, forbidden := range []string{"prompt", "output", "endpoint", "credential", "api_key", "raw"} {
+		if _, found := record[forbidden]; found {
+			t.Fatalf("record retains forbidden %q field: %#v", forbidden, record)
+		}
+	}
+	if got := record["content_sha256"]; got != digest {
+		t.Fatalf("record content_sha256 = %#v, want %q", got, digest)
+	}
+	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
+		t.Fatalf("record is not canonical JSON: %q", raw)
+	}
+
+	if _, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest); err != nil {
+		t.Fatalf("verify recorded SLO evidence: %v", err)
+	}
+	if _, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath); err == nil {
+		t.Fatal("record unexpectedly overwrote immutable evidence path")
+	}
+	metadata, err := os.Stat(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metadata.Mode().Perm(); got != 0o600 {
+		t.Fatalf("evidence mode = %o, want 600", got)
+	}
+}
+
+func TestSLOEvidenceRejectsUnsafeOrFailingCandidates(t *testing.T) {
+	root := repositoryRoot(t)
+	testCases := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "unknown top level field",
+			mutate: func(candidate map[string]any) {
+				candidate["endpoint"] = "https://redis.internal.example"
+			},
+		},
+		{
+			name: "memory threshold equality fails",
+			mutate: func(candidate map[string]any) {
+				candidate["admission_compilation"].(map[string]any)["memory"].(map[string]any)["p99_microseconds"] = 25_000
+			},
+		},
+		{
+			name: "redis threshold equality fails",
+			mutate: func(candidate map[string]any) {
+				candidate["admission_compilation"].(map[string]any)["same_region_redis"].(map[string]any)["p99_microseconds"] = 75_000
+			},
+		},
+		{
+			name: "one in one thousand worker errors fails",
+			mutate: func(candidate map[string]any) {
+				errorRate := candidate["worker_error_rate"].(map[string]any)
+				errorRate["completed_attempts"] = 999
+				errorRate["worker_failed_attempts"] = 1
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			candidate := validSLOEvidenceCandidate()
+			testCase.mutate(candidate)
+			inputPath := filepath.Join(directory, "candidate.json")
+			writeSLOEvidenceCandidate(t, inputPath, candidate)
+			output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
+			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+				t.Fatalf("record result = %v, %q; want safe rejection", err, output)
+			}
+		})
+	}
+}
+
+func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *testing.T) {
+	root := repositoryRoot(t)
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "candidate.json")
+	evidencePath := filepath.Join(directory, "evidence.json")
+	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
+	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
+	if err != nil {
+		t.Fatalf("record SLO evidence: %v\n%s", err, output)
+	}
+	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), "slo evidence recorded sha256=")
+
+	raw, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatal(err)
+	}
+	record["endpoint"] = "https://redis.internal.example"
+	tampered, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidencePath, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest); err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+		t.Fatalf("verify tampered evidence = %v, %q; want safe rejection", err, output)
+	}
+
+	schema := compileSLOEvidenceJSONSchema(t, root)
+	delete(record, "endpoint")
+	if err := validateSLOEvidenceJSONSchema(schema, record); err != nil {
+		t.Fatalf("schema rejects recorded evidence: %v", err)
+	}
+	record["api_key"] = "must-not-be-accepted"
+	if err := validateSLOEvidenceJSONSchema(schema, record); err == nil {
+		t.Fatal("schema accepts unsafe unknown field")
+	}
+}
+
+func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
+	root := repositoryRoot(t)
+	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-candidate.schema.json", "urn:llmtw:slo-evidence-candidate:v1")
+	candidate := validSLOEvidenceCandidate()
+	if err := validateSLOEvidenceJSONSchema(schema, candidate); err != nil {
+		t.Fatalf("candidate schema rejects recorder input: %v", err)
+	}
+	candidate["content_sha256"] = strings.Repeat("c", 64)
+	if err := validateSLOEvidenceJSONSchema(schema, candidate); err == nil {
+		t.Fatal("candidate schema accepts recorder-owned persisted fields")
+	}
+}
+
+func validSLOEvidenceCandidate() map[string]any {
+	return map[string]any{
+		"measured_at":          "2026-07-24T00:00:00Z",
+		"source_revision":      sloEvidenceSourceRevision,
+		"deployment_id_sha256": strings.Repeat("a", 64),
+		"region":               "ap-southeast-2",
+		"admission_compilation": map[string]any{
+			"memory": map[string]any{"sample_count": 10_000, "p99_microseconds": 24_999},
+			"same_region_redis": map[string]any{
+				"sample_count": 10_000, "p99_microseconds": 74_999,
+				"redis": map[string]any{"major_version": 7, "persistence": "aof+rdb", "function_digest": strings.Repeat("b", 64)},
+			},
+		},
+		"worker_error_rate": map[string]any{
+			"window_started_at": "2026-07-24T00:00:00Z", "window_ended_at": "2026-07-24T00:05:00Z",
+			"completed_attempts": 9_999, "worker_failed_attempts": 0,
+		},
+	}
+}
+
+func writeSLOEvidenceCandidate(t *testing.T, path string, candidate map[string]any) {
+	t.Helper()
+	data, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runSLOEvidence(root string, arguments ...string) ([]byte, error) {
+	command := exec.Command("python3", append([]string{filepath.Join(root, "scripts", "release", "slo-evidence.py")}, arguments...)...)
+	command.Dir = root
+	return command.CombinedOutput()
+}
+
+func compileSLOEvidenceJSONSchema(t *testing.T, root string) *jsonschema.Schema {
+	return compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence.schema.json", "urn:llmtw:slo-evidence:v1")
+}
+
+func compileSLOEvidenceJSONSchemaFile(t *testing.T, root, filename, resourceURL string) *jsonschema.Schema {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "docs", "release", filename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode SLO evidence schema: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(resourceURL, document); err != nil {
+		t.Fatalf("add SLO evidence schema: %v", err)
+	}
+	schema, err := compiler.Compile(resourceURL)
+	if err != nil {
+		t.Fatalf("compile SLO evidence schema: %v", err)
+	}
+	return schema
+}
+
+func validateSLOEvidenceJSONSchema(schema *jsonschema.Schema, record map[string]any) error {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	return schema.Validate(instance)
+}
