@@ -366,3 +366,76 @@ func TestMaintenanceRetentionPreservesCacheUsedByActiveOperation(t *testing.T) {
 		t.Fatalf("terminal cache use did not become eligible: result=%+v", result)
 	}
 }
+
+func TestMaintenanceRetentionPrunesExpiredCheckpointAfterOriginTerminal(t *testing.T) {
+	fixture := newResponseCacheFixture(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	checkpoints, err := fixture.operations.Namespace.Render("conversation_checkpoints")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations, err := fixture.operations.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-time.Hour)
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+checkpoints+" SET expires_at=$2 WHERE checkpoint_id=$1", fixture.checkpointID, old); err != nil {
+		t.Fatal(err)
+	}
+	var checkpointBlob uuid.UUID
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT delta_blob_id FROM "+checkpoints+" WHERE checkpoint_id=$1", fixture.checkpointID).Scan(&checkpointBlob); err != nil {
+		t.Fatal(err)
+	}
+	providerState, err := fixture.operations.Namespace.Render("checkpoint_provider_state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerAffinities, err := fixture.operations.Namespace.Render("checkpoint_provider_affinities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountDigest := sha256.Sum256([]byte("maintenance-checkpoint-account"))
+	stateDigest := sha256.Sum256([]byte("maintenance-checkpoint-state"))
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "INSERT INTO "+providerState+" (checkpoint_id, ordinal, provider, endpoint_id, endpoint_account_hmac, region, endpoint_family, model_lineage, state_kind, state_blob_id, state_digest, required, immutable_fork_safe, expires_at) VALUES ($1,0,'fixture','endpoint',$2,'region','family','lineage','opaque',$3,$4,true,true,$5)", fixture.checkpointID, accountDigest[:], checkpointBlob, stateDigest[:], old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "INSERT INTO "+providerAffinities+" (checkpoint_id, affinity_rank, provider, route_id, endpoint_id, endpoint_account_hmac, region, endpoint_family, model_lineage, route_model_revision, cache_epoch, hard_pinned, last_success_at, expires_at) VALUES ($1,0,'fixture','route','endpoint',$2,'region','family','lineage','revision','epoch',true,$3,$4)", fixture.checkpointID, accountDigest[:], old, old); err != nil {
+		t.Fatal(err)
+	}
+	// An expired checkpoint whose origin operation is still active remains
+	// protected from maintenance.
+	result, err := (MaintenanceRepository{Pool: fixture.operations.Pool, Namespace: fixture.operations.Namespace}).PruneExpiredCheckpoints(fixture.ctx, now, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Examined != 0 || result.Deleted != 0 {
+		t.Fatalf("active origin checkpoint was pruned: result=%+v", result)
+	}
+	if _, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET state='canceled', retention_expires_at=$2, updated_at=$2 WHERE operation_id=$1", operationUUID(fixture.originID), old); err != nil {
+		t.Fatal(err)
+	}
+	result, err = (MaintenanceRepository{Pool: fixture.operations.Pool, Namespace: fixture.operations.Namespace}).PruneExpiredCheckpoints(fixture.ctx, now, now.Add(-time.Minute), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Examined != 1 || result.Deleted != 1 {
+		t.Fatalf("expired checkpoint retention result=%+v", result)
+	}
+	var remaining int
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT count(*) FROM "+checkpoints+" WHERE checkpoint_id=$1", fixture.checkpointID).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("expired checkpoint remains after retention: %d", remaining)
+	}
+	var providerStateCount, providerAffinityCount int
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT count(*) FROM "+providerState+" WHERE checkpoint_id=$1", fixture.checkpointID).Scan(&providerStateCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.operations.Pool.QueryRow(fixture.ctx, "SELECT count(*) FROM "+providerAffinities+" WHERE checkpoint_id=$1", fixture.checkpointID).Scan(&providerAffinityCount); err != nil {
+		t.Fatal(err)
+	}
+	if providerStateCount != 0 || providerAffinityCount != 0 {
+		t.Fatalf("checkpoint provider children remain after retention: state=%d affinity=%d", providerStateCount, providerAffinityCount)
+	}
+}

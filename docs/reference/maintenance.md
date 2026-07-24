@@ -38,10 +38,14 @@ snapshot has expired. Both passes use `FOR UPDATE SKIP LOCKED` and bounded
 expiry indexes (`provider_status_expiry_idx` and
 `provider_inventory_expiry_idx`); query cleanup uses
 `query_executions_retention_idx`; the inventory latest-row check uses the
-account-epoch ordering rather than an unlocked pre-scan. Operation, checkpoint,
-and budget rows remain disabled
-until their restrictive foreign keys and audit/rebuild obligations can be
-handled in their own transaction.
+account-epoch ordering rather than an unlocked pre-scan. Operation and budget
+rows remain disabled until their restrictive foreign keys and audit/rebuild
+obligations can be handled in their own transaction. Checkpoint retention is
+available through `PruneExpiredCheckpoints`: it locks an
+expired candidate batch, protects active origin operations, graph descendants,
+compaction references, parent-operation references, and cache origins, then
+deletes provider-state children and checkpoints in one transaction. Referenced
+blobs are deliberately left for the independent blob-retention fence.
 
 ## Outbox lifecycle
 

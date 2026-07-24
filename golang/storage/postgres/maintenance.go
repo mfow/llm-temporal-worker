@@ -337,6 +337,100 @@ func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.
 	return result, nil
 }
 
+// PruneExpiredCheckpoints removes a bounded set of expired checkpoints after
+// proving that no retained graph, operation, or cache row still refers to
+// each candidate. Provider-state and affinity rows are deleted in the same
+// transaction; blobs remain independently owned and are reclaimed by blob
+// retention only after its own reference fence passes.
+//
+// The candidate rows are locked with FOR UPDATE SKIP LOCKED. PostgreSQL's
+// foreign-key key-share locking makes a concurrent child/reference insert wait
+// for this lock, so the locked reference predicates remain authoritative for
+// the delete transaction.
+func (repository MaintenanceRepository) PruneExpiredCheckpoints(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
+	var result maintenance.RetentionResult
+	if err := repository.validate(); err != nil {
+		return result, err
+	}
+	if err := validateBatch(now, limit); err != nil {
+		return result, err
+	}
+	if expiresBefore.IsZero() || expiresBefore.After(now) {
+		return result, errors.New("checkpoint expiry cutoff must not be after maintenance time")
+	}
+	checkpointsTable, err := repository.Namespace.Render("conversation_checkpoints")
+	if err != nil {
+		return result, err
+	}
+	providerStateTable, err := repository.Namespace.Render("checkpoint_provider_state")
+	if err != nil {
+		return result, err
+	}
+	providerAffinitiesTable, err := repository.Namespace.Render("checkpoint_provider_affinities")
+	if err != nil {
+		return result, err
+	}
+	operationsTable, err := repository.Namespace.Render("operations")
+	if err != nil {
+		return result, err
+	}
+	cacheEntriesTable, err := repository.Namespace.Render("response_cache_entries")
+	if err != nil {
+		return result, err
+	}
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "SELECT c.checkpoint_id FROM "+checkpointsTable+
+			" c WHERE c.expires_at < $1"+
+			" AND NOT EXISTS (SELECT 1 FROM "+operationsTable+
+			" origin WHERE origin.operation_id = c.origin_operation_id AND origin.state NOT IN ('completed', 'definite_failed', 'canceled'))"+
+			" AND NOT EXISTS (SELECT 1 FROM "+checkpointsTable+
+			" child WHERE child.parent_checkpoint_id = c.checkpoint_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+checkpointsTable+
+			" compacted WHERE compacted.compacted_through_checkpoint_id = c.checkpoint_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+operationsTable+
+			" o WHERE o.parent_checkpoint_id = c.checkpoint_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+cacheEntriesTable+
+			" e WHERE e.origin_checkpoint_id = c.checkpoint_id)"+
+			" ORDER BY c.expires_at, c.checkpoint_id LIMIT $2 FOR UPDATE OF c SKIP LOCKED", expiresBefore, limit)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("claim expired conversation checkpoints: %w", err))
+		}
+		var ids []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan expired conversation checkpoint: %w", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return redactPostgresError(fmt.Errorf("iterate expired conversation checkpoints: %w", err))
+		}
+		rows.Close()
+		result.Examined = len(ids)
+		if len(ids) == 0 {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+providerStateTable+" WHERE checkpoint_id = ANY($1::uuid[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired checkpoint provider state: %w", err))
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+providerAffinitiesTable+" WHERE checkpoint_id = ANY($1::uuid[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired checkpoint provider affinities: %w", err))
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+checkpointsTable+" WHERE checkpoint_id = ANY($1::uuid[])", ids); err != nil {
+			return redactPostgresError(fmt.Errorf("delete expired conversation checkpoints: %w", err))
+		}
+		result.Deleted = len(ids)
+		return nil
+	})
+	if err != nil {
+		return maintenance.RetentionResult{}, err
+	}
+	return result, nil
+}
+
 // PublishOutbox inserts idempotent safe intent. Duplicate event_kind/dedupe
 // pairs are successful no-ops, so a retry cannot enqueue duplicate deletion.
 func (repository MaintenanceRepository) PublishOutbox(ctx context.Context, event maintenance.Event) error {
