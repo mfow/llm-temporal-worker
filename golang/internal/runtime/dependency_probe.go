@@ -183,14 +183,33 @@ type redisProbeClient interface {
 }
 
 type redisDependencyProbe struct {
-	client redisProbeClient
-	config config.RedisConfig
+	client     redisProbeClient
+	config     config.RedisConfig
+	generation redisstore.BudgetGenerationPort
 }
 
 // NewRedisDependencyProbe constructs a read-only Redis readiness probe. It
 // never exposes a loading/replacing command, so startup and monitoring cannot
 // silently mutate a shared Redis Function library or Lua script.
 func NewRedisDependencyProbe(client redisProbeClient, value config.RedisConfig) (DependencyProbe, error) {
+	return newRedisDependencyProbe(client, value, nil)
+}
+
+// NewRedisDependencyProbeWithBudgetGeneration extends the immutable Redis
+// server checks with the active budget-generation contract used by durable
+// production workers. The generation port is read-only: it verifies the
+// configured key prefix resolves to a complete, canonical pointer/manifest
+// pair and never rebuilds or publishes state as a side effect of readiness.
+// Development/Redis-only fixtures should use NewRedisDependencyProbe, since
+// they intentionally do not provision an active durable budget generation.
+func NewRedisDependencyProbeWithBudgetGeneration(client redisProbeClient, value config.RedisConfig, generation redisstore.BudgetGenerationPort) (DependencyProbe, error) {
+	if generation == nil {
+		return nil, fmt.Errorf("Redis budget generation readiness port is required")
+	}
+	return newRedisDependencyProbe(client, value, generation)
+}
+
+func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, generation redisstore.BudgetGenerationPort) (DependencyProbe, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Redis readiness client is required")
 	}
@@ -200,7 +219,7 @@ func NewRedisDependencyProbe(client redisProbeClient, value config.RedisConfig) 
 	if value.RequiredPersistence != "aof_and_rdb" && value.RequiredPersistence != "aof" && value.RequiredPersistence != "rdb" {
 		return nil, fmt.Errorf("Redis readiness persistence policy is invalid")
 	}
-	return &redisDependencyProbe{client: client, config: value}, nil
+	return &redisDependencyProbe{client: client, config: value, generation: generation}, nil
 }
 
 func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
@@ -244,14 +263,40 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	if requiresRDB(probe.config.RequiredPersistence) && strings.TrimSpace(save) == "" {
 		return redisPolicyMismatch()
 	}
+	var result ProbeResult
 	switch probe.config.AdmissionMode {
 	case "function":
-		return probe.verifyFunction(ctx)
+		result = probe.verifyFunction(ctx)
 	case "lua":
-		return probe.verifyLua(ctx)
+		result = probe.verifyLua(ctx)
 	default:
 		return redisPolicyMismatch()
 	}
+	if result.Status != ProbeStatusReady || probe.generation == nil {
+		return result
+	}
+	return probe.verifyBudgetGeneration(ctx)
+}
+
+func (probe *redisDependencyProbe) verifyBudgetGeneration(ctx context.Context) ProbeResult {
+	pointer, err := probe.generation.ActiveGeneration(ctx)
+	if err != nil {
+		return redisGenerationFailure(ctx, err)
+	}
+	if _, err := probe.generation.LoadManifest(ctx, pointer); err != nil {
+		return redisGenerationFailure(ctx, err)
+	}
+	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+}
+
+func redisGenerationFailure(ctx context.Context, err error) ProbeResult {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusTimeout, Reason: ProbeReasonTimeout}
+	}
+	if errors.Is(err, redisstore.ErrBudgetManifestInvalid) {
+		return redisPolicyMismatch()
+	}
+	return redisUnavailable(err)
 }
 
 func (probe *redisDependencyProbe) verifyFunction(ctx context.Context) ProbeResult {

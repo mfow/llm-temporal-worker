@@ -96,12 +96,14 @@ while another is valid. A configuration with zero eligible routes is not ready.
 The runtime's required state checks are bounded by the configured readiness
 timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
 configured AOF/RDB policy, and expose the exact configured budget Function
-library/version/digest. Readiness does not yet inspect the worker keyspace or
-verify an active budget generation/manifest or its optional coordination
-Stream; those records are validated by the storage/recovery code until an
-authoritative read-only readiness contract is added. The default Function path
-is provisioned by deployment automation before the worker starts; the runtime
-only verifies and calls it.
+library/version/digest. Durable production workers additionally perform a
+bounded, read-only check of the configured worker keyspace: the active
+budget-generation pointer must resolve to its canonical, complete manifest. A missing,
+malformed, or mismatched pointer/manifest keeps readiness false; readiness
+never publishes a generation or rebuilds state. Development and Redis-only
+fixtures continue to omit this durable-generation check. The default Function
+path is provisioned by deployment automation before the worker starts; the
+runtime only verifies and calls it.
 The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. PostgreSQL must complete a
 bounded read-only transaction, match the configured database/schema/prefix and

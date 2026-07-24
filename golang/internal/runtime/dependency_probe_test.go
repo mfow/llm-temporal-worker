@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,55 @@ func TestRedisDependencyProbeChecksEveryConfiguredPolicyWithoutMutation(t *testi
 	}
 	if client.mutations != 0 {
 		t.Fatalf("readiness probe mutated Redis %d times", client.mutations)
+	}
+}
+
+func TestRedisDependencyProbeVerifiesActiveBudgetGenerationWhenConfigured(t *testing.T) {
+	client := healthyRedisProbeClient()
+	generation := &fakeBudgetGenerationProbe{}
+	probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+		t.Fatalf("durable Redis result = %#v", result)
+	}
+	if generation.activeCalls != 1 || generation.manifestCalls != 1 {
+		t.Fatalf("budget generation calls active=%d manifest=%d, want one each", generation.activeCalls, generation.manifestCalls)
+	}
+}
+
+func TestRedisDependencyProbeFailsClosedForInvalidActiveBudgetGeneration(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		set  func(*fakeBudgetGenerationProbe)
+	}{
+		{name: "missing pointer", set: func(probe *fakeBudgetGenerationProbe) {
+			probe.activeErr = redisstore.ErrBudgetManifestInvalid
+		}},
+		{name: "invalid manifest", set: func(probe *fakeBudgetGenerationProbe) {
+			probe.manifestErr = redisstore.ErrBudgetManifestInvalid
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := healthyRedisProbeClient()
+			generation := &fakeBudgetGenerationProbe{}
+			test.set(generation)
+			probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := probe.Probe(context.Background())
+			if result.Dependency != DependencyRedis || result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
+				t.Fatalf("invalid generation result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestRedisDependencyProbeRequiresBudgetGenerationPort(t *testing.T) {
+	if _, err := NewRedisDependencyProbeWithBudgetGeneration(healthyRedisProbeClient(), testRedisProbeConfig(), nil); err == nil {
+		t.Fatal("nil budget generation port unexpectedly accepted")
 	}
 }
 
@@ -238,6 +288,33 @@ func TestBlobDependencyProbeUsesOnlyBucketCapabilityAndMasksErrors(t *testing.T)
 	if bucket.calls != 1 || result.Dependency != DependencyBlobStore || result.Status != ProbeStatusUnavailable || result.Reason != ProbeReasonUnavailable {
 		t.Fatalf("bucket probe result = %#v calls=%d", result, bucket.calls)
 	}
+}
+
+type fakeBudgetGenerationProbe struct {
+	activeErr     error
+	manifestErr   error
+	activeCalls   int
+	manifestCalls int
+}
+
+func (probe *fakeBudgetGenerationProbe) ActiveGeneration(context.Context) (redisstore.ActiveBudgetGeneration, error) {
+	probe.activeCalls++
+	if probe.activeErr != nil {
+		return redisstore.ActiveBudgetGeneration{}, probe.activeErr
+	}
+	return redisstore.ActiveBudgetGeneration{GenerationID: "generation-1", IncarnationID: "incarnation-1", ManifestDigest: strings.Repeat("a", 64)}, nil
+}
+
+func (probe *fakeBudgetGenerationProbe) LoadManifest(context.Context, redisstore.ActiveBudgetGeneration) (redisstore.BudgetManifest, error) {
+	probe.manifestCalls++
+	if probe.manifestErr != nil {
+		return redisstore.BudgetManifest{}, probe.manifestErr
+	}
+	return redisstore.BudgetManifest{}, nil
+}
+
+func (probe *fakeBudgetGenerationProbe) PublishGeneration(context.Context, redisstore.BudgetManifest) (redisstore.ActiveBudgetGeneration, error) {
+	return redisstore.ActiveBudgetGeneration{}, errors.New("readiness must not publish budget state")
 }
 
 type fakeBucketProbe struct {

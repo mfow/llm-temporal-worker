@@ -279,7 +279,31 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
 	}
-	redisProbe, err := NewRedisDependencyProbe(redisClient, value.State.Redis)
+	var generationPort redisstore.BudgetGenerationPort
+	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+		budgetKeys, keyErr := redisstore.NewBudgetKeySpace(keyOptions)
+		if keyErr != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("construct Redis budget key namespace: %w", keyErr)
+		}
+		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
+		if err != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
+		}
+	}
+	var redisProbe DependencyProbe
+	if generationPort != nil {
+		redisProbe, err = NewRedisDependencyProbeWithBudgetGeneration(redisClient, value.State.Redis, generationPort)
+	} else {
+		redisProbe, err = NewRedisDependencyProbe(redisClient, value.State.Redis)
+	}
 	if err != nil {
 		if postgresCloser != nil {
 			_ = postgresCloser.Close()
