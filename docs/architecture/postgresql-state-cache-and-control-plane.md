@@ -67,6 +67,29 @@ reads. The state machines make every cross-store failure conservative:
    charged and fails new admission closed until reconciliation or recovery; it
    never creates budget capacity.
 
+### Go composition contract
+
+The storage-neutral Go contract in
+[`golang/storage/durable`](../../golang/storage/durable/contract.go) makes this
+ordering executable for runtime adapters. A `StateIdentity` binds the
+PostgreSQL namespace, Redis key prefix/hash tag, and immutable configuration
+digest; a worker must reject a composition whose identity is incomplete or
+does not match its snapshot. `Composition` exposes PostgreSQL operation,
+continuation, result, and write-only journal ports alongside the Redis-only
+`BudgetMaterializer` port. The journal deliberately has append methods only,
+so a normal admission implementation cannot accidentally query PostgreSQL
+budget projections.
+
+The `Lifecycle` helper accepts only the sequence
+`operation_replay -> redis_accepted -> postgres_journaled -> dispatched ->
+postgres_finalized -> redis_reconciled`. An accepted Redis result must carry
+at least one identity-matched journal event; a journal error therefore blocks
+dispatch. After dispatch, PostgreSQL finalization remains authoritative and a
+Redis reconciliation error is retried independently rather than rolling back
+the result. Runtime wiring is the remaining integration step; this contract
+is the seam that prevents a future adapter from reintroducing the superseded
+Redis durable-operation composition.
+
 ### Complete Redis budget working set
 
 All data required to decide every active budget window lives in the configured
