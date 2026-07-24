@@ -1,6 +1,7 @@
 package provider_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -22,6 +23,13 @@ func TestModelListPageRequiresBoundedCompleteOrCursor(t *testing.T) {
 				t.Fatal("invalid model-list page accepted")
 			}
 		})
+	}
+	tooMany := make([]provider.Model, provider.ModelListMaxPageSize+1)
+	for i := range tooMany {
+		tooMany[i] = provider.Model{ProviderModelID: fmt.Sprintf("model-%04d", i), Lifecycle: provider.ModelUnknown}
+	}
+	if err := (provider.ModelListPage{Complete: true, Models: tooMany}).Validate(); err == nil {
+		t.Fatalf("model-list page with %d rows accepted", len(tooMany))
 	}
 }
 

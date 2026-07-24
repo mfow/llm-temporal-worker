@@ -32,7 +32,6 @@ func (lifecycle ModelLifecycle) Valid() bool {
 const (
 	// ModelListMaxPageSize matches the bounded persisted inventory query page.
 	ModelListMaxPageSize = 1000
-	modelListMaxRows     = 10000
 	modelListMaxCursor   = 2048
 	modelListMaxMetadata = 32
 )
@@ -92,8 +91,8 @@ func (page ModelListPage) Validate() error {
 	if !page.Complete && page.NextCursor == "" {
 		return errors.New("incomplete model-list page requires a continuation cursor")
 	}
-	if len(page.Models) > modelListMaxRows {
-		return errors.New("model-list page exceeds model limit")
+	if len(page.Models) > ModelListMaxPageSize {
+		return fmt.Errorf("model-list page exceeds maximum page size of %d", ModelListMaxPageSize)
 	}
 	previous := ""
 	for _, model := range page.Models {
