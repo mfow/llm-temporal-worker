@@ -262,9 +262,12 @@ Startup order:
 
 Redis readiness verifies connectivity, the configured persistence and eviction
 policy, and the configured preloaded Function or Lua digest without loading or
-replacing server-side code. Blob readiness performs a bucket-only check without
-reading a tenant object. An initial failed check rejects the unpublished
-snapshot; a reload failure leaves the old snapshot in place.
+replacing server-side code. Durable production mode also reads the configured
+active budget-generation pointer and canonical manifest, failing closed when
+the worker namespace is missing or incomplete; this check never publishes or
+rebuilds state. Blob readiness performs a bucket-only check without reading a
+tenant object. An initial failed check rejects the unpublished snapshot; a
+reload failure leaves the old snapshot in place.
 
 On `SIGTERM`/`SIGINT`, readiness turns false first. The process stops polling,
 allows the Temporal worker's configured graceful stop timeout, flushes telemetry

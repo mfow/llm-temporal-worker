@@ -391,15 +391,16 @@ In durable mode the runtime constructs and probes both stores before admitting
 work. The PostgreSQL dependency probe checks the current database, UTC session
 timezone, and the installed schema contract for the configured namespace; the
 Redis probe performs its normal connectivity, clock, policy, and configured
-Function or Lua script identity checks. The validated
+Function or Lua script identity checks. Production additionally reads the
+configured Redis keyspace's active budget-generation pointer and canonical
+manifest. A missing or invalid pointer/manifest keeps readiness closed; the
+probe is read-only and never publishes or rebuilds a generation. The validated
 `state.redis.key_prefix` is applied to every worker-owned key constructor and
-rendered in effective configuration, but readiness does not currently inspect
-the Redis keyspace or prove an ACL/prefix or active-manifest identity marker.
-Those checks require an explicit read-only state contract. A failure or timeout
-keeps readiness closed, and both clients are closed during a failed build,
-configuration replacement, or worker shutdown. Schema installation remains a
-deployment concern (`postgres.Install`) and is never performed by a worker
-during readiness probing.
+the active-generation read therefore also proves the configured namespace is
+being addressed. A failure or timeout keeps readiness closed, and both clients
+are closed during a failed build, configuration replacement, or worker
+shutdown. Schema installation remains a deployment concern (`postgres.Install`)
+and is never performed by a worker during readiness probing.
 
 `state.kind: redis` is retained only as a development/test fixture for the
 legacy Redis-only composition and is rejected in production. `state.kind:
