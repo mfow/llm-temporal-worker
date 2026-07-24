@@ -1,0 +1,53 @@
+{
+  "$id": "urn:llmtw:slo-evidence:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm-temporal-worker redacted SLO evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "status", "measured_at", "source_revision", "deployment_id_sha256", "region", "admission_compilation", "worker_error_rate", "redacted", "content_sha256"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "slo_measurement" },
+    "status": { "const": "pass" },
+    "measured_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "deployment_id_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "region": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "admission_compilation": {
+      "type": "object", "additionalProperties": false, "required": ["memory", "same_region_redis"],
+      "properties": { "memory": { "$ref": "#/$defs/memory_measurement" }, "same_region_redis": { "$ref": "#/$defs/redis_measurement" } }
+    },
+    "worker_error_rate": {
+      "type": "object", "additionalProperties": false, "required": ["window_started_at", "window_ended_at", "completed_attempts", "worker_failed_attempts"],
+      "properties": {
+        "window_started_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "window_ended_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "completed_attempts": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "worker_failed_attempts": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+      }
+    },
+    "redacted": { "const": true },
+    "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "memory_measurement": {
+      "type": "object", "additionalProperties": false, "required": ["sample_count", "p99_microseconds"],
+      "properties": { "sample_count": { "type": "integer", "minimum": 1, "maximum": 1000000000 }, "p99_microseconds": { "type": "integer", "minimum": 0, "maximum": 3600000000 } }
+    },
+    "redis_measurement": {
+      "type": "object", "additionalProperties": false, "required": ["sample_count", "p99_microseconds", "redis"],
+      "properties": {
+        "sample_count": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "p99_microseconds": { "type": "integer", "minimum": 0, "maximum": 3600000000 },
+        "redis": {
+          "type": "object", "additionalProperties": false, "required": ["major_version", "persistence", "function_digest"],
+          "properties": {
+            "major_version": { "type": "integer", "minimum": 7, "maximum": 99 },
+            "persistence": { "const": "aof+rdb" },
+            "function_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      }
+    }
+  }
+}

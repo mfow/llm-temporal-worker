@@ -262,6 +262,12 @@ Temporal Activity attempts: a worker-origin failed retry followed by a
 completed retry contributes two observations. This query defines the metric
 semantics only; it is not live SLO or release evidence.
 
+For a release candidate, retain the observed counts, closed measurement window,
+deployment identity, and source revision with the [redacted SLO evidence
+contract](../release/slo-evidence.md). The contract enforces the strict
+less-than-0.1% objective without accepting raw telemetry, endpoints,
+credentials, prompts, or provider responses.
+
 `llmtw_budget_reserved_micro_usd` is removed rather than repurposed. An
 engine-local value would incorrectly overwrite the aggregate reservation of
 other workers, and Prometheus cannot preserve the Redis/PostgreSQL 18-decimal
