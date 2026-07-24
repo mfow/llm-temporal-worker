@@ -392,8 +392,8 @@ work. The PostgreSQL dependency probe checks the current database, UTC session
 timezone, and the installed schema contract for the configured namespace; the
 Redis probe performs its normal connectivity, clock, policy, and configured
 Function or Lua script identity checks. Production additionally reads the
-configured Redis keyspace's active budget-generation pointer and canonical
-manifest. A missing or invalid pointer/manifest keeps readiness closed; the
+configured Redis keyspace's active budget-generation pointer and canonical,
+complete manifest. A missing or invalid pointer/manifest keeps readiness closed; the
 probe is read-only and never publishes or rebuilds a generation. The validated
 `state.redis.key_prefix` is applied to every worker-owned key constructor and
 the active-generation read therefore also proves the configured namespace is

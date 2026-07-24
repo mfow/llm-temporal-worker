@@ -97,8 +97,8 @@ The runtime's required state checks are bounded by the configured readiness
 timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
 configured AOF/RDB policy, and expose the exact configured budget Function
 library/version/digest. Durable production workers additionally perform a
-bounded, read-only check of the configured worker keyspace: the active budget
-generation pointer must resolve to its canonical, complete manifest. A missing,
+bounded, read-only check of the configured worker keyspace: the active
+budget-generation pointer must resolve to its canonical, complete manifest. A missing,
 malformed, or mismatched pointer/manifest keeps readiness false; readiness
 never publishes a generation or rebuilds state. Development and Redis-only
 fixtures continue to omit this durable-generation check. The default Function

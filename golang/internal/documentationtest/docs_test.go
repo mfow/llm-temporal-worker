@@ -127,9 +127,9 @@ func TestReadinessDocumentationStatesRedisPrefixBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := strings.Join(strings.Fields(string(data)), " ")
-			if !strings.Contains(text, "Readiness does not yet inspect the worker keyspace") &&
-				!strings.Contains(text, "readiness does not currently inspect the Redis keyspace") {
-				t.Fatalf("%s must state that readiness does not verify Redis keyspace identity", relative)
+			if !strings.Contains(text, "active budget-generation pointer") ||
+				!strings.Contains(text, "canonical, complete manifest") {
+				t.Fatalf("%s must state that durable readiness verifies the active budget generation and canonical manifest", relative)
 			}
 			if strings.Contains(text, "Redis probe performs its normal connectivity, clock, policy, function, prefix, and manifest checks") ||
 				strings.Contains(text, "expose the exact configured budget Function library/version/digest plus a complete active budget generation/manifest") ||
